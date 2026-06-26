@@ -1,0 +1,33 @@
+{
+  "name": "omp-context",
+  "version": "0.1.0",
+  "description": "Agentic Context Management for OMP — checkpoint, timeline, and compact tools",
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "src",
+    "skills",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@oh-my-pi/pi-ai": "*",
+    "@oh-my-pi/pi-coding-agent": "*",
+    "typescript": "^5.7.2",
+    "zod": "^3.25.0"
+  },
+  "peerDependencies": {
+    "@oh-my-pi/pi-ai": "*",
+    "@oh-my-pi/pi-coding-agent": "*"
+  },
+  "omp": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  }
+}
