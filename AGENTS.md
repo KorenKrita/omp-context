@@ -21,12 +21,6 @@ OMP 的 `ctx.sessionManager` 在工具执行上下文里是 `ReadonlySessionMana
 
 `registerTool<TParams extends TSchema>` 的泛型约束是 `ArkSchema`,不接受 zod 对象。运行时正常(`toolWireSchema` 检测 zod 用 `z.toJSONSchema`),编译期用 `parameters: schema as any` + `type Params = z.infer<typeof schema>`。
 
-### 不需要 `/acm` 命令
-
-pi-context 用 `/acm` 存储一个 `ExtensionCommandContext`。OMP 的 extension factory 在加载时可以通过 `pi.on("session_start")` 或模块级变量在首次工具调用时延迟获取。实际实现:compact 工具首次执行时检查 `CommandCtx` 是否已初始化,未初始化则提示用户先执行任意 slash command(或监听 `session_start` 事件存储)。
-
-> **待验证**: `session_start` 事件的 `ctx` 是否是 `ExtensionCommandContext`(含 `navigateTree`)。如果不是,需要在 compact 工具返回时提示用户手动触发导航。从类型定义看 `ExtensionHandler<E, R = undefined>` 的 ctx 是 `ExtensionContext`(不含 `navigateTree`),只有 command handler 的 ctx 是 `ExtensionCommandContext`。需要注册一个 dummy command来获取 CommandCtx,或用 `pi.on("input")` 等事件。
-
 ### 工具命名加 acm_ 前缀
 
 避开 OMP 内置 `checkpoint`/`rewind` 的语义冲突。
@@ -49,16 +43,30 @@ pi-context 用 `/acm` 存储一个 `ExtensionCommandContext`。OMP 的 extension
 | `skills/context-management/SKILL.md` | 适配:工具名改 acm_ 前缀,移除 `/acm` 引用 |
 | `skills/context-management/references/*` | 照搬(场景指导与平台无关) |
 
-## 验证命令
-
-```bash
-# 类型检查(需安装 peer deps)
-npm install   # 或 bun install
-npm run typecheck
-```
-
 ## 注意事项
 
 - OMP 直接加载 TS 源码,不预编译。`package.json` 的 `files` 只包含 `src`/`skills`/`README.md`
 - `@oh-my-pi/pi-coding-agent` 作为 peerDependency,devDependencies 仅供类型检查
 - 不要在代码中用 `console.log`(OMP 用 logger),但扩展工具可以用 `pi.logger`
+
+<!-- TRELLIS:START -->
+# Trellis Instructions
+
+These instructions are for AI assistants working in this project.
+
+This project is managed by Trellis. The working knowledge you need lives under `.trellis/`:
+
+- `.trellis/workflow.md` — development phases, when to create tasks, skill routing
+- `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
+- `.trellis/workspace/` — per-developer journals and session traces
+- `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
+
+If a Trellis command is available on your platform (e.g. `/trellis:finish-work`, `/trellis:continue`), prefer it over manual steps. Not every platform exposes every command.
+
+If you're using Codex or another agent-capable tool, additional project-scoped helpers may live in:
+- `.agents/skills/` — reusable Trellis skills
+- `.codex/agents/` — optional custom subagents
+
+Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
+
+<!-- TRELLIS:END -->
