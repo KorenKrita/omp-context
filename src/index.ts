@@ -484,8 +484,9 @@ export default function(pi: ExtensionAPI): void {
     });
 
     const visibleEntries = sequence.filter((e: SessionEntry) => visibleSequenceIds.has(e.id));
-    if (visibleEntries.length > limit) {
-     const allowedIds = new Set(visibleEntries.slice(-limit).map((e) => e.id));
+    const effectiveLimit = limit > 0 ? limit : 50;
+    if (visibleEntries.length > effectiveLimit) {
+     const allowedIds = new Set(visibleEntries.slice(-effectiveLimit).map((e) => e.id));
      visibleSequenceIds.clear();
      allowedIds.forEach((id) => visibleSequenceIds.add(id));
     }
