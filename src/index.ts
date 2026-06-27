@@ -39,20 +39,16 @@ function resolveTargetId(
  sm: ReadonlySessionManager,
  tree: SessionTreeNode[],
  target: string,
+ branchIds?: Set<string>,
 ): string {
  if (target.toLowerCase() === "root") {
   return tree.length > 0 ? tree[0].entry.id : target;
  }
  // Label lookup: prefer active path, then search entire tree.
- // This ensures that when the same checkpoint name exists on both an
- // off-path branch (from a previous compact) and the active path, the
- // active path node is resolved — matching agent's current context.
- const branch = sm.getBranch();
- const branchIds = new Set(branch.map((e: SessionEntry) => e.id));
- const onPath = findInTree(tree, (n) => sm.getLabel(n.entry.id) === target && branchIds.has(n.entry.id))?.entry.id;
+ const ids = branchIds ?? new Set(sm.getBranch().map((e: SessionEntry) => e.id));
+ const onPath = findInTree(tree, (n) => sm.getLabel(n.entry.id) === target && ids.has(n.entry.id))?.entry.id;
  if (onPath) return onPath;
- // Fallback: search entire tree (including off-path branches) for label match.
- // This enables "return to the future" — compacting to checkpoints on off-path branches.
+ // Fallback: search entire tree (enables "return to the future" — off-path checkpoint labels)
  const anyMatch = findInTree(tree, (n) => sm.getLabel(n.entry.id) === target)?.entry.id;
  if (anyMatch) return anyMatch;
  // Not a label match — return as-is (caller validates existence via findInTree)
@@ -113,19 +109,9 @@ function branchWithSummary(
 
 // ── Content extraction for timeline ───────────────────────────
 
-function extractTextFromContent(content: (TextContent | ImageContent)[]): string {
- return content
-  .map((p) => (p.type === "text" ? p.text : ""))
-  .join(" ")
-  .trim();
-}
-
 /** Extract a human-readable summary string from a session entry. */
 function getMsgContent(entry: SessionEntry, sm: ReadonlySessionManager, verbose: boolean): string {
- if (entry.type === "branch_summary") {
-  return entry.summary || "[No summary provided]";
- }
- if (entry.type === "compaction") {
+ if (entry.type === "branch_summary" || entry.type === "compaction") {
   return entry.summary || "[No summary provided]";
  }
  if (entry.type === "label") {
@@ -137,7 +123,10 @@ function getMsgContent(entry: SessionEntry, sm: ReadonlySessionManager, verbose:
 
  if (msg.role === "toolResult") {
   if (!verbose && INTERNAL_TOOLS.has(msg.toolName)) return "";
-  let resText = extractTextFromContent(msg.content);
+  let resText = msg.content
+   .map((p: TextContent | ImageContent) => (p.type === "text" ? p.text : ""))
+   .join(" ")
+   .trim();
   const details = msg.details;
   if (
    typeof details === "object" && details !== null &&
@@ -147,7 +136,6 @@ function getMsgContent(entry: SessionEntry, sm: ReadonlySessionManager, verbose:
   }
   return `(${msg.toolName}) ${resText}`;
  }
-
  if (msg.role === "bashExecution") {
   return `[Bash] ${msg.command}`;
  }
@@ -293,7 +281,7 @@ export default function(pi: ExtensionAPI): void {
 
    // Uniqueness check: active path only (off-path branches are stale)
    const branch = sm.getBranch();
-   const branchIds = new Set(branch.map((e: SessionEntry) => e.id));
+   const branchIds: Set<string> = new Set(branch.map((e: SessionEntry) => e.id));
    const existing = findInTree(tree, (n) => sm.getLabel(n.entry.id) === params.name && branchIds.has(n.entry.id))?.entry.id;
    if (existing) {
     return {
@@ -304,7 +292,7 @@ export default function(pi: ExtensionAPI): void {
 
    let id: string;
    if (params.target) {
-    id = resolveTargetId(sm, tree, params.target);
+    id = resolveTargetId(sm, tree, params.target, branchIds);
     const targetExists = findInTree(tree, (n) => n.entry.id === id) !== undefined;
     if (!targetExists) {
      return {
@@ -418,22 +406,24 @@ export default function(pi: ExtensionAPI): void {
       allNodes.push(n);
       if (n.children?.length) { for (const child of n.children) stack.push(child); }
      }
-     const matched = allNodes.filter((n) => {
-      const label = sm.getLabel(n.entry.id) ?? "";
-      const content = getMsgContent(n.entry, sm, false);
-      return label.toLowerCase().includes(searchTerm) || content.toLowerCase().includes(searchTerm) || n.entry.id.toLowerCase().includes(searchTerm);
-     });
+     const matched = allNodes.map((n) => ({
+      node: n,
+      label: sm.getLabel(n.entry.id) ?? "",
+      content: getMsgContent(n.entry, sm, false),
+     })).filter((m) =>
+      m.label.toLowerCase().includes(searchTerm) ||
+      m.content.toLowerCase().includes(searchTerm) ||
+      m.node.entry.id.toLowerCase().includes(searchTerm)
+     );
      const searchLimit = Math.min(limit > 0 ? limit : 50, 50);
      lines.push(`Found ${matched.length} node(s) matching '${params.search}' (showing first ${Math.min(matched.length, searchLimit)}):`);
      for (const m of matched.slice(0, searchLimit)) {
-      const label = sm.getLabel(m.entry.id);
-      const isHead = m.entry.id === currentLeafId;
-      const role = getDisplayRole(m.entry);
-      const content = getMsgContent(m.entry, sm, false).replace(/\s+/g, " ");
-      const body = content.length > 80 ? content.slice(0, 80) + "..." : content;
-      const metaParts = [label ? `checkpoint: ${label}` : null, isHead ? "*HEAD*" : null, `type: ${m.entry.type}`].filter((s): s is string => s !== null);
+      const isHead = m.node.entry.id === currentLeafId;
+      const role = getDisplayRole(m.node.entry);
+      const body = m.content.replace(/\s+/g, " ").slice(0, 80) + (m.content.length > 80 ? "..." : "");
+      const metaParts = [m.label ? `checkpoint: ${m.label}` : null, isHead ? "*HEAD*" : null, `type: ${m.node.entry.type}`].filter((s): s is string => s !== null);
       const meta = metaParts.length > 0 ? ` (${metaParts.join(", ")})` : "";
-      lines.push(`${isHead ? "*" : " "} ${m.entry.id}${meta} [${role}] ${body}`);
+      lines.push(`${isHead ? "*" : " "} ${m.node.entry.id}${meta} [${role}] ${body}`);
      }
     } else {
      // No search: render full tree. limit controls max depth (capped at 50).
@@ -471,12 +461,17 @@ export default function(pi: ExtensionAPI): void {
      });
     });
 
+    // Pre-compute content for all sequence entries (used for both search matching and display)
+    const contentCache = new Map<string, string>();
+    sequence.forEach((e: SessionEntry) => {
+     contentCache.set(e.id, getMsgContent(e, sm, verbose));
+    });
+
     const visibleSequenceIds = new Set<string>();
     sequence.forEach((e: SessionEntry) => {
      if (searchTerm) {
-      // Search mode in default view: show only matching nodes
       const label = sm.getLabel(e.id) ?? "";
-      const content = getMsgContent(e, sm, false);
+      const content = contentCache.get(e.id) ?? "";
       if (label.toLowerCase().includes(searchTerm) || content.toLowerCase().includes(searchTerm) || e.id.toLowerCase().includes(searchTerm)) {
        visibleSequenceIds.add(e.id);
       }
@@ -505,7 +500,7 @@ export default function(pi: ExtensionAPI): void {
 
      const isHead = entry.id === currentLeafId;
      const label = sm.getLabel(entry.id);
-     const content = getMsgContent(entry, sm, verbose).replace(/\s+/g, " ");
+     const content = (contentCache.get(entry.id) ?? "").replace(/\s+/g, " ");
      const role = getDisplayRole(entry);
 
      // Hide custom messages (count as hidden for accurate totals)
@@ -601,8 +596,8 @@ export default function(pi: ExtensionAPI): void {
    const params = compactSchema.parse(rawParams);
    const sm = ctx.sessionManager;
    const tree = sm.getTree();
-   const branchIds = new Set(sm.getBranch().map((e: SessionEntry) => e.id));
-   const tid = resolveTargetId(sm, tree, params.target);
+   const branchIds: Set<string> = new Set(sm.getBranch().map((e: SessionEntry) => e.id));
+   const tid = resolveTargetId(sm, tree, params.target, branchIds);
    // Validate that the resolved target actually exists in the tree
    const targetExists = findInTree(tree, (n) => n.entry.id === tid) !== undefined;
    if (!targetExists) {
@@ -696,6 +691,7 @@ export default function(pi: ExtensionAPI): void {
      `Context: ${usageBeforeText} → ${formatContextUsage(usageAfter)}`,
      `Backup: ${params.backupCheckpoint || "none"}`,
     ].join("\n"),
+    "info",
    );
 
    return {
