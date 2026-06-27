@@ -53,8 +53,9 @@ function resolveTargetId(
  // Fallback: search entire tree (enables "return to the future" — off-path checkpoint labels)
  const anyMatch = findInTree(tree, (n) => sm.getLabel(n.entry.id) === target)?.entry.id;
  if (anyMatch) return { id: anyMatch, fromOffPath: true };
- // Not a label match — return as-is (caller validates existence via findInTree)
- return { id: target, fromOffPath: false };
+ // Not a label match — check if raw ID is on active path
+ const isOnPath = ids.has(target);
+ return { id: target, fromOffPath: !isOnPath };
 }
 
 
@@ -83,7 +84,9 @@ function formatContextUsage(usage: UsageLike | undefined, includeTokens = false)
 
 /** Set a label on a session entry. pi.setLabel() only sets the extension
  *  display name, not entry labels. ReadonlySessionManager is the full
- *  SessionManager at runtime — guarded cast to access appendLabelChange. */
+ *  SessionManager at runtime — guarded cast to access appendLabelChange.
+ *  Passing label=undefined relies on appendLabelChange treating it as label
+ *  removal — verified against OMP SessionManager source. */
 function setEntryLabel(sm: ReadonlySessionManager, entryId: string, label: string | undefined): void {
  const full = sm as unknown as {
   appendLabelChange?: (id: string, label: string | undefined) => string;
@@ -91,7 +94,10 @@ function setEntryLabel(sm: ReadonlySessionManager, entryId: string, label: strin
  if (typeof full.appendLabelChange !== "function") {
   throw new Error("SessionManager does not support appendLabelChange — cannot create checkpoint label");
  }
- full.appendLabelChange(entryId, label);
+ const result = full.appendLabelChange(entryId, label);
+ if (typeof result !== "string") {
+  throw new Error(`appendLabelChange returned non-string: ${typeof result}`);
+ }
 }
 /** Call branchWithSummary on the runtime SessionManager.
  *  ReadonlySessionManager is the full SessionManager at runtime. */
@@ -125,7 +131,7 @@ function getMsgContent(entry: SessionEntry, sm: ReadonlySessionManager, verbose:
 
  if (msg.role === "toolResult") {
   if (!verbose && INTERNAL_TOOLS.has(msg.toolName)) return "";
-  let resText = msg.content
+  let resText = (msg.content ?? [])
    .map((p: TextContent | ImageContent) => (p.type === "text" ? p.text : ""))
    .join(" ")
    .trim();
@@ -219,9 +225,11 @@ function renderTreeNode(
  prefix: string,
  isLast: boolean,
  lines: string[],
+ signal?: AbortSignal,
 ): void {
  if (depth > maxDepth) return;
  if (lines.length >= 200) return;
+ if (signal?.aborted) return;
 
  const entry = node.entry;
  const isHead = entry.id === currentLeafId;
@@ -244,8 +252,8 @@ function renderTreeNode(
  const childPrefix = prefix + (isLast ? "   " : "│  ");
  const children = node.children ?? [];
  for (let i = 0; i < children.length; i++) {
-  if (lines.length > 200) break;
-  renderTreeNode(children[i], sm, currentLeafId, depth + 1, maxDepth, childPrefix, i === children.length - 1, lines);
+  if (lines.length >= 200) break;
+  renderTreeNode(children[i], sm, currentLeafId, depth + 1, maxDepth, childPrefix, i === children.length - 1, lines, signal);
  }
 }
 
@@ -256,8 +264,8 @@ export default function(pi: ExtensionAPI): void {
 
  // ── Tool: acm_checkpoint ───────────────────────────────────
  const checkpointSchema = zod.object({
-  name: zod.string().min(1).describe(
-   "Unique semantic anchor name encoding task+phase, e.g. parser-fix-start, timeout-investigation-search. Avoid generic names like start, checkpoint-1.",
+  name: zod.string().min(1).max(64).regex(/^[\w\-\.]+$/).describe(
+   "Unique semantic anchor name encoding task+phase, e.g. parser-fix-start, timeout-investigation-search. Avoid generic names like start, checkpoint-1. Only letters, digits, hyphens, underscores, and dots. Max 64 chars.",
   ),
   target: zod.string().min(1).optional().describe(
    "History node ID or checkpoint name to label. Defaults to current meaningful position near HEAD.",
@@ -273,8 +281,8 @@ export default function(pi: ExtensionAPI): void {
   async execute(
    _id: string,
    rawParams: unknown,
-   _signal: AbortSignal | undefined,
-   _onUpdate,
+   signal: AbortSignal | undefined,
+   _onUpdate: unknown,
    ctx: ExtensionContext,
   ) {
    const params = checkpointSchema.parse(rawParams);
@@ -298,16 +306,21 @@ export default function(pi: ExtensionAPI): void {
     id = resolved.id;
     const targetExists = findInTree(tree, (n) => n.entry.id === id) !== undefined;
     if (!targetExists) {
+     const hint = " It may be a misspelled checkpoint name — use acm_timeline to see available labels and node IDs.";
      return {
-      content: [{ type: "text" as const, text: `Error: Target '${params.target}' not found in session tree. Use acm_timeline to see available node IDs.` }],
+      content: [{ type: "text" as const, text: `Error: Target '${params.target}' not found in session tree.${hint}` }],
       details: { error: "target_not_found", requestedTarget: params.target },
      };
+    }
+    if (resolved.fromOffPath) {
+     ctx.ui.notify(`Note: target '${params.target}' resolved from an off-path branch. Checkpoint will be placed on a non-active node.`, "warning");
     }
    } else {
     // Auto-resolve: find last meaningful node, skipping internal tool traffic
     // Reuse outer `branch` (already fetched above for uniqueness check)
     id = "";
     for (let i = branch.length - 1; i >= 0; i--) {
+     if (signal?.aborted) break;
      const entry = branch[i];
      // Skip non-message entries (labels, compactions, etc.) — checkpoint a meaningful message node
      if (entry.type !== "message") continue;
@@ -321,11 +334,11 @@ export default function(pi: ExtensionAPI): void {
        (c: AssistantContentPart) =>
         c.type === "text" && c.text.trim().length > 0,
       );
-      // Skip assistant messages with only internal tool calls
-      const allInternal = toolCalls.length > 0 &&
-       !hasVisibleText &&
+      // Skip assistant messages whose tool calls are all internal tools,
+      // even if they contain visible text (e.g. "Let me create a checkpoint")
+      const onlyInternalTools = toolCalls.length > 0 &&
        toolCalls.every((tc: ToolCall) => INTERNAL_TOOLS.has(tc.name));
-      if (allInternal) continue;
+      if (onlyInternalTools) continue;
       // Skip assistant messages with no visible text and no tool calls
       // (covers thinking-only, empty content, and other non-actionable messages)
       if (!hasVisibleText && toolCalls.length === 0) continue;
@@ -334,10 +347,22 @@ export default function(pi: ExtensionAPI): void {
       continue;
      } else if (msg.role === "assistant" && (msg.content === null || msg.content === undefined)) {
       continue;
+     } else if (msg.role === "user") {
+      // Skip user messages with empty/null/undefined content
+      const isEmpty = msg.content === null || msg.content === undefined ||
+       (typeof msg.content === "string" && msg.content.trim().length === 0) ||
+       (Array.isArray(msg.content) && msg.content.length === 0);
+      if (isEmpty) continue;
      }
      id = entry.id;
      break;
     }
+   }
+   if (signal?.aborted) {
+    return {
+     content: [{ type: "text" as const, text: "acm_checkpoint aborted." }],
+     details: { error: "aborted" },
+    };
    }
 
    if (!id) {
@@ -351,7 +376,18 @@ export default function(pi: ExtensionAPI): void {
     };
    }
 
-   setEntryLabel(sm, id, params.name);
+   const existingLabel = sm.getLabel(id);
+   if (existingLabel && existingLabel !== params.name) {
+    ctx.ui.notify(`Warning: node ${id} already has checkpoint '${existingLabel}'. New checkpoint '${params.name}' will overwrite it.`, "warning");
+   }
+   try {
+    setEntryLabel(sm, id, params.name);
+   } catch (e) {
+    return {
+     content: [{ type: "text" as const, text: `Error: checkpoint label '${params.name}' could not be set: ${e instanceof Error ? e.message : String(e)}.` }],
+     details: { error: "label_set_failed", name: params.name, entryId: id, message: e instanceof Error ? e.message : String(e) },
+    };
+   }
    return {
     content: [{ type: "text" as const, text: `Created checkpoint '${params.name}' at ${id}.` }],
     details: { entryId: id, label: params.name, target: params.target ?? "auto" },
@@ -382,8 +418,8 @@ export default function(pi: ExtensionAPI): void {
   async execute(
    _id: string,
    rawParams: unknown,
-   _signal: AbortSignal | undefined,
-   _onUpdate,
+   signal: AbortSignal | undefined,
+   _onUpdate: unknown,
    ctx: ExtensionContext,
   ) {
    const params = timelineSchema.parse(rawParams);
@@ -401,25 +437,30 @@ export default function(pi: ExtensionAPI): void {
    if (useFullTree) {
     // Build all nodes flat list for search, or render with depth limit
     if (searchTerm) {
-     // Search mode: find matching nodes across entire tree, show with context
-     const allNodes: SessionTreeNode[] = [];
-     const stack: SessionTreeNode[] = [...tree];
-     while (stack.length > 0) {
-      const n = stack.pop()!;
-      allNodes.push(n);
-      if (n.children?.length) { for (const child of n.children) stack.push(child); }
-     }
-     const matched = allNodes.map((n) => ({
-      node: n,
-      label: sm.getLabel(n.entry.id) ?? "",
-      content: getMsgContent(n.entry, sm, false),
-     })).filter((m) =>
-      m.label.toLowerCase().includes(searchTerm) ||
-      m.content.toLowerCase().includes(searchTerm) ||
-      m.node.entry.id.toLowerCase().includes(searchTerm)
-     );
+     // Search mode: traverse tree, collect matches with early termination
      const searchLimit = Math.min(limit > 0 ? limit : 50, 50);
-     lines.push(`Found ${matched.length} node(s) matching '${params.search}' (showing first ${Math.min(matched.length, searchLimit)}):`);
+     const matched: { node: SessionTreeNode; label: string; content: string }[] = [];
+     const searchStack: SessionTreeNode[] = [...tree];
+     let visited = 0;
+     const maxVisited = 10000;
+     while (searchStack.length > 0 && matched.length < searchLimit * 2 && visited < maxVisited) {
+      if (signal?.aborted) break;
+      visited++;
+      const n = searchStack.pop()!;
+      if (n.children?.length) { for (const child of n.children) searchStack.push(child); }
+      const label = sm.getLabel(n.entry.id) ?? "";
+      const content = getMsgContent(n.entry, sm, false);
+      if (
+       label.toLowerCase().includes(searchTerm) ||
+       content.toLowerCase().includes(searchTerm) ||
+       n.entry.id.toLowerCase().includes(searchTerm)
+      ) {
+       matched.push({ node: n, label, content });
+      }
+     }
+     const truncated = matched.length >= searchLimit * 2 || visited >= maxVisited;
+     const totalCount = truncated ? `${Math.min(matched.length, searchLimit * 2)}+` : String(matched.length);
+     lines.push(`Found ${totalCount} node(s) matching '${params.search}' (showing first ${Math.min(matched.length, searchLimit)}):${truncated ? " Results may be incomplete — narrow your search for full coverage." : ""}`);
      for (const m of matched.slice(0, searchLimit)) {
       const isHead = m.node.entry.id === currentLeafId;
       const role = getDisplayRole(m.node.entry);
@@ -432,9 +473,10 @@ export default function(pi: ExtensionAPI): void {
     } else {
      // No search: render full tree. limit controls max depth (capped at 50).
      const maxDepth = Math.min(limit > 0 ? limit : 50, 50);
-     tree.forEach((root: SessionTreeNode, i: number) => {
-      renderTreeNode(root, sm, currentLeafId, 0, maxDepth, "", i === tree.length - 1, lines);
-     });
+     for (let i = 0; i < tree.length; i++) {
+      if (signal?.aborted) break;
+      renderTreeNode(tree[i], sm, currentLeafId, 0, maxDepth, "", i === tree.length - 1, lines, signal);
+     }
      if (lines.length >= 200) {
       lines.push("... (output truncated at 200 lines — use search to find specific nodes) ...");
      }
@@ -446,35 +488,40 @@ export default function(pi: ExtensionAPI): void {
     const childIndex = new Map<string, SessionTreeNode[]>();
     const idxStack: SessionTreeNode[] = [...tree];
     while (idxStack.length > 0) {
+     if (signal?.aborted) break;
      const n = idxStack.pop()!;
      childIndex.set(n.entry.id, n.children ?? []);
      if (n.children?.length) { for (const child of n.children) idxStack.push(child); }
     }
 
     const sequence: SessionEntry[] = [];
-    branch.forEach((entry: SessionEntry) => {
+    for (const entry of branch) {
+     if (signal?.aborted) break;
      sequence.push(entry);
      const children = childIndex.get(entry.id) ?? [];
-     children.forEach((child) => {
+     for (const child of children) {
       if (
        (child.entry.type === "branch_summary" || child.entry.type === "compaction") &&
        !backboneIds.has(child.entry.id)
       ) {
        sequence.push(child.entry);
       }
-     });
-    });
+     }
+    }
 
-    // Pre-compute content for display (verbose) and search matching (always false)
+    // Pre-compute content: contentCache uses current verbose setting for display;
+    // searchContentCache uses verbose=false for search matching (excludes internal tool noise).
     const contentCache = new Map<string, string>();
     const searchContentCache = new Map<string, string>();
-    sequence.forEach((e: SessionEntry) => {
+    for (const e of sequence) {
+     if (signal?.aborted) break;
      contentCache.set(e.id, getMsgContent(e, sm, verbose));
      if (searchTerm && verbose) searchContentCache.set(e.id, getMsgContent(e, sm, false));
-    });
+    }
 
     const visibleSequenceIds = new Set<string>();
-    sequence.forEach((e: SessionEntry) => {
+    for (const e of sequence) {
+     if (signal?.aborted) break;
      if (searchTerm) {
       const label = sm.getLabel(e.id) ?? "";
       const content = (verbose ? searchContentCache.get(e.id) : contentCache.get(e.id)) ?? "";
@@ -484,7 +531,7 @@ export default function(pi: ExtensionAPI): void {
      } else if (verbose || isInteresting(e, sm, childIndex, branch, currentLeafId)) {
       visibleSequenceIds.add(e.id);
      }
-    });
+    }
 
     const visibleEntries = sequence.filter((e: SessionEntry) => visibleSequenceIds.has(e.id));
     const effectiveLimit = limit > 0 ? limit : 50;
@@ -495,10 +542,11 @@ export default function(pi: ExtensionAPI): void {
     }
 
     let hiddenCount = 0;
-    sequence.forEach((entry) => {
+    for (const entry of sequence) {
+     if (signal?.aborted) break;
      if (!visibleSequenceIds.has(entry.id)) {
       hiddenCount++;
-      return;
+      continue;
      }
      if (hiddenCount > 0) {
       lines.push(`  :  ... (${hiddenCount} hidden messages) ...`);
@@ -511,7 +559,7 @@ export default function(pi: ExtensionAPI): void {
      const role = getDisplayRole(entry);
 
      // Hide custom messages (count as hidden for accurate totals)
-     if (role === "CUSTOM") { hiddenCount++; return; }
+     if (role === "CUSTOM") { hiddenCount++; continue; }
 
      const isRoot = branch.length > 0 && entry.id === branch[0].id;
      const metaParts = [
@@ -526,7 +574,7 @@ export default function(pi: ExtensionAPI): void {
      else if (role === "USER") marker = "•";
 
      lines.push(`${marker} ${entry.id}${meta} [${role}] ${body}`);
-    });
+    }
 
     if (hiddenCount > 0) {
      lines.push(`  :  ... (${hiddenCount} hidden messages) ...`);
@@ -579,11 +627,11 @@ export default function(pi: ExtensionAPI): void {
   target: zod.string().min(1).describe(
    "Checkpoint name, history node ID, or 'root'. Use acm_timeline with full_tree to see all available targets.",
   ),
-  summary: zod.string().min(1).describe(
-   "Handoff state summary: current task/state, decisions/constraints, external side effects (changed files, processes, remote state), validation status, source anchors, and explicit next step. This is NOT a recap—it's the state needed to resume.",
+  summary: zod.string().min(1).max(10000).describe(
+   "Handoff state summary: current task/state, decisions/constraints, external side effects (changed files, processes, remote state), validation status, source anchors, and explicit next step. This is NOT a recap—it's the state needed to resume. Max 10000 chars.",
   ),
-  backupCheckpoint: zod.string().min(1).optional().describe(
-   "Optional name to label current HEAD before branching. Recovery pointer only; summary must still be self-contained.",
+  backupCheckpoint: zod.string().min(1).max(64).regex(/^[\w\-\.]+$/).optional().describe(
+   "Optional name to label current HEAD before branching. Recovery pointer only; summary must still be self-contained. Only letters, digits, hyphens, underscores, and dots. Max 64 chars.",
   ),
  });
 
@@ -596,29 +644,30 @@ export default function(pi: ExtensionAPI): void {
   async execute(
    _id: string,
    rawParams: unknown,
-   _signal: AbortSignal | undefined,
-   _onUpdate,
+   signal: AbortSignal | undefined,
+   _onUpdate: unknown,
    ctx: ExtensionContext,
   ) {
    const params = compactSchema.parse(rawParams);
    const sm = ctx.sessionManager;
    const tree = sm.getTree();
+   // Capture sessionId early — reused after branchWithSummary for continuation registration.
+   // Session ID doesn't change across branching, but capturing it here eliminates any
+   // timing window where getSessionId() could fail after a successful compact.
+   const sessionId = sm.getSessionId();
    const branchIds: Set<string> = new Set(sm.getBranch().map((e: SessionEntry) => e.id));
    const resolved = resolveTargetId(sm, tree, params.target, branchIds);
    const tid = resolved.id;
    // Validate that the resolved target actually exists in the tree
    const targetExists = findInTree(tree, (n) => n.entry.id === tid) !== undefined;
    if (!targetExists) {
+    const hint = " It may be a misspelled checkpoint name — use acm_timeline with full_tree to see available labels and node IDs.";
     return {
-     content: [{ type: "text" as const, text: `Error: Target '${params.target}' not found in session tree. Use acm_timeline with full_tree to see available targets.` }],
+     content: [{ type: "text" as const, text: `Error: Target '${params.target}' not found in session tree.${hint}` }],
      details: { error: "target_not_found", requestedTarget: params.target, resolvedTargetId: tid },
     };
    }
-   if (resolved.fromOffPath) {
-    ctx.ui.notify(`Note: '${params.target}' resolved from an off-path branch (not the active path). This is a "return to the future" operation.`, "info");
-   }
-
-
+   // off-path notify deferred until after all validation checks pass
    const currentLeaf = sm.getLeafId();
    if (!currentLeaf) {
     return {
@@ -632,9 +681,22 @@ export default function(pi: ExtensionAPI): void {
      details: { error: "already_at_target", targetId: tid, leafId: currentLeaf },
     };
    }
+   // Abort check before any side effects or mutations (notify, backup label, branchWithSummary).
+   if (signal?.aborted) {
+    return {
+     content: [{ type: "text" as const, text: "acm_compact aborted: signal was already aborted." }],
+     details: { error: "aborted", target: params.target, targetId: tid },
+    };
+   }
+   if (resolved.fromOffPath) {
+    ctx.ui.notify(`Note: '${params.target}' resolved from an off-path branch (not the active path). This is a "return to the future" operation.`, "info");
+   }
 
    const originId = currentLeaf;
-   const originLabel = sm.getLabel(originId);
+   const originLabel = sm.getLabel(originId) ?? undefined;
+   // originLabel is captured BEFORE backupCheckpoint may overwrite it.
+   // The summary references the original label for readability; agent should
+   // use originId (stable) to locate the node, not the label name.
    const fromPart = originLabel
     ? `(handoff summary from ${originLabel}, from: ${originId})`
     : `(handoff summary from: ${originId})`;
@@ -668,46 +730,78 @@ export default function(pi: ExtensionAPI): void {
    // Synchronous compact: execute branchWithSummary immediately.
    // leaf auto-set to new summary entry by insert().
    // Agent sees the result in the next acm_timeline call — no delay, no confusion.
+   // NOTE: If branchWithSummary partially modifies the tree before throwing,
+   // we can only roll back the backup label — the session tree may be in an
+   // inconsistent state. This is an acceptable limitation given OMP's API.
    let summaryEntryId: string;
+   let ghostEntry = false;
    try {
     summaryEntryId = branchWithSummary(sm, tid, enrichedMessage);
+    if (!summaryEntryId || typeof summaryEntryId !== "string") {
+     throw new Error(`branchWithSummary returned invalid entry ID: ${String(summaryEntryId)}`);
+    }
+    // Verify the returned ID actually exists in the tree.
+    // branchWithSummary already mutated the tree (leaf moved), so we can't roll back —
+    // downgrade to warning and let continuation fire so agent reads the summary.
+    const newTree = sm.getTree();
+    if (!findInTree(newTree, (n) => n.entry.id === summaryEntryId)) {
+     ghostEntry = true;
+     pi.logger.debug("branchWithSummary returned ID not found in tree", { summaryEntryId });
+     try { ctx.ui.notify(`Warning: compact succeeded but summary entry ${summaryEntryId} not found in tree. Session state may be inconsistent.`, "warning"); } catch (e) { pi.logger.debug("ghost entry notify failed", { error: e instanceof Error ? e.message : String(e) }); }
+    }
    } catch (err) {
     let rollbackFailed = false;
     if (backupLabelSet) {
      try {
       setEntryLabel(sm, originId, originLabel);
+      // Verify rollback succeeded — check label matches expected state
+      const currentLabel = sm.getLabel(originId) ?? undefined;
+      if (currentLabel !== originLabel) {
+       rollbackFailed = true;
+      }
      } catch (rollbackErr) {
       rollbackFailed = true;
-      ctx.ui.notify(
-       `Warning: backup label '${params.backupCheckpoint}' could not be rolled back after compact failure: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`,
-       "warning",
-      );
+      try { pi.logger.debug("compact rollback failed", { error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr) }); } catch { /* best-effort */ }
+     }
+     if (rollbackFailed) {
+      try { ctx.ui.notify(`Warning: backup label '${params.backupCheckpoint}' could not be rolled back after compact failure. Manual cleanup needed for node ${originId}.`, "warning"); } catch (ne) { pi.logger.debug("rollback notify failed", { error: ne instanceof Error ? ne.message : String(ne) }); }
      }
     }
     const rollbackNote = rollbackFailed
-     ? ` Additionally, backup label '${params.backupCheckpoint}' could not be rolled back — labels may be inconsistent.`
+     ? ` Additionally, backup label '${params.backupCheckpoint}' could not be rolled back — node ${originId} still has label '${params.backupCheckpoint}'. Use acm_checkpoint with target '${originId}' to fix the label manually.`
      : "";
     return {
      content: [{ type: "text" as const, text: `acm_compact failed: ${err instanceof Error ? err.message : String(err)}${rollbackNote}` }],
-     details: { error: "compact_failed", target: params.target, targetId: tid, message: err instanceof Error ? err.message : String(err), rollbackFailed, backupCheckpoint: params.backupCheckpoint ?? null },
+     details: { error: "compact_failed", target: params.target, targetId: tid, message: err instanceof Error ? err.message : String(err), rollbackFailed, backupCheckpoint: params.backupCheckpoint ?? null, ...(rollbackFailed ? { inconsistentLabelEntryId: originId, staleLabel: params.backupCheckpoint ?? null } : {}) },
     };
    }
 
-   const sid = sm.getSessionId();
-   pendingCompactCounts.set(sid, (pendingCompactCounts.get(sid) ?? 0) + 1);
+   // Count increment immediately after successful branchWithSummary —
+   // session state is already mutated, continuation MUST fire even if notification fails.
+   // sessionId was captured at the top of execute() — no timing window.
+   // Map.set with string key cannot throw, so no try-catch needed.
+   pendingCompactCounts.set(sessionId, (pendingCompactCounts.get(sessionId) ?? 0) + 1);
 
-   const usageAfter = ctx.getContextUsage();
-   ctx.ui.notify(
-    [
-     `Compacted to ${params.target}`,
-     `Context: ${usageBeforeText} → ${formatContextUsage(usageAfter)}`,
-     `Backup: ${params.backupCheckpoint || "none"}`,
-    ].join("\n"),
-    "info",
-   );
-
+   let usageAfter: UsageLike | undefined;
+   try {
+    usageAfter = ctx.getContextUsage();
+   } catch (e) { pi.logger.debug("getContextUsage failed after compact", { error: e instanceof Error ? e.message : String(e) }); }
+   try {
+    ctx.ui.notify(
+     [
+      `Compacted to ${params.target}`,
+      `Context: ${usageBeforeText} → ${formatContextUsage(usageAfter)}`,
+      `Backup: ${params.backupCheckpoint || "none"}`,
+     ].join("\n"),
+     "info",
+    );
+   } catch (e) { pi.logger.debug("notify failed after compact", { error: e instanceof Error ? e.message : String(e) }); }
    return {
-    content: [{ type: "text" as const, text: `Compact complete. Branch summary ${summaryEntryId} created at ${tid}. A continuation turn will start automatically. Read the injected summary and execute the Next Step.` }],
+    content: [{
+     type: "text" as const, text: ghostEntry
+      ? `Compact complete but summary entry ${summaryEntryId} was not found in tree after creation. Session state may be inconsistent. A continuation turn will start — use acm_timeline to inspect current state before proceeding.`
+      : `Compact complete. Branch summary ${summaryEntryId} created at ${tid}. A continuation turn will start automatically. Read the injected summary and execute the Next Step.`
+    }],
     details: {
      target: params.target,
      targetId: tid,
@@ -718,6 +812,7 @@ export default function(pi: ExtensionAPI): void {
      backupCheckpoint: params.backupCheckpoint ?? null,
      usageBefore: usageBeforeText,
      usageAfter: formatContextUsage(usageAfter),
+     ghostEntry,
     },
    };
   },
@@ -727,19 +822,24 @@ export default function(pi: ExtensionAPI): void {
  // compact is already executed synchronously in the tool. session_stop
  // only triggers a continuation turn so the agent reads the new leaf.
  pi.on("session_stop", (_event, ctx: ExtensionContext) => {
-  const sid = ctx.sessionManager.getSessionId();
-  const count = pendingCompactCounts.get(sid) ?? 0;
-  if (count === 0) return;
-  pendingCompactCounts.delete(sid);
-
-  const message = count === 1
-   ? "acm_compact complete. A handoff summary of your previous conversation path was injected above. Read it to understand your new state. Execute the Next Step from the summary."
-   : `${count} compacts completed. ${count} handoff summaries were injected above. Read them to understand your new state. Execute the Next Step from the most recent summary.`;
-
-  return {
-   continue: true,
-   additionalContext: message,
-  };
+  let capturedSid: string | undefined;
+  try {
+   const sid = ctx.sessionManager.getSessionId();
+   capturedSid = sid;
+   const count = pendingCompactCounts.get(sid) ?? 0;
+   if (count === 0) return { continue: false }; // No pending compact
+   const message = count === 1
+    ? "acm_compact complete. A handoff summary of your previous conversation path was injected above. Read it to understand your new state. Execute the Next Step from the summary."
+    : `${count} compacts completed in this turn. Only the most recent handoff summary is on the active path — read it to understand your current state. Execute the Next Step from that summary.`;
+   return { continue: true, additionalContext: message };
+  } catch (e) {
+   pi.logger.debug("session_stop handler failed", { error: e instanceof Error ? e.message : String(e) });
+   // If getSessionId() threw, we can't identify this session.
+   // Can't safely use pendingCompactCounts.size > 0 (may match other sessions). Log only.
+   return { continue: false };
+  } finally {
+   if (capturedSid !== undefined) pendingCompactCounts.delete(capturedSid);
+  }
  });
 
  // ── Session lifecycle: clear stale state ───────────────────
