@@ -34,25 +34,27 @@ function findInTree(
 }
 
 
-/** Resolve "root" / label / raw hex ID to an entry ID. */
+/** Resolve "root" / label / raw hex ID to an entry ID.
+ *  Returns { id, fromOffPath } where fromOffPath indicates the label was
+ *  found on an off-path branch (not the active path). */
 function resolveTargetId(
  sm: ReadonlySessionManager,
  tree: SessionTreeNode[],
  target: string,
  branchIds?: Set<string>,
-): string {
+): { id: string; fromOffPath: boolean } {
  if (target.toLowerCase() === "root") {
-  return tree.length > 0 ? tree[0].entry.id : target;
+  return { id: tree.length > 0 ? tree[0].entry.id : target, fromOffPath: false };
  }
  // Label lookup: prefer active path, then search entire tree.
  const ids = branchIds ?? new Set(sm.getBranch().map((e: SessionEntry) => e.id));
  const onPath = findInTree(tree, (n) => sm.getLabel(n.entry.id) === target && ids.has(n.entry.id))?.entry.id;
- if (onPath) return onPath;
+ if (onPath) return { id: onPath, fromOffPath: false };
  // Fallback: search entire tree (enables "return to the future" — off-path checkpoint labels)
  const anyMatch = findInTree(tree, (n) => sm.getLabel(n.entry.id) === target)?.entry.id;
- if (anyMatch) return anyMatch;
+ if (anyMatch) return { id: anyMatch, fromOffPath: true };
  // Not a label match — return as-is (caller validates existence via findInTree)
- return target;
+ return { id: target, fromOffPath: false };
 }
 
 
@@ -292,7 +294,8 @@ export default function(pi: ExtensionAPI): void {
 
    let id: string;
    if (params.target) {
-    id = resolveTargetId(sm, tree, params.target, branchIds);
+    const resolved = resolveTargetId(sm, tree, params.target, branchIds);
+    id = resolved.id;
     const targetExists = findInTree(tree, (n) => n.entry.id === id) !== undefined;
     if (!targetExists) {
      return {
@@ -601,7 +604,8 @@ export default function(pi: ExtensionAPI): void {
    const sm = ctx.sessionManager;
    const tree = sm.getTree();
    const branchIds: Set<string> = new Set(sm.getBranch().map((e: SessionEntry) => e.id));
-   const tid = resolveTargetId(sm, tree, params.target, branchIds);
+   const resolved = resolveTargetId(sm, tree, params.target, branchIds);
+   const tid = resolved.id;
    // Validate that the resolved target actually exists in the tree
    const targetExists = findInTree(tree, (n) => n.entry.id === tid) !== undefined;
    if (!targetExists) {
@@ -610,6 +614,10 @@ export default function(pi: ExtensionAPI): void {
      details: { error: "target_not_found", requestedTarget: params.target, resolvedTargetId: tid },
     };
    }
+   if (resolved.fromOffPath) {
+    ctx.ui.notify(`Note: '${params.target}' resolved from an off-path branch (not the active path). This is a "return to the future" operation.`, "info");
+   }
+
 
    const currentLeaf = sm.getLeafId();
    if (!currentLeaf) {
