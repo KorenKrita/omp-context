@@ -1,0 +1,28 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "omp-context",
+  "owner": {
+    "name": "KorenKrita"
+  },
+  "metadata": {
+    "description": "Agentic Context Management for OMP — checkpoint, timeline, compact",
+    "version": "0.1.0",
+    "pluginRoot": "."
+  },
+  "plugins": [
+    {
+      "name": "omp-context",
+      "description": "让 AI agent 主动管理上下文：打语义锚点、查看会话结构图、在相位转换时用 state summary 续接。支持时间旅行——回到过去压缩噪音，前往未来恢复旧路径。",
+      "source": "./",
+      "version": "0.1.0",
+      "author": {
+        "name": "KorenKrita"
+      },
+      "homepage": "https://github.com/KorenKrita/omp-context",
+      "repository": "https://github.com/KorenKrita/omp-context",
+      "license": "MIT",
+      "keywords": ["context", "management", "checkpoint", "compact", "timeline", "session-tree", "time-travel"],
+      "category": "productivity"
+    }
+  ]
+}

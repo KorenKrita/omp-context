@@ -1,59 +1,65 @@
-# omp-context: Agentic Context Management for OMP
+# omp-context
 
-**ACM** = **A**gentic **C**ontext **M**anagement。与 OMP 内置的自动上下文管理（snapcompact、rewind）不同，ACM 让 agent 自己决定何时打锚点、何时压缩、压缩到哪个节点——agent 是上下文管理的主体，不是被动接受自动压缩。
+> 让 AI agent 主动管理自己的上下文。
 
-工具名以 `acm_` 为前缀，避免与 OMP 内置 `checkpoint`/`rewind` 工具冲突。
+**Agentic Context Management** — agent 自己决定何时打锚点、何时压缩、压缩到哪个节点。不是被动等系统自动压缩，而是主动的、语义级别的上下文管理。
 
-让 AI agent 主动管理上下文：打语义锚点、查看会话结构图、在相位转换时用 state summary 续接。
+## 为什么需要
+
+AI agent 在长对话中会积累大量噪音：搜索结果、调试日志、失败尝试、中间产物。自动压缩（snapcompact）按 token 阈值触发，不理解任务语义，经常压缩掉有用的东西。
+
+omp-context 让 agent 像管理 git 分支一样管理上下文：
+
+- **开始前**打个锚点（零成本）
+- **做完一阶段**后回头看结构
+- **觉得太乱了**就 compact 回某个锚点，只留一份精炼总结
+- **发现丢了东西**还能跳回旧路径找回
 
 ## 工具
 
-| 工具 | 作用 |
+| 工具 | 做什么 |
 |---|---|
-| `acm_checkpoint` | 给对话节点打语义锚点（零成本，不分支、不摘要） |
-| `acm_timeline` | 输出活跃路径的结构图 + token HUD，支持 `full_tree` 和 `search` 参数 |
-| `acm_compact` | 从任意 tree 节点创建带手写 state summary 的续接分支，支持"回到未来" |
+| `acm_checkpoint` | 打锚点。零成本——不改上下文、不分支、不摘要。多打 = 后续更多选择 |
+| `acm_timeline` | 看结构图 + token 用量。`full_tree` 看所有分支，`search` 搜特定节点 |
+| `acm_compact` | 跳到任意锚点，留一份 handoff summary。旧路径保留，随时跳回 |
 
-## 核心概念
+## 时间旅行
 
-**Checkpoint** — 标记对话中的某个时刻。零成本：不改变上下文、不分支、不摘要。多打锚点 = 后续 compact 时有更多目标选择。
-
-**Timeline** — 查看对话的树形结构：活跃路径、锚点、分支摘要、off-path 分支。用 `full_tree: true` 查看所有分支（包括可以跳转的"未来"路径），用 `search: "keyword"` 在大树中搜索特定节点。
-
-**Compact** — 跳转到任意锚点或节点 ID，留下一份 handoff summary 作为桥梁。这会从该点创建新分支，旧路径作为 off-path 分支保留——随时可以 compact 回去（"回到未来"）。
-
-### 回到过去
-
-当前路径充满噪音时，compact 到更早的锚点：
+**回到过去** — compact 到更早的锚点，把噪音替换成总结：
 - 失败的探索后重新开始
-- 完成一个嘈杂阶段后，只保留结论
-- 进入新阶段前，压缩调查过程
+- 完成嘈杂阶段后只留结论
+- 进入新阶段前压缩调查过程
 
-### 前往未来
-
-需要访问之前留下的路径时，compact 到 off-path 分支上的节点：
-- 回到 backup checkpoint 恢复原始上下文
+**前往未来** — compact 到 off-path 分支上的旧节点，恢复原始上下文：
+- 回到 backup checkpoint 找回细节
 - 比较不同方案
-- 恢复丢失的细节
+- 恢复被压缩丢失的信息
 
-## 与 OMP 内置机制的关系
-
-| 机制 | 关系 |
-|---|---|
-| `checkpoint`/`rewind` | 互补：rewind 丢弃草稿，acm_compact 整理成笔记 |
-| `snapcompact` | 独立：自动触发，不依赖 agent |
-| `semantic-compression` | 正交：压缩文本语法，不管理会话结构 |
-| `/context` | 互补：token 可视化 |
+旧路径永远不删除——每次 compact 创建新分支，老分支完整保留在树里。
 
 ## 安装
 
 ```bash
+# 从本地
 omp install .
-# 或
+
+# 从 GitHub
 omp install github:KorenKrita/omp-context
+
+# 从 marketplace
+/marketplace add KorenKrita/omp-context
+/marketplace install omp-context@omp-context
 ```
+
+## 与 OMP 内置功能的关系
+
+| 内置功能 | 关系 |
+|---|---|
+| `snapcompact` | 互补——snapcompact 自动按阈值压缩，acm_compact 让 agent 按语义主动压缩 |
+| `checkpoint`/`rewind` | 互补——rewind 丢弃草稿，acm_compact 整理成笔记再翻篇 |
+| `/context` | 互补——token 可视化 |
 
 ## 参考
 
-- [pi-context](https://github.com/ttttmr/pi-context) by ttttmr
-- [设计哲学](https://blog.xlab.app/p/6a966aeb/)
+- [pi-context](https://github.com/ttttmr/pi-context) — 原始项目 by ttttmr
+- [让 AI 主动管理自己的上下文](https://blog.xlab.app/p/6a966aeb/) — 设计思路
