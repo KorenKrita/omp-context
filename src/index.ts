@@ -420,7 +420,8 @@ export default function(pi: ExtensionAPI): void {
      for (const m of matched.slice(0, searchLimit)) {
       const isHead = m.node.entry.id === currentLeafId;
       const role = getDisplayRole(m.node.entry);
-      const body = m.content.replace(/\s+/g, " ").slice(0, 80) + (m.content.length > 80 ? "..." : "");
+      const normalized = m.content.replace(/\s+/g, " ");
+      const body = normalized.length > 80 ? normalized.slice(0, 80) + "..." : normalized;
       const metaParts = [m.label ? `checkpoint: ${m.label}` : null, isHead ? "*HEAD*" : null, `type: ${m.node.entry.type}`].filter((s): s is string => s !== null);
       const meta = metaParts.length > 0 ? ` (${metaParts.join(", ")})` : "";
       lines.push(`${isHead ? "*" : " "} ${m.node.entry.id}${meta} [${role}] ${body}`);
@@ -461,17 +462,19 @@ export default function(pi: ExtensionAPI): void {
      });
     });
 
-    // Pre-compute content for all sequence entries (used for both search matching and display)
+    // Pre-compute content for display (verbose) and search matching (always false)
     const contentCache = new Map<string, string>();
+    const searchContentCache = new Map<string, string>();
     sequence.forEach((e: SessionEntry) => {
      contentCache.set(e.id, getMsgContent(e, sm, verbose));
+     if (searchTerm && verbose) searchContentCache.set(e.id, getMsgContent(e, sm, false));
     });
 
     const visibleSequenceIds = new Set<string>();
     sequence.forEach((e: SessionEntry) => {
      if (searchTerm) {
       const label = sm.getLabel(e.id) ?? "";
-      const content = contentCache.get(e.id) ?? "";
+      const content = (verbose ? searchContentCache.get(e.id) : contentCache.get(e.id)) ?? "";
       if (label.toLowerCase().includes(searchTerm) || content.toLowerCase().includes(searchTerm) || e.id.toLowerCase().includes(searchTerm)) {
        visibleSequenceIds.add(e.id);
       }
