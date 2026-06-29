@@ -5,14 +5,14 @@
     "name": "KorenKrita"
   },
   "metadata": {
-    "description": "Agentic Context Management for OMP — checkpoint, timeline, compact",
+    "description": "Agentic Context Management for OMP — checkpoint, timeline, travel",
     "version": "0.1.0",
     "pluginRoot": "."
   },
   "plugins": [
     {
       "name": "omp-context",
-      "description": "让 AI agent 主动管理上下文：打语义锚点、查看会话结构图、在相位转换时用 state summary 续接。支持时间旅行——回到过去压缩噪音，前往未来恢复旧路径。",
+      "description": "让 AI agent 主动管理上下文：打语义锚点、查看会话结构图、穿越时间线续接。回到过去可减负，前往未来可恢复 raw history。",
       "source": "./",
       "version": "0.1.0",
       "author": {
@@ -21,7 +21,7 @@
       "homepage": "https://github.com/KorenKrita/omp-context",
       "repository": "https://github.com/KorenKrita/omp-context",
       "license": "MIT",
-      "keywords": ["context", "management", "checkpoint", "compact", "timeline", "session-tree", "time-travel"],
+      "keywords": ["context", "management", "checkpoint", "travel", "timeline", "session-tree", "time-travel"],
       "category": "productivity"
     }
   ]

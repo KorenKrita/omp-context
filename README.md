@@ -2,7 +2,7 @@
 
 > 让 AI agent 主动管理自己的上下文。
 
-**Agentic Context Management** — agent 自己决定何时打锚点、何时压缩、压缩到哪个节点。不是被动等系统自动压缩，而是主动的、语义级别的上下文管理。
+**Agentic Context Management** — agent 自己决定何时打锚点、何时穿越时间线、穿越到哪个节点。不是被动等系统自动压缩，而是主动的、语义级别的上下文管理。
 
 ## 为什么需要
 
@@ -12,30 +12,34 @@ omp-context 让 agent 像管理 git 分支一样管理上下文：
 
 - **开始前**打个锚点（零成本）
 - **做完一阶段**后回头看结构
-- **觉得太乱了**就 compact 回某个锚点，只留一份精炼总结
-- **发现丢了东西**还能跳回旧路径找回
+- **觉得太乱了**就 travel 回更早的锚点，用 handoff summary 翻篇
+- **需要找回旧路径**就 travel 到 off-path 节点，恢复当时的 raw context
 
 ## 工具
 
 | 工具 | 做什么 |
 |---|---|
 | `acm_checkpoint` | 打锚点。零成本——不改上下文、不分支、不摘要。多打 = 后续更多选择 |
-| `acm_timeline` | 看结构图 + token 用量。`full_tree` 看所有分支，`search` 搜特定节点 |
-| `acm_compact` | 跳到任意锚点，留一份 handoff summary。上下文立即切换到目标节点 + summary，token 即时降。旧路径保留，随时跳回 |
+| `acm_timeline` | 看 active path 结构图 + token HUD。默认只显示当前路径；off-path 摘要以脚注标出。`search` 全树搜索（含 off-path）。`list_checkpoints` 列 checkpoint 清单（可 search 缩小，显示上限 50），`full_tree` 看整棵树 |
+| `acm_travel` | 穿越到任意锚点，留一份 handoff summary。上下文切换到目标节点 + summary；token 可能降（回到过去）也可能升（前往未来）。旧路径保留，随时再 travel |
 
 ## 时间旅行
 
-**回到过去** — compact 到更早的锚点，把噪音替换成总结：
+**回到过去** — travel 到更早的锚点，把当前路径的噪音替换成 summary：
 - 失败的探索后重新开始
 - 完成嘈杂阶段后只留结论
-- 进入新阶段前压缩调查过程
+- 进入新阶段前整理调查过程
 
-**前往未来** — compact 到 off-path 分支上的旧节点，恢复原始上下文：
-- 回到 backup checkpoint 找回细节
+副作用通常是 **context 变小**（目标在噪音产生之前）。
+
+**前往未来** — travel 到 off-path 或更晚的锚点，恢复该节点之前的 raw history：
+- 通过 `backupCurrentHeadAs` 找回被离开的分支
 - 比较不同方案
-- 恢复被压缩丢失的信息
+- 恢复 summary 里丢失的细节
 
-旧路径永远不删除——每次 compact 创建新分支，老分支完整保留在树里。
+副作用通常是 **context 变大**（目标在大量 read/tool 结果之后）。
+
+旧路径永远不删除——每次 travel 创建新分支，老分支完整保留在树里。
 
 ## 安装
 
@@ -55,8 +59,8 @@ omp install github:KorenKrita/omp-context
 
 | 内置功能 | 关系 |
 |---|---|
-| `snapcompact` | 互补——snapcompact 自动按阈值压缩，acm_compact 让 agent 按语义主动压缩 |
-| `checkpoint`/`rewind` | 互补——rewind 丢弃草稿，acm_compact 整理成笔记再翻篇 |
+| `snapcompact` | 互补——snapcompact 自动按阈值压缩，acm_travel 让 agent 按语义主动穿越时间线 |
+| `checkpoint`/`rewind` | 互补——rewind 丢弃草稿，acm_travel 整理成笔记再翻篇 |
 | `/context` | 互补——token 可视化 |
 
 ## 参考
