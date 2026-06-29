@@ -17,6 +17,7 @@ import {
  entryMatchesLabelSearch,
  estimateUsageAfterMessageChange,
  estimateUsageAtTravelTarget,
+ extractTextFromContent,
  findCheckpointLabelOwner,
  findInTree,
  findLastMeaningfulEntry as findLastMeaningfulEntryCore,
@@ -26,6 +27,8 @@ import {
  getEntryLabels,
  getMeaningfulSkipReason,
  ContextRefreshRegistry,
+ isValidEntryId,
+ pushTreeChildrenPreOrder,
  resolveTargetId,
  resolveTimelineMode,
  type MeaningfulResolveResult,
@@ -34,10 +37,18 @@ import {
 
 /** Content part types that can appear in assistant message arrays. */
 type AssistantContentPart = TextContent | ThinkingContent | RedactedThinkingContent | ToolCall;
-// ── Module state ──────────────────────────────────────────────
 
-/** After travel, rebuild LLM messages once on the next context event (post-travel stale agent.messages). */
-const contextRefresh = new ContextRefreshRegistry();
+function formatBackupText(
+ name: string | undefined,
+ entryId: string | undefined,
+ resolvedFromHead: string | undefined,
+): string {
+ if (!name || !entryId) return "none";
+ if (resolvedFromHead) {
+  return `${name}@${entryId} (resolved from HEAD ${resolvedFromHead})`;
+ }
+ return `${name}@${entryId}`;
+}
 
 function getMessageRoleLabel(entry: SessionEntry): string | undefined {
  if (entry.type !== "message") return undefined;
@@ -168,14 +179,7 @@ function branchWithSummary(
 
 /** Extract plain text from user/assistant/system/custom message content. */
 function extractMessageText(content: unknown): string {
- if (typeof content === "string") return content.trim();
- if (Array.isArray(content)) {
-  return content
-   .map((p: { type?: string; text?: string }) => (p.type === "text" && p.text ? p.text : ""))
-   .join(" ")
-   .trim();
- }
- return "";
+ return extractTextFromContent(content);
 }
 
 /** Extract a human-readable summary string from a session entry. */
@@ -215,19 +219,7 @@ function getMsgContent(entry: SessionEntry, sm: ReadonlySessionManager, verbose:
  }
 
  if (msg.role === "user" || msg.role === "assistant") {
-  let text = "";
-  if (typeof msg.content === "string") {
-   text = msg.content;
-  } else if (Array.isArray(msg.content)) {
-   text = msg.content
-    .map((p: AssistantContentPart | ImageContent) => {
-     if (p.type === "text") return p.text;
-     return "";
-    })
-    .join(" ")
-    .trim();
-  }
-
+  let text = extractMessageText(msg.content);
   let toolCallsText = "";
   if (msg.role === "assistant" && Array.isArray(msg.content)) {
    const toolCalls = msg.content.filter(
@@ -471,7 +463,7 @@ function searchFullSessionTree(
   if (signal?.aborted) break;
   visited++;
   const n = searchStack.pop()!;
-  if (n.children?.length) { for (const child of n.children) searchStack.push(child); }
+  if (n.children?.length) pushTreeChildrenPreOrder(searchStack, n.children);
   const checkpointLabels = formatEntryLabels(labelMaps, n.entry.id) ?? "";
   const content = getMsgContent(n.entry, sm, false);
   if (
@@ -523,6 +515,8 @@ function formatTreeSearchResults(
 
 export default function(pi: ExtensionAPI): void {
  const zod = pi.zod;
+ /** Per-extension-instance refresh state (avoids cross-instance sharing on hot reload). */
+ const contextRefresh = new ContextRefreshRegistry();
 
  // ── Tool: acm_checkpoint ───────────────────────────────────
  const checkpointSchema = zod.object({
@@ -560,14 +554,14 @@ export default function(pi: ExtensionAPI): void {
    let autoResolved: MeaningfulResolveResult | undefined;
    let targetEntry: SessionEntry | undefined;
    if (params.target) {
-    if (params.target.toLowerCase() === "root" && tree.length === 0) {
+    const resolved = resolveTargetId(sm, tree, params.target, branchIds, labelMaps);
+    id = resolved.id;
+    if (!isValidEntryId(id)) {
      return {
       content: [{ type: "text" as const, text: "Error: Cannot checkpoint root — session tree is empty." }],
       details: { error: "empty_session", requestedTarget: params.target },
      };
     }
-    const resolved = resolveTargetId(sm, tree, params.target, branchIds, labelMaps);
-    id = resolved.id;
     if (params.target.toLowerCase() === "root" && tree.length > 1) {
      ctx.ui.notify(
       `Note: 'root' resolved to the first top-level node (${id}); this session has ${tree.length} top-level roots.`,
@@ -642,12 +636,13 @@ export default function(pi: ExtensionAPI): void {
    }
 
    const aliasSuffix = priorLabels.length > 0 ? ` Added alias alongside: ${priorLabels.join(", ")}.` : "";
+   const explicitRole = targetEntry ? getMessageRoleLabel(targetEntry) : "NODE";
    return {
     content: [{
      type: "text" as const,
      text: autoResolved
       ? `Created checkpoint '${params.name}' at ${id} (${formatMeaningfulResolveSummary(autoResolved)}).${aliasSuffix}`
-      : `Created checkpoint '${params.name}' at ${id} (${getMessageRoleLabel(targetEntry!) ?? "NODE"}${params.target ? `, target='${params.target}'` : ""}).${aliasSuffix}`,
+      : `Created checkpoint '${params.name}' at ${id} (${explicitRole}${params.target ? `, target='${params.target}'` : ""}).${aliasSuffix}`,
     }],
     details: {
      entryId: id,
@@ -859,7 +854,11 @@ export default function(pi: ExtensionAPI): void {
    if (refreshFailure) {
     hudParts.push(`• Context Sync:     last travel refresh failed — ${refreshFailure}`);
    } else if (refreshPending) {
-    hudParts.push(`• Context Sync:     refresh pending on next LLM turn (post-travel message rebuild)`);
+    const attempt = contextRefresh.getAttemptCount(sm);
+    const retrySuffix = attempt > 0
+     ? ` (retry ${attempt}/${ContextRefreshRegistry.MAX_ATTEMPTS} on next LLM turn)`
+     : " on next LLM turn (post-travel message rebuild)";
+    hudParts.push(`• Context Sync:     refresh pending${retrySuffix}`);
    }
    if (!listCheckpoints && !useFullTree) {
     hudParts.push(`• Tip:              large trees → list_checkpoints or search before full_tree`);
@@ -925,7 +924,7 @@ export default function(pi: ExtensionAPI): void {
    const branchIds: Set<string> = new Set(branch.map((e: SessionEntry) => e.id));
    const resolved = resolveTargetId(sm, tree, params.target, branchIds, labelMaps);
    const tid = resolved.id;
-   if (params.target.toLowerCase() === "root" && tree.length === 0) {
+   if (params.target.toLowerCase() === "root" && !isValidEntryId(tid)) {
     return {
      content: [{ type: "text" as const, text: "Error: Cannot travel to root — session tree is empty." }],
      details: { error: "empty_session", requestedTarget: params.target },
@@ -985,6 +984,7 @@ export default function(pi: ExtensionAPI): void {
 
    let backupEntryId: string | undefined;
    let backupResolvedFromHead: string | undefined;
+   let backupLabelWrittenThisCall = false;
    if (params.backupCurrentHeadAs) {
     const headResolve = findLastMeaningfulEntry(branch, sm, signal);
     backupEntryId = headResolve.entryId ?? undefined;
@@ -1013,6 +1013,7 @@ export default function(pi: ExtensionAPI): void {
     if (!backupPriorLabels.includes(params.backupCurrentHeadAs)) {
      try {
       setEntryLabel(sm, backupEntryId, params.backupCurrentHeadAs);
+      backupLabelWrittenThisCall = true;
      } catch (e) {
       return {
        content: [{ type: "text" as const, text: `Error: backup label '${params.backupCurrentHeadAs}' could not be set: ${e instanceof Error ? e.message : String(e)}. Travel aborted.` }],
@@ -1033,9 +1034,37 @@ export default function(pi: ExtensionAPI): void {
    try {
     summaryEntryId = branchWithSummary(sm, tid, params.summary, travelDetails);
    } catch (e) {
+    const errText = e instanceof Error ? e.message : String(e);
+    let backupRolledBack = false;
+    let backupRollbackFailed = false;
+    if (backupLabelWrittenThisCall && backupEntryId) {
+     try {
+      setEntryLabel(sm, backupEntryId, undefined);
+      backupRolledBack = true;
+     } catch {
+      backupRollbackFailed = true;
+     }
+    }
+    let backupNote = "";
+    if (params.backupCurrentHeadAs) {
+     if (backupRollbackFailed) {
+      backupNote = ` Backup label '${params.backupCurrentHeadAs}' was written but could not be rolled back.`;
+     } else if (backupRolledBack) {
+      backupNote = ` Backup label '${params.backupCurrentHeadAs}' was rolled back.`;
+     } else if (backupLabelWrittenThisCall) {
+      backupNote = ` Backup label '${params.backupCurrentHeadAs}' remains on the tree.`;
+     }
+    }
     return {
-     content: [{ type: "text" as const, text: `Error: branchWithSummary failed: ${e instanceof Error ? e.message : String(e)}` }],
-     details: { error: "branch_failed" },
+     content: [{ type: "text" as const, text: `Error: branchWithSummary failed: ${errText}.${backupNote}` }],
+     details: {
+      error: "branch_failed",
+      backupCurrentHeadAs: params.backupCurrentHeadAs ?? null,
+      backupEntryId,
+      backupLabelWritten: backupLabelWrittenThisCall,
+      backupRolledBack,
+      backupRollbackFailed,
+     },
     };
    }
 
@@ -1047,11 +1076,7 @@ export default function(pi: ExtensionAPI): void {
    const estimatedUsageAfterText = formatContextUsage(estimatedUsageAfter, true);
    const estimatedEffect = classifyTravelEffect(usageBefore, estimatedUsageAfter);
    const structuralEffect = classifyStructuralMessageEffect(messagesBefore, messagesAfter);
-   const backupText = params.backupCurrentHeadAs
-    ? backupResolvedFromHead
-      ? `${params.backupCurrentHeadAs}@${backupEntryId} (resolved from HEAD ${backupResolvedFromHead})`
-      : `${params.backupCurrentHeadAs}@${backupEntryId}`
-    : "none";
+   const backupText = formatBackupText(params.backupCurrentHeadAs, backupEntryId, backupResolvedFromHead);
    const messageDelta = `${messagesBefore} → ${messagesAfter} (${structuralEffect})`;
 
    return {
@@ -1106,25 +1131,27 @@ export default function(pi: ExtensionAPI): void {
    const full = sm as unknown as { buildSessionContext?: () => { messages: unknown[] } };
    if (typeof full.buildSessionContext !== "function") {
     const message = "buildSessionContext unavailable";
-    contextRefresh.setFailure(sm, message);
+    const willRetry = contextRefresh.recordFailedAttempt(sm, message);
     ctx.ui.notify(
-     "Context refresh after travel failed: buildSessionContext unavailable. Reload the session to sync messages.",
+     willRetry
+      ? `Context refresh after travel failed (${contextRefresh.getAttemptCount(sm)}/${ContextRefreshRegistry.MAX_ATTEMPTS}): ${message}. Will retry on next LLM turn.`
+      : `Context refresh after travel failed: ${message}. Reload the session to sync messages.`,
      "warning",
     );
     return;
    }
    const sessionContext = full.buildSessionContext();
-   contextRefresh.clear(sm);
+   contextRefresh.markSuccess(sm);
    return { messages: sessionContext.messages as typeof event.messages };
   } catch (e) {
    const message = e instanceof Error ? e.message : String(e);
-   contextRefresh.setFailure(sm, message);
+   const willRetry = contextRefresh.recordFailedAttempt(sm, message);
    ctx.ui.notify(
-    `Context refresh after travel failed: ${message}. Reload the session to sync messages.`,
+    willRetry
+     ? `Context refresh after travel failed (${contextRefresh.getAttemptCount(sm)}/${ContextRefreshRegistry.MAX_ATTEMPTS}): ${message}. Will retry on next LLM turn.`
+     : `Context refresh after travel failed: ${message}. Reload the session to sync messages.`,
     "warning",
    );
-  } finally {
-   contextRefresh.clearPending(sm);
   }
  });
 

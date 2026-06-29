@@ -12,15 +12,16 @@ import {
  getMeaningfulSkipReason,
  resolveTargetId,
  resolveTimelineMode,
+ isValidEntryId,
  type UsageLike,
 } from "./lib.js";
 
-function labelEntry(id: string, targetId: string, label: string): SessionEntry {
+function labelEntry(id: string, targetId: string, label: string, timestamp = "2026-01-01T00:00:00.000Z"): SessionEntry {
  return {
   type: "label",
   id,
   parentId: null,
-  timestamp: new Date().toISOString(),
+  timestamp,
   targetId,
   label,
  } as SessionEntry;
@@ -57,7 +58,7 @@ describe("buildLabelMaps", () => {
   expect(maps.entryToLabels.get("e2")).toEqual(["shared"]);
  });
 
- test("clears labels when label entry clears target", () => {
+ test("clears labels when label entry sets label to null", () => {
   const maps = buildLabelMaps([
    labelEntry("l1", "e1", "gone"),
    { ...labelEntry("l2", "e1", "gone"), label: undefined } as SessionEntry,
@@ -91,6 +92,14 @@ describe("resolveTargetId", () => {
   const result = resolveTargetId(sm, [], "root");
   expect(result.id).toBe("");
   expect(result.fromOffPath).toBe(false);
+  expect(isValidEntryId(result.id)).toBe(false);
+ });
+});
+
+describe("isValidEntryId", () => {
+ test("rejects empty ids", () => {
+  expect(isValidEntryId("")).toBe(false);
+  expect(isValidEntryId("abc")).toBe(true);
  });
 });
 
@@ -117,11 +126,23 @@ describe("ContextRefreshRegistry", () => {
   registry.markPending(smA);
   expect(registry.isPending(smA)).toBe(true);
   expect(registry.isPending(smB)).toBe(false);
-  registry.setFailure(smA, "boom");
+  expect(registry.recordFailedAttempt(smA, "boom")).toBe(true);
   expect(registry.getFailure(smA)).toBe("boom");
-  registry.clear(smA);
+  expect(registry.isPending(smA)).toBe(true);
+  registry.markSuccess(smA);
   expect(registry.isPending(smA)).toBe(false);
   expect(registry.getFailure(smA)).toBeUndefined();
+ });
+
+ test("stops retrying after max attempts", () => {
+  const registry = new ContextRefreshRegistry();
+  const sm = {};
+  registry.markPending(sm);
+  expect(registry.recordFailedAttempt(sm, "a")).toBe(true);
+  expect(registry.recordFailedAttempt(sm, "b")).toBe(true);
+  expect(registry.recordFailedAttempt(sm, "c")).toBe(false);
+  expect(registry.isPending(sm)).toBe(false);
+  expect(registry.getFailure(sm)).toBe("c");
  });
 
  test("sessions are isolated", () => {
@@ -203,6 +224,15 @@ describe("getMeaningfulSkipReason", () => {
   expect(getMeaningfulSkipReason(bash)).toBe("bash_execution");
   expect(getMeaningfulSkipReason(custom)).toBe("custom_message");
   expect(getMeaningfulSkipReason(system)).toBe("system_message");
+ });
+
+ test("treats assistant single-object text content as meaningful", () => {
+  const assistant = {
+   type: "message",
+   id: "a1",
+   message: { role: "assistant", content: { type: "text", text: "done" } },
+  } as SessionEntry;
+  expect(getMeaningfulSkipReason(assistant)).toBeNull();
  });
 });
 

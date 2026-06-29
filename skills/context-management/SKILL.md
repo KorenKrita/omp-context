@@ -169,7 +169,7 @@ Travel to a checkpoint or node ID with a handoff summary. The target becomes the
 
 Typical travel boundaries: investigation -> execution, diagnosis -> fix, failed attempt -> next attempt, completed noisy task -> new user task.
 
-`backupCurrentHeadAs` labels the nearest meaningful USER/AI message before travel — not the raw HEAD tool result. Read `backupEntryId` / `backupResolvedFromHead` in the tool result if HEAD was tool traffic. If `branchWithSummary` fails after a backup label was written, the backup checkpoint **remains** on the tree even though travel aborted.
+`backupCurrentHeadAs` labels the nearest meaningful USER/AI message before travel — not the raw HEAD tool result. Read `backupEntryId` / `backupResolvedFromHead` in the tool result if HEAD was tool traffic. If `branchWithSummary` fails after a backup label was written, the extension **best-effort rolls back** the backup; if rollback fails, the error/details note that the label remains.
 
 Do not travel while exploration is still active, when the result is unstable, or just because the skill triggered.
 

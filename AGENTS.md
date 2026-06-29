@@ -53,7 +53,7 @@ checkpoint / `backupCurrentHeadAs` **名称**在整棵树内必须唯一且**大
 
 `target: "root"` 解析为 **第一个 top-level 节点**；多根会话会 notify，优先用显式 checkpoint 名或节点 ID。
 
-`acm_travel` 的 `backupCurrentHeadAs` 同样落在最近有意义的 USER/AI 消息上，而不是 raw HEAD（避免 backup 打在 `acm_timeline` 等 tool result 上）。若从 HEAD 回退，tool result 会写明 `backup@entryId (resolved from HEAD …)`。若 backup 已写入但 `branchWithSummary` 失败，backup label **仍会保留**，travel 整体 aborted。
+`acm_travel` 的 `backupCurrentHeadAs` 同样落在最近有意义的 USER/AI 消息上，而不是 raw HEAD（避免 backup 打在 `acm_timeline` 等 tool result 上）。若从 HEAD 回退，tool result 会写明 `backup@entryId (resolved from HEAD …)`。若 backup 已写入但 `branchWithSummary` 失败，extension 会 **best-effort 回滚** backup label；回滚失败时 error/details 会注明 label 仍留在树上。
 
 ### timeline 是会话树结构视图
 
@@ -96,7 +96,7 @@ sm.branchWithSummary(targetId, summary, {
 ```
 
 5. 设置 `contextRefresh.markPending(sessionManager)`（按 session 实例隔离）。
-6. `pi.on("context", ...)` 在**下一次** LLM 调用前执行一次 `sm.buildSessionContext()` 重建 messages；成功则清除状态，失败则 `ui.notify` + 写入 failure 供 timeline HUD 显示。`session_start` / `session_shutdown` 也会清除 stale 状态。
+6. `pi.on("context", ...)` 在**下一次** LLM 调用前执行 `sm.buildSessionContext()` 重建 messages；成功则 `markSuccess`；失败则 `recordFailedAttempt`（最多 3 次重试，HUD 显示 retry 进度），耗尽后保留 failure 并提示 reload。
 
 travel tool result `details` 含 `sessionMessages`（字符串 delta）、`messagesBefore`/`messagesAfter`、`summaryEntryId`、`contextRefreshPending`。**无** legacy `summaryEntry` 别名字段。
 

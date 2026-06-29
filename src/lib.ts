@@ -54,16 +54,24 @@ export function resolveTimelineMode(params: {
 
 /** One-shot context rebuild state keyed by session manager instance. */
 export class ContextRefreshRegistry {
+ static readonly MAX_ATTEMPTS = 3;
+
  private pending = new WeakSet<object>();
  private failures = new WeakMap<object, string>();
+ private attempts = new WeakMap<object, number>();
 
  markPending(sm: object): void {
   this.pending.add(sm);
   this.failures.delete(sm);
+  this.attempts.set(sm, 0);
  }
 
  isPending(sm: object): boolean {
   return this.pending.has(sm);
+ }
+
+ getAttemptCount(sm: object): number {
+  return this.attempts.get(sm) ?? 0;
  }
 
  clearPending(sm: object): void {
@@ -78,9 +86,26 @@ export class ContextRefreshRegistry {
   return this.failures.get(sm);
  }
 
+ /** Record a failed refresh attempt. Returns true if another retry is allowed. */
+ recordFailedAttempt(sm: object, message: string): boolean {
+  const next = (this.attempts.get(sm) ?? 0) + 1;
+  this.attempts.set(sm, next);
+  this.setFailure(sm, message);
+  if (next >= ContextRefreshRegistry.MAX_ATTEMPTS) {
+   this.clearPending(sm);
+   return false;
+  }
+  return true;
+ }
+
+ markSuccess(sm: object): void {
+  this.clear(sm);
+ }
+
  clear(sm: object): void {
   this.pending.delete(sm);
   this.failures.delete(sm);
+  this.attempts.delete(sm);
  }
 }
 
@@ -100,6 +125,35 @@ export interface MeaningfulResolveResult {
  skipped: SkippedEntry[];
 }
 
+export function isValidEntryId(id: string): boolean {
+ return id.length > 0;
+}
+
+/** Push tree children left-to-right so stack.pop() visits in document order. */
+export function pushTreeChildrenPreOrder(stack: SessionTreeNode[], children: SessionTreeNode[]): void {
+ for (let i = children.length - 1; i >= 0; i--) stack.push(children[i]);
+}
+
+export function extractTextFromContent(content: unknown): string {
+ if (typeof content === "string") return content.trim();
+ if (Array.isArray(content)) {
+  return content
+   .map((p) => {
+    if (typeof p === "object" && p !== null && "type" in p && p.type === "text" && "text" in p && typeof p.text === "string") {
+     return p.text;
+    }
+    return "";
+   })
+   .join(" ")
+   .trim();
+ }
+ if (typeof content === "object" && content !== null && "type" in content) {
+  const part = content as { type?: string; text?: string };
+  if (part.type === "text" && typeof part.text === "string") return part.text.trim();
+ }
+ return "";
+}
+
 /** Iterative DFS — avoids stack overflow on deep session trees. */
 export function findInTree(
  nodes: SessionTreeNode[],
@@ -109,7 +163,7 @@ export function findInTree(
  while (stack.length > 0) {
   const n = stack.pop()!;
   if (predicate(n)) return n;
-  if (n.children?.length) { for (const child of n.children) stack.push(child); }
+  if (n.children?.length) pushTreeChildrenPreOrder(stack, n.children);
  }
  return undefined;
 }
@@ -122,7 +176,7 @@ export function buildLabelMaps(entries: SessionEntry[]): LabelMaps {
  for (const entry of entries) {
   if (entry.type !== "label") continue;
   const { targetId, label } = entry;
-  if (!label) {
+  if (label == null) {
    entryToLabels.delete(targetId);
    for (const [name, id] of [...labelToEntryId.entries()]) {
     if (id === targetId) labelToEntryId.delete(name);
@@ -280,21 +334,25 @@ export function getMeaningfulSkipReason(entry: SessionEntry): MeaningfulSkipReas
  if (msg.role === "bashExecution") return "bash_execution";
  if (msg.role === "custom") return "custom_message";
  if (msg.role === "system") return "system_message";
- if (msg.role === "assistant" && Array.isArray(msg.content)) {
-  const toolCalls = msg.content.filter(
-   (c: AssistantContentPart): c is ToolCall => c.type === "toolCall",
-  );
-  const hasVisibleText = msg.content.some(
-   (c: AssistantContentPart) => c.type === "text" && c.text.trim().length > 0,
-  );
-  const onlyInternalTools = toolCalls.length > 0 &&
-   toolCalls.every((tc: ToolCall) => ACM_INTERNAL_TOOLS.has(tc.name));
-  if (onlyInternalTools && !hasVisibleText) return "internal_tool_only_assistant";
-  if (!hasVisibleText && toolCalls.length === 0) return "empty_assistant";
- } else if (msg.role === "assistant" && typeof msg.content === "string" && msg.content.trim().length === 0) {
-  return "empty_assistant";
- } else if (msg.role === "assistant" && (msg.content === null || msg.content === undefined)) {
-  return "empty_assistant";
+ if (msg.role === "assistant") {
+  if (Array.isArray(msg.content)) {
+   const toolCalls = msg.content.filter(
+    (c: AssistantContentPart): c is ToolCall => c.type === "toolCall",
+   );
+   const hasVisibleText = msg.content.some(
+    (c: AssistantContentPart) => c.type === "text" && c.text.trim().length > 0,
+   );
+   const onlyInternalTools = toolCalls.length > 0 &&
+    toolCalls.every((tc: ToolCall) => ACM_INTERNAL_TOOLS.has(tc.name));
+   if (onlyInternalTools && !hasVisibleText) return "internal_tool_only_assistant";
+   if (!hasVisibleText && toolCalls.length === 0) return "empty_assistant";
+  } else if (msg.content === null || msg.content === undefined) {
+   return "empty_assistant";
+  } else if (typeof msg.content === "string") {
+   if (msg.content.trim().length === 0) return "empty_assistant";
+  } else if (extractTextFromContent(msg.content).length === 0) {
+   return "empty_assistant";
+  }
  } else if (msg.role === "user") {
   const isEmpty = msg.content === null || msg.content === undefined ||
    (typeof msg.content === "string" && msg.content.trim().length === 0) ||
