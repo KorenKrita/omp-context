@@ -124,10 +124,25 @@ interface TravelSummaryDetails {
  backupCurrentHeadAs?: string | null;
 }
 
+function isTravelSummaryDetails(details: unknown): details is TravelSummaryDetails {
+ if (typeof details !== "object" || details === null) return false;
+ const d = details as Record<string, unknown>;
+ if (d.originId !== undefined && typeof d.originId !== "string") return false;
+ if (d.originLabel !== undefined && typeof d.originLabel !== "string") return false;
+ if (d.target !== undefined && typeof d.target !== "string") return false;
+ if (d.targetId !== undefined && typeof d.targetId !== "string") return false;
+ if (
+  d.backupCurrentHeadAs !== undefined &&
+  d.backupCurrentHeadAs !== null &&
+  typeof d.backupCurrentHeadAs !== "string"
+ ) return false;
+ return true;
+}
+
 function getBranchSummaryMetaParts(entry: SessionEntry): string[] {
  if (entry.type !== "branch_summary") return [];
  const parts = [`branchPoint: ${entry.fromId}`];
- const details = entry.details as TravelSummaryDetails | undefined;
+ const details = isTravelSummaryDetails(entry.details) ? entry.details : undefined;
  if (details?.originId) {
   const origin = details.originLabel
    ? `${details.originLabel} (${details.originId})`
@@ -144,8 +159,8 @@ function getBranchSummaryMetaParts(entry: SessionEntry): string[] {
 /** Set a label on a session entry. pi.setLabel() only sets the extension
  *  display name, not entry labels. ReadonlySessionManager is the full
  *  SessionManager at runtime — guarded cast to access appendLabelChange.
- *  Passing label=undefined relies on appendLabelChange treating it as label
- *  removal — verified against OMP SessionManager source. */
+ *  Passing label=undefined appends a journal entry that clears ALL aliases on
+ *  the target node — only safe when that entry had no prior labels. */
 function setEntryLabel(sm: ReadonlySessionManager, entryId: string, label: string | undefined): void {
  const full = sm as unknown as {
   appendLabelChange?: (id: string, label: string | undefined) => string;
@@ -172,7 +187,11 @@ function branchWithSummary(
  if (typeof full.branchWithSummary !== "function") {
   throw new Error("SessionManager does not support branchWithSummary");
  }
- return full.branchWithSummary(branchFromId, summary, details, true);
+ const result = full.branchWithSummary(branchFromId, summary, details, true);
+ if (typeof result !== "string" || result.length === 0) {
+  throw new Error(`branchWithSummary returned invalid entry id: ${typeof result}`);
+ }
+ return result;
 }
 
 // ── Content extraction for timeline ───────────────────────────
@@ -985,6 +1004,7 @@ export default function(pi: ExtensionAPI): void {
    let backupEntryId: string | undefined;
    let backupResolvedFromHead: string | undefined;
    let backupLabelWrittenThisCall = false;
+   let backupHadNoPriorLabels = false;
    if (params.backupCurrentHeadAs) {
     const headResolve = findLastMeaningfulEntry(branch, sm, signal);
     backupEntryId = headResolve.entryId ?? undefined;
@@ -1011,6 +1031,7 @@ export default function(pi: ExtensionAPI): void {
     }
     const backupPriorLabels = getEntryLabels(labelMaps, backupEntryId);
     if (!backupPriorLabels.includes(params.backupCurrentHeadAs)) {
+     backupHadNoPriorLabels = backupPriorLabels.length === 0;
      try {
       setEntryLabel(sm, backupEntryId, params.backupCurrentHeadAs);
       backupLabelWrittenThisCall = true;
@@ -1037,17 +1058,24 @@ export default function(pi: ExtensionAPI): void {
     const errText = e instanceof Error ? e.message : String(e);
     let backupRolledBack = false;
     let backupRollbackFailed = false;
+    let backupRollbackSkipped = false;
     if (backupLabelWrittenThisCall && backupEntryId) {
-     try {
-      setEntryLabel(sm, backupEntryId, undefined);
-      backupRolledBack = true;
-     } catch {
-      backupRollbackFailed = true;
+     if (backupHadNoPriorLabels) {
+      try {
+       setEntryLabel(sm, backupEntryId, undefined);
+       backupRolledBack = true;
+      } catch {
+       backupRollbackFailed = true;
+      }
+     } else {
+      backupRollbackSkipped = true;
      }
     }
     let backupNote = "";
     if (params.backupCurrentHeadAs) {
-     if (backupRollbackFailed) {
+     if (backupRollbackSkipped) {
+      backupNote = ` Backup label '${params.backupCurrentHeadAs}' remains on the tree (rollback skipped — entry had other checkpoint aliases).`;
+     } else if (backupRollbackFailed) {
       backupNote = ` Backup label '${params.backupCurrentHeadAs}' was written but could not be rolled back.`;
      } else if (backupRolledBack) {
       backupNote = ` Backup label '${params.backupCurrentHeadAs}' was rolled back.`;
@@ -1064,6 +1092,7 @@ export default function(pi: ExtensionAPI): void {
       backupLabelWritten: backupLabelWrittenThisCall,
       backupRolledBack,
       backupRollbackFailed,
+      backupRollbackSkipped,
      },
     };
    }
@@ -1128,21 +1157,9 @@ export default function(pi: ExtensionAPI): void {
   if (!contextRefresh.isPending(sm)) return;
 
   try {
-   const full = sm as unknown as { buildSessionContext?: () => { messages: unknown[] } };
-   if (typeof full.buildSessionContext !== "function") {
-    const message = "buildSessionContext unavailable";
-    const willRetry = contextRefresh.recordFailedAttempt(sm, message);
-    ctx.ui.notify(
-     willRetry
-      ? `Context refresh after travel failed (${contextRefresh.getAttemptCount(sm)}/${ContextRefreshRegistry.MAX_ATTEMPTS}): ${message}. Will retry on next LLM turn.`
-      : `Context refresh after travel failed: ${message}. Reload the session to sync messages.`,
-     "warning",
-    );
-    return;
-   }
-   const sessionContext = full.buildSessionContext();
+   const messages = getBuildSessionMessages(sm);
    contextRefresh.markSuccess(sm);
-   return { messages: sessionContext.messages as typeof event.messages };
+   return { messages: messages as typeof event.messages };
   } catch (e) {
    const message = e instanceof Error ? e.message : String(e);
    const willRetry = contextRefresh.recordFailedAttempt(sm, message);
@@ -1152,6 +1169,7 @@ export default function(pi: ExtensionAPI): void {
      : `Context refresh after travel failed: ${message}. Reload the session to sync messages.`,
     "warning",
    );
+   return { messages: event.messages };
   }
  });
 

@@ -8,6 +8,13 @@ import type { TextContent, ToolCall, ThinkingContent, RedactedThinkingContent } 
 
 export const ACM_INTERNAL_TOOLS = new Set(["acm_checkpoint", "acm_timeline", "acm_travel"]);
 
+/** Minimum absolute token delta treated as a meaningful travel effect. */
+const TRAVEL_EFFECT_MIN_TOKEN_DELTA = 500;
+/** Relative fraction of before.tokens used as travel effect threshold floor. */
+const TRAVEL_EFFECT_RELATIVE_THRESHOLD = 0.02;
+/** Fixed token overhead for a branch_summary entry in travel usage estimates. */
+const BRANCH_SUMMARY_ENTRY_OVERHEAD_TOKENS = 100;
+
 type AssistantContentPart = TextContent | ThinkingContent | RedactedThinkingContent | ToolCall;
 
 export type TravelEffect = "shrunk" | "restored" | "unchanged" | "unknown";
@@ -109,9 +116,6 @@ export class ContextRefreshRegistry {
  }
 }
 
-/** @deprecated Use ContextRefreshRegistry */
-export const PendingContextRefreshRegistry = ContextRefreshRegistry;
-
 export interface SkippedEntry {
  id: string;
  reason: MeaningfulSkipReason;
@@ -176,7 +180,7 @@ export function buildLabelMaps(entries: SessionEntry[]): LabelMaps {
  for (const entry of entries) {
   if (entry.type !== "label") continue;
   const { targetId, label } = entry;
-  if (label == null) {
+  if (label === null || label === undefined) {
    entryToLabels.delete(targetId);
    for (const [name, id] of [...labelToEntryId.entries()]) {
     if (id === targetId) labelToEntryId.delete(name);
@@ -264,7 +268,10 @@ export function formatContextUsage(usage: UsageLike | undefined, includeTokens =
 export function classifyTravelEffect(before: UsageLike | undefined, after: UsageLike | undefined): TravelEffect {
  if (!before || !after) return "unknown";
  const delta = after.tokens - before.tokens;
- const threshold = Math.max(500, before.tokens * 0.02);
+ const threshold = Math.max(
+  TRAVEL_EFFECT_MIN_TOKEN_DELTA,
+  before.tokens * TRAVEL_EFFECT_RELATIVE_THRESHOLD,
+ );
  if (Math.abs(delta) <= threshold) return "unchanged";
  return delta < 0 ? "shrunk" : "restored";
 }
@@ -318,12 +325,11 @@ export function estimateUsageAtTravelTarget(
  summaryText: string,
 ): UsageLike | undefined {
  const summaryTokens = summaryText.length > 0 ? countTokens(summaryText) : 0;
- const branchSummaryOverhead = 100;
  return estimateUsageAfterMessageChange(
   usageBefore,
   currentMessages,
   targetMessages,
-  summaryTokens + branchSummaryOverhead,
+  summaryTokens + BRANCH_SUMMARY_ENTRY_OVERHEAD_TOKENS,
  );
 }
 

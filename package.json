@@ -15,6 +15,9 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
   "devDependencies": {
     "@oh-my-pi/pi-agent-core": "^16.1.22",
     "@oh-my-pi/pi-ai": "^16.1.22",
