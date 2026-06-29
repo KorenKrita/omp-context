@@ -25,7 +25,7 @@ Use when the thread is already stale or messy and you want to travel it now, eve
 
 1. Inspect timeline if anchor choice is unclear.
 2. Before switching away or traveling a noisy path, preserve or choose the anchor that will give the resumed/new task a clean working set.
-3. If needed, create a backup checkpoint for the current noisy branch.
+3. If needed, set `backupCurrentHeadAs` on the current noisy branch before traveling away.
 4. If the user has just started a new task after a completed noisy task, travel before doing the new task so the completed task becomes a travel summary rather than active baggage.
 5. If the user asks a concrete side question while noisy mainline work is active, pause or summarize the active work, travel if the raw mainline history is no longer needed for the side question, answer the side question, and preserve how to resume the paused work.
 6. Handle the side task or cleanup move.

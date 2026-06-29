@@ -70,12 +70,14 @@ acm_travel({
 acm_checkpoint({ name: "oauth-signed-state-start" });
 
 // Later: return to the cookie-based approach to compare details ("前往未来")
-acm_timeline({ full_tree: true, search: "oauth-cookie" });  // find backup node ID
+acm_timeline({ search: "oauth-cookie" });  // find backup node ID
 acm_travel({
   target: "oauth-cookie-approach-history",
   summary: "Current task: compare cookie vs signed-state approaches. State: signed-state implementation is in progress. Need to revisit cookie approach raw details to verify a specific assumption about callback handling. Next step: inspect the cookie branch's tool results, then travel back to oauth-signed-state-start to continue.",
   backupCurrentHeadAs: "signed-state-checkpoint"
 });
+
+```
 
 ## Common mistakes
 

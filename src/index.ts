@@ -1,6 +1,3 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
-import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction/compaction";
-import { countTokens } from "@oh-my-pi/pi-agent-core/tokenizer";
 import type {
  ExtensionAPI,
  ExtensionContext,
@@ -10,41 +7,37 @@ import type {
  SessionEntry,
  SessionTreeNode,
 } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import type { TextContent, ImageContent, ToolCall, TSchema, ThinkingContent, RedactedThinkingContent } from "@oh-my-pi/pi-ai/types";
+import {
+ ACM_INTERNAL_TOOLS as INTERNAL_TOOLS,
+ buildLabelMaps,
+ classifyStructuralMessageEffect,
+ classifyTravelEffect,
+ compareEntriesByTimestamp,
+ entryMatchesLabelSearch,
+ estimateUsageAfterMessageChange,
+ estimateUsageAtTravelTarget,
+ findCheckpointLabelOwner,
+ findInTree,
+ findLastMeaningfulEntry as findLastMeaningfulEntryCore,
+ formatContextUsage,
+ formatEntryLabels,
+ getBuildSessionMessages,
+ getEntryLabels,
+ getMeaningfulSkipReason,
+ PendingContextRefreshRegistry,
+ resolveTargetId,
+ resolveTimelineMode,
+ type MeaningfulResolveResult,
+ type LabelMaps,
+} from "./lib.js";
 
 /** Content part types that can appear in assistant message arrays. */
 type AssistantContentPart = TextContent | ThinkingContent | RedactedThinkingContent | ToolCall;
 // ── Module state ──────────────────────────────────────────────
 
-/** Persistent flag: when set, every context event rebuilds messages via buildSessionContext(). Cleared on session_shutdown. */
-let pendingContextRefresh: string | null = null;
-
-
-/** Legacy ghost session tracking (kept for backward compat with older session logs). */
-const pendingGhostSessions = new Set<string>();
-
-const INTERNAL_TOOLS = new Set(["acm_checkpoint", "acm_timeline", "acm_travel"]);
-
-type MeaningfulSkipReason =
- | "non_message"
- | "tool_result"
- | "internal_tool_only_assistant"
- | "empty_assistant"
- | "empty_user";
-
-interface SkippedEntry {
- id: string;
- reason: MeaningfulSkipReason;
- role?: string;
-}
-
-interface MeaningfulResolveResult {
- entryId: string | null;
- role?: string;
- snippet?: string;
- skipped: SkippedEntry[];
-}
+/** After travel, rebuild LLM messages once on the next context event (post-travel stale agent.messages). */
+const pendingContextRefresh = new PendingContextRefreshRegistry();
 
 function getMessageRoleLabel(entry: SessionEntry): string | undefined {
  if (entry.type !== "message") return undefined;
@@ -53,35 +46,9 @@ function getMessageRoleLabel(entry: SessionEntry): string | undefined {
  if (msg.role === "user") return "USER";
  if (msg.role === "toolResult") return `TOOL:${msg.toolName}`;
  if (msg.role === "bashExecution") return "BASH";
+ if (msg.role === "custom") return "CUSTOM";
+ if (msg.role === "system") return "SYSTEM";
  return msg.role.toUpperCase();
-}
-
-function getMeaningfulSkipReason(entry: SessionEntry): MeaningfulSkipReason | null {
- if (entry.type !== "message") return "non_message";
- const msg = entry.message;
- if (msg.role === "toolResult") return "tool_result";
- if (msg.role === "assistant" && Array.isArray(msg.content)) {
-  const toolCalls = msg.content.filter(
-   (c: AssistantContentPart): c is ToolCall => c.type === "toolCall",
-  );
-  const hasVisibleText = msg.content.some(
-   (c: AssistantContentPart) => c.type === "text" && c.text.trim().length > 0,
-  );
-  const onlyInternalTools = toolCalls.length > 0 &&
-   toolCalls.every((tc: ToolCall) => INTERNAL_TOOLS.has(tc.name));
-  if (onlyInternalTools && !hasVisibleText) return "internal_tool_only_assistant";
-  if (!hasVisibleText && toolCalls.length === 0) return "empty_assistant";
- } else if (msg.role === "assistant" && typeof msg.content === "string" && msg.content.trim().length === 0) {
-  return "empty_assistant";
- } else if (msg.role === "assistant" && (msg.content === null || msg.content === undefined)) {
-  return "empty_assistant";
- } else if (msg.role === "user") {
-  const isEmpty = msg.content === null || msg.content === undefined ||
-   (typeof msg.content === "string" && msg.content.trim().length === 0) ||
-   (Array.isArray(msg.content) && msg.content.length === 0);
-  if (isEmpty) return "empty_user";
- }
- return null;
 }
 
 function isCheckpointableMessage(entry: SessionEntry): boolean {
@@ -96,13 +63,17 @@ function describeEntrySnippet(entry: SessionEntry, sm: ReadonlySessionManager, m
  return content.length > maxLen ? `${content.slice(0, maxLen)}...` : content;
 }
 
-function describeSkipReason(reason: MeaningfulSkipReason, role?: string): string {
+function describeSkipReason(reason: ReturnType<typeof getMeaningfulSkipReason>, role?: string): string {
  switch (reason) {
   case "non_message": return "non-message node";
   case "tool_result": return role ?? "tool result";
+  case "bash_execution": return "bash execution";
+  case "custom_message": return "custom message";
+  case "system_message": return "system message";
   case "internal_tool_only_assistant": return "internal-tool-only AI turn";
   case "empty_assistant": return "empty AI turn";
   case "empty_user": return "empty user turn";
+  default: return "skipped";
  }
 }
 
@@ -111,23 +82,13 @@ function findLastMeaningfulEntry(
  sm: ReadonlySessionManager,
  signal?: AbortSignal,
 ): MeaningfulResolveResult {
- const skipped: SkippedEntry[] = [];
- for (let i = branch.length - 1; i >= 0; i--) {
-  if (signal?.aborted) break;
-  const entry = branch[i];
-  const skipReason = getMeaningfulSkipReason(entry);
-  if (skipReason) {
-   skipped.push({ id: entry.id, reason: skipReason, role: getMessageRoleLabel(entry) });
-   continue;
-  }
-  return {
-   entryId: entry.id,
-   role: getMessageRoleLabel(entry),
-   snippet: describeEntrySnippet(entry, sm),
-   skipped,
-  };
- }
- return { entryId: null, skipped };
+ return findLastMeaningfulEntryCore(
+  branch,
+  getMeaningfulSkipReason,
+  getMessageRoleLabel,
+  (entry) => describeEntrySnippet(entry, sm),
+  signal,
+ );
 }
 
 function formatMeaningfulResolveSummary(result: MeaningfulResolveResult): string {
@@ -150,209 +111,6 @@ interface TravelSummaryDetails {
  target: string;
  targetId: string;
  backupCurrentHeadAs?: string | null;
-}
-
-type TravelEffect = "shrunk" | "restored" | "unchanged" | "unknown";
-
-// ── Tree traversal ────────────────────────────────────────────
-
-/** Iterative DFS — avoids stack overflow on deep session trees. */
-function findInTree(
- nodes: SessionTreeNode[],
- predicate: (n: SessionTreeNode) => boolean,
-): SessionTreeNode | undefined {
- const stack: SessionTreeNode[] = [...nodes];
- while (stack.length > 0) {
-  const n = stack.pop()!;
-  if (predicate(n)) return n;
-  if (n.children?.length) { for (const child of n.children) stack.push(child); }
- }
- return undefined;
-}
-
-
-interface LabelMaps {
- /** Latest owner per label name (for travel resolution). */
- labelToEntryId: Map<string, string>;
- /** All aliases per entry, in chronological order. */
- entryToLabels: Map<string, string[]>;
-}
-
-/** OMP getLabel() keeps only the latest label per entry; scan all label journal entries for aliases. */
-function buildLabelMaps(entries: SessionEntry[]): LabelMaps {
- const labelToEntryId = new Map<string, string>();
- const entryToLabels = new Map<string, string[]>();
-
- for (const entry of entries) {
-  if (entry.type !== "label") continue;
-  const { targetId, label } = entry;
-  if (!label) {
-   entryToLabels.delete(targetId);
-   for (const [name, id] of [...labelToEntryId.entries()]) {
-    if (id === targetId) labelToEntryId.delete(name);
-   }
-   continue;
-  }
-  const previousOwner = labelToEntryId.get(label);
-  if (previousOwner && previousOwner !== targetId) {
-   const prevLabels = entryToLabels.get(previousOwner);
-   if (prevLabels) {
-    const filtered = prevLabels.filter((l) => l !== label);
-    if (filtered.length === 0) entryToLabels.delete(previousOwner);
-    else entryToLabels.set(previousOwner, filtered);
-   }
-  }
-  labelToEntryId.set(label, targetId);
-  const existing = entryToLabels.get(targetId) ?? [];
-  if (!existing.includes(label)) {
-   entryToLabels.set(targetId, [...existing, label]);
-  }
- }
- return { labelToEntryId, entryToLabels };
-}
-
-function getEntryLabels(labelMaps: LabelMaps, entryId: string): string[] {
- return labelMaps.entryToLabels.get(entryId) ?? [];
-}
-
-function formatEntryLabels(labelMaps: LabelMaps, entryId: string): string | undefined {
- const labels = getEntryLabels(labelMaps, entryId);
- return labels.length > 0 ? labels.join(", ") : undefined;
-}
-
-function entryMatchesLabelSearch(labelMaps: LabelMaps, entryId: string, searchTerm: string): boolean {
- return getEntryLabels(labelMaps, entryId).some((label) => label.toLowerCase().includes(searchTerm));
-}
-
-function findCheckpointLabelOwners(
- labelMaps: LabelMaps,
- label: string,
- backboneIds: Set<string>,
-): { entryId: string; onActivePath: boolean }[] {
- const entryId = labelMaps.labelToEntryId.get(label);
- if (!entryId) return [];
- return [{ entryId, onActivePath: backboneIds.has(entryId) }];
-}
-
-type ResolveTargetResult =
- | { ok: true; id: string; fromOffPath: boolean }
- | { ok: false; error: "ambiguous_label"; label: string; matches: { entryId: string; onActivePath: boolean }[] };
-
-/** Resolve "root" / label / raw hex ID to an entry ID. */
-function resolveTargetId(
- sm: ReadonlySessionManager,
- tree: SessionTreeNode[],
- target: string,
- branchIds?: Set<string>,
- labelMaps?: LabelMaps,
-): ResolveTargetResult {
- if (target.toLowerCase() === "root") {
-  return { ok: true, id: tree.length > 0 ? tree[0].entry.id : target, fromOffPath: false };
- }
- const ids = branchIds ?? new Set(sm.getBranch().map((e: SessionEntry) => e.id));
- const maps = labelMaps ?? buildLabelMaps(sm.getEntries());
-
- const owners = findCheckpointLabelOwners(maps, target, ids);
- if (owners.length > 1) {
-  return { ok: false, error: "ambiguous_label", label: target, matches: owners };
- }
- if (owners.length === 1) {
-  return { ok: true, id: owners[0].entryId, fromOffPath: !owners[0].onActivePath };
- }
-
- const isOnPath = ids.has(target);
- return { ok: true, id: target, fromOffPath: !isOnPath };
-}
-
-
-function formatTokens(tokens: number): string {
- if (!Number.isFinite(tokens) || tokens < 0) return "N/A";
- // 999_950 so that values rounding to 1000.0K display as 1.0M instead
- if (tokens >= 999_950) return `${(tokens / 1_000_000).toFixed(1)}M`;
- if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`;
- return String(tokens);
-}
-
-interface UsageLike {
- tokens: number;
- contextWindow: number;
- percent: number;
-}
-
-function formatContextUsage(usage: UsageLike | undefined, includeTokens = false): string {
- if (!usage) return "Unknown";
- const pct = Number.isFinite(usage.percent) ? `${usage.percent.toFixed(1)}%` : "N/A";
- if (!includeTokens) return pct;
- return `${pct} (${formatTokens(usage.tokens)}/${formatTokens(usage.contextWindow)})`;
-}
-
-function classifyTravelEffect(before: UsageLike | undefined, after: UsageLike | undefined): TravelEffect {
- if (!before || !after) return "unknown";
- const delta = after.tokens - before.tokens;
- const threshold = Math.max(500, before.tokens * 0.02);
- if (Math.abs(delta) <= threshold) return "unchanged";
- return delta < 0 ? "shrunk" : "restored";
-}
-
-function classifyStructuralMessageEffect(before: number | undefined, after: number | undefined): TravelEffect {
- if (before === undefined || after === undefined) return "unknown";
- const delta = after - before;
- if (Math.abs(delta) <= 1) return "unchanged";
- return delta < 0 ? "shrunk" : "restored";
-}
-
-/** Walk session tree at an optional leaf and return resolved LLM messages. */
-function getBuildSessionMessages(sm: ReadonlySessionManager, leafId?: string | null): AgentMessage[] | undefined {
- const entries = sm.getEntries();
- if (entries.length === 0) return [];
- const byId = new Map(entries.map((e) => [e.id, e]));
- const effectiveLeaf = leafId === undefined ? sm.getLeafId() : leafId;
- return buildSessionContext(entries, effectiveLeaf, byId).messages as AgentMessage[];
-}
-
-function sumMessageTokens(messages: AgentMessage[]): number {
- return messages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
-}
-
-/** Estimate total context usage after message set changes, holding system/tools overhead fixed. */
-function estimateUsageAfterMessageChange(
- usageBefore: UsageLike | undefined,
- messagesBefore: AgentMessage[],
- messagesAfter: AgentMessage[],
- extraTokens = 0,
-): UsageLike | undefined {
- if (!usageBefore || usageBefore.contextWindow <= 0) return undefined;
- const beforeMsgTokens = sumMessageTokens(messagesBefore);
- const afterMsgTokens = sumMessageTokens(messagesAfter);
- const fixedOverhead = Math.max(0, usageBefore.tokens - beforeMsgTokens);
- const estimatedTokens = fixedOverhead + afterMsgTokens + extraTokens;
- return {
-  tokens: estimatedTokens,
-  contextWindow: usageBefore.contextWindow,
-  percent: (estimatedTokens / usageBefore.contextWindow) * 100,
- };
-}
-
-/** Pre-travel preview: target-path messages + handoff summary (branch_summary wrapper overhead). */
-function estimateUsageAtTravelTarget(
- usageBefore: UsageLike | undefined,
- currentMessages: AgentMessage[],
- targetMessages: AgentMessage[],
- summaryText: string,
-): UsageLike | undefined {
- const summaryTokens = summaryText.length > 0 ? countTokens(summaryText) : 0;
- const branchSummaryOverhead = 100;
- return estimateUsageAfterMessageChange(
-  usageBefore,
-  currentMessages,
-  targetMessages,
-  summaryTokens + branchSummaryOverhead,
- );
-}
-
-function countContextMessages(sm: ReadonlySessionManager): number | undefined {
- const messages = getBuildSessionMessages(sm);
- return messages?.length;
 }
 
 function getBranchSummaryMetaParts(entry: SessionEntry): string[] {
@@ -500,6 +258,8 @@ function getDisplayRole(entry: SessionEntry): string {
   if (m.role === "assistant") return "AI";
   if (m.role === "user") return "USER";
   if (m.role === "bashExecution") return "BASH";
+  if (m.role === "custom") return "CUSTOM";
+  if (m.role === "system") return "SYSTEM";
   return "TOOL";
  }
  if (entry.type === "branch_summary" || entry.type === "compaction") return "SUMMARY";
@@ -706,6 +466,7 @@ function searchFullSessionTree(
    matched.push({ node: n, checkpointLabels, content });
   }
  }
+ matched.sort((a, b) => compareEntriesByTimestamp(a.node.entry, b.node.entry));
  return {
   matches: matched,
   visited,
@@ -783,15 +544,6 @@ export default function(pi: ExtensionAPI): void {
    let targetEntry: SessionEntry | undefined;
    if (params.target) {
     const resolved = resolveTargetId(sm, tree, params.target, branchIds, labelMaps);
-    if (!resolved.ok) {
-     const matchList = resolved.matches
-      .map((m) => `${m.entryId}${m.onActivePath ? " (on-path)" : " (off-path)"}`)
-      .join(", ");
-     return {
-      content: [{ type: "text" as const, text: `Error: Checkpoint name '${resolved.label}' is ambiguous (${matchList}). Use a node ID from acm_timeline({ list_checkpoints: true }).` }],
-      details: { error: resolved.error, label: resolved.label, matches: resolved.matches },
-     };
-    }
     id = resolved.id;
     targetEntry = findEntryInTree(tree, id);
     if (!targetEntry) {
@@ -899,7 +651,7 @@ export default function(pi: ExtensionAPI): void {
    "List checkpoint labels across the full tree with node IDs and on-path/off-path tags. Display is capped at 50 — use search to narrow.",
   ),
   search: zod.string().optional().describe(
-   "Search the full session tree (active + off-path) for matching checkpoint labels, node IDs, or content. When set, overrides default active-path-only view unless list_checkpoints is also true.",
+   "Search the full session tree (active + off-path) for matching checkpoint labels, node IDs, or content. When set without list_checkpoints, returns matching nodes. With list_checkpoints, filters the checkpoint catalog. Mode precedence when multiple params are set: list_checkpoints > search > full_tree > default active path.",
   ),
  });
 
@@ -922,8 +674,9 @@ export default function(pi: ExtensionAPI): void {
    const currentLeafId = sm.getLeafId();
    const verbose = params.verbose ?? false;
    const limit = params.limit ?? 50;
-   const useFullTree = params.full_tree ?? false;
-   const listCheckpoints = params.list_checkpoints ?? false;
+   const timelineMode = resolveTimelineMode(params);
+   const useFullTree = timelineMode === "full_tree";
+   const listCheckpoints = timelineMode === "list_checkpoints";
    const searchTerm = params.search?.toLowerCase().trim() ?? "";
 
    const lines: string[] = [];
@@ -938,7 +691,7 @@ export default function(pi: ExtensionAPI): void {
     const listings = collectCheckpointListings(labelMaps, backboneIds, currentLeafId, searchTerm);
     const listLimit = Math.min(limit > 0 ? limit : 50, 50);
     const usage = ctx.getContextUsage();
-    const currentMessages = getBuildSessionMessages(sm) ?? [];
+    const currentMessages = getBuildSessionMessages(sm);
     const currentUsageText = formatContextUsage(usage, true);
     lines.push(
      `Checkpoints (${listings.length} total${searchTerm ? ` matching '${params.search}'` : ""}, showing up to ${listLimit}; cap 50). Current: ${currentMessages.length} msgs, ${currentUsageText}:`,
@@ -946,7 +699,7 @@ export default function(pi: ExtensionAPI): void {
     for (const cp of listings.slice(0, listLimit)) {
      const pathTag = cp.onActivePath ? "on-path" : "off-path";
      const headTag = cp.isHead ? ", *HEAD*" : "";
-     const targetMessages = getBuildSessionMessages(sm, cp.entryId) ?? [];
+     const targetMessages = getBuildSessionMessages(sm, cp.entryId);
      const estimated = estimateUsageAfterMessageChange(usage, currentMessages, targetMessages);
      const estPart = estimated
       ? `~${targetMessages.length} msgs, ~${formatContextUsage(estimated, true)} est. (target path only; travel summary not included)`
@@ -1090,8 +843,11 @@ export default function(pi: ExtensionAPI): void {
      offPathSummaries: offPathForks,
      fullTree: useFullTree,
      listCheckpoints,
+     timelineMode,
+     search: searchTerm || null,
+     verbose,
      treeTruncated,
-     visibleEntries: lines.length,
+     outputLines: lines.length,
     },
    };
   },
@@ -1130,16 +886,13 @@ export default function(pi: ExtensionAPI): void {
    const labelMaps = buildLabelMaps(sm.getEntries());
    const branchIds: Set<string> = new Set(branch.map((e: SessionEntry) => e.id));
    const resolved = resolveTargetId(sm, tree, params.target, branchIds, labelMaps);
-   if (!resolved.ok) {
-    const matchList = resolved.matches
-     .map((m) => `${m.entryId}${m.onActivePath ? " (on-path)" : " (off-path)"}`)
-     .join(", ");
+   const tid = resolved.id;
+   if (params.target.toLowerCase() === "root" && tree.length === 0) {
     return {
-     content: [{ type: "text" as const, text: `Error: Travel target '${resolved.label}' is ambiguous (${matchList}). Use a node ID from acm_timeline({ list_checkpoints: true }).` }],
-     details: { error: resolved.error, label: resolved.label, matches: resolved.matches },
+     content: [{ type: "text" as const, text: "Error: Cannot travel to root — session tree is empty." }],
+     details: { error: "empty_session", requestedTarget: params.target },
     };
    }
-   const tid = resolved.id;
    const targetExists = findInTree(tree, (n) => n.entry.id === tid) !== undefined;
    if (!targetExists) {
     const hint = " It may be a misspelled checkpoint name — use acm_timeline with full_tree or search to see available labels and node IDs.";
@@ -1175,8 +928,8 @@ export default function(pi: ExtensionAPI): void {
    const originLabel = formatEntryLabels(labelMaps, originId);
    const usageBefore = ctx.getContextUsage();
    const usageBeforeText = formatContextUsage(usageBefore, true);
-   const currentMessages = getBuildSessionMessages(sm) ?? [];
-   const targetMessages = getBuildSessionMessages(sm, tid) ?? [];
+   const currentMessages = getBuildSessionMessages(sm);
+   const targetMessages = getBuildSessionMessages(sm, tid);
    const estimatedUsagePreview = estimateUsageAtTravelTarget(
     usageBefore,
     currentMessages,
@@ -1204,13 +957,12 @@ export default function(pi: ExtensionAPI): void {
       "info",
      );
     }
-    const backupOwners = findCheckpointLabelOwners(labelMaps, params.backupCurrentHeadAs, branchIds);
-    const conflicting = backupOwners.filter((o) => o.entryId !== backupEntryId);
-    if (conflicting.length > 0) {
-     const existing = conflicting.map((o) => `${o.entryId}${o.onActivePath ? " (on-path)" : " (off-path)"}`).join(", ");
+    const backupOwner = findCheckpointLabelOwner(labelMaps, params.backupCurrentHeadAs, branchIds);
+    if (backupOwner && backupOwner.entryId !== backupEntryId) {
+     const existing = `${backupOwner.entryId}${backupOwner.onActivePath ? " (on-path)" : " (off-path)"}`;
      return {
       content: [{ type: "text" as const, text: `Error: backupCurrentHeadAs name '${params.backupCurrentHeadAs}' already exists at ${existing}. Use a different name.` }],
-      details: { error: "duplicate_backup_name", name: params.backupCurrentHeadAs, owners: conflicting },
+      details: { error: "duplicate_backup_name", name: params.backupCurrentHeadAs, owner: backupOwner },
      };
     }
     const backupPriorLabels = getEntryLabels(labelMaps, backupEntryId);
@@ -1233,11 +985,9 @@ export default function(pi: ExtensionAPI): void {
     targetId: tid,
     backupCurrentHeadAs: params.backupCurrentHeadAs ?? null,
    };
-   const enrichedMessage = `${params.summary}`;
-
    let summaryEntryId: string | undefined;
    try {
-    summaryEntryId = branchWithSummary(sm, tid, enrichedMessage, travelDetails);
+    summaryEntryId = branchWithSummary(sm, tid, params.summary, travelDetails);
    } catch (e) {
     return {
      content: [{ type: "text" as const, text: `Error: branchWithSummary failed: ${e instanceof Error ? e.message : String(e)}` }],
@@ -1245,9 +995,9 @@ export default function(pi: ExtensionAPI): void {
     };
    }
 
-   pendingContextRefresh = enrichedMessage;
+   pendingContextRefresh.mark(sm);
 
-   const afterMessages = getBuildSessionMessages(sm) ?? [];
+   const afterMessages = getBuildSessionMessages(sm);
    const messagesAfter = afterMessages.length;
    const estimatedUsageAfter = estimateUsageAfterMessageChange(usageBefore, currentMessages, afterMessages);
    const estimatedUsageAfterText = formatContextUsage(estimatedUsageAfter, true);
@@ -1258,15 +1008,13 @@ export default function(pi: ExtensionAPI): void {
       ? `${params.backupCurrentHeadAs}@${backupEntryId} (resolved from HEAD ${backupResolvedFromHead})`
       : `${params.backupCurrentHeadAs}@${backupEntryId}`
     : "none";
-   const messageDelta = messagesBefore !== undefined && messagesAfter !== undefined
-    ? `${messagesBefore} → ${messagesAfter} (${structuralEffect})`
-    : "unknown";
+   const messageDelta = `${messagesBefore} → ${messagesAfter} (${structuralEffect})`;
 
    return {
     content: [{
      type: "text" as const,
      text: [
-      `Travel complete. target=${params.target} (${tid}); backupCurrentHeadAs=${backupText}; context ${usageBeforeText} → ${estimatedUsageAfterText} est. (estimatedEffect=${estimatedEffect}); sessionMessages=${messageDelta}; summaryEntry=${summaryEntryId}.`,
+      `Travel complete. target=${params.target} (${tid}); backupCurrentHeadAs=${backupText}; context ${usageBeforeText} → ${estimatedUsageAfterText} est. (estimatedEffect=${estimatedEffect}, structuralEffect=${structuralEffect}); sessionMessages=${messageDelta}; summaryEntry=${summaryEntryId}.`,
       estimatedUsagePreview
        ? `Pre-travel preview was ${estimatedPreviewText} est. — compare with post-travel estimate above.`
        : null,
@@ -1291,38 +1039,52 @@ export default function(pi: ExtensionAPI): void {
      structuralMessagesBefore: messagesBefore,
      structuralMessagesAfter: messagesAfter,
      structuralEffect,
+     sessionMessages: messageDelta,
      messagesBefore,
      messagesAfter,
      summaryEntryId,
+     summaryEntry: summaryEntryId,
      fromOffPath: resolved.fromOffPath,
     },
    };
   },
  });
 
- // ── Event: context → persistent message rebuild after travel ────────────
- // After branchWithSummary, the tree is correct but agent memory is stale.
- // On EVERY LLM call while pendingContextRefresh is set, rebuild messages
- // from the current branch via buildSessionContext(). This includes both
- // the original context up to target + summary AND any new messages added
- // after travel (new conversation grows naturally on the branch).
- // Cleared on session_shutdown only.
+ // ── Event: context → one-shot message rebuild after travel ─────────────
+ // After branchWithSummary, agent.messages is stale until the next context event.
+ // Rebuild once from buildSessionContext(), then let normal session growth proceed.
  pi.on("context", (event, ctx: ExtensionContext) => {
-  if (!pendingContextRefresh) return;
+  const sm = ctx.sessionManager;
+  if (!pendingContextRefresh.has(sm)) return;
 
-  // Guarded runtime cast: ReadonlySessionManager is the full SessionManager at runtime.
-  const sm = ctx.sessionManager as unknown as
-   { buildSessionContext?: () => { messages: unknown[] } };
-  if (typeof sm.buildSessionContext !== "function") return;
-
-  const sessionContext = sm.buildSessionContext();
-  return { messages: sessionContext.messages as typeof event.messages };
+  try {
+   const full = sm as unknown as { buildSessionContext?: () => { messages: unknown[] } };
+   if (typeof full.buildSessionContext !== "function") {
+    ctx.ui.notify(
+     "Context refresh after travel failed: buildSessionContext unavailable. Reload the session to sync messages.",
+     "warning",
+    );
+    return;
+   }
+   const sessionContext = full.buildSessionContext();
+   return { messages: sessionContext.messages as typeof event.messages };
+  } catch (e) {
+   ctx.ui.notify(
+    `Context refresh after travel failed: ${e instanceof Error ? e.message : String(e)}. Reload the session to sync messages.`,
+    "warning",
+   );
+  } finally {
+   pendingContextRefresh.clear(sm);
+  }
  });
 
  // ── Session lifecycle: clear stale state ───────────────────
- pi.on("session_shutdown", () => {
-  pendingContextRefresh = null;
-  pendingGhostSessions.clear();
+ pi.on("session_start", (_event, ctx: ExtensionContext) => {
+  pendingContextRefresh.clear(ctx.sessionManager);
+ });
+
+ pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
+  pendingContextRefresh.clear(ctx.sessionManager);
  });
 
 }

@@ -20,8 +20,8 @@ omp-context 让 agent 像管理 git 分支一样管理上下文：
 | 工具 | 做什么 |
 |---|---|
 | `acm_checkpoint` | 打锚点。零成本——不改上下文、不分支、不摘要。多打 = 后续更多选择 |
-| `acm_timeline` | 看 active path 结构图 + token HUD。默认只显示当前路径；off-path 摘要以脚注标出。`search` 全树搜索（含 off-path）。`list_checkpoints` 列 checkpoint 清单（可 search 缩小，显示上限 50），`full_tree` 看整棵树 |
-| `acm_travel` | 穿越到任意锚点，留一份 handoff summary。上下文切换到目标节点 + summary；token 可能降（回到过去）也可能升（前往未来）。旧路径保留，随时再 travel |
+| `acm_timeline` | 看 active path 结构图 + token HUD。默认只显示当前路径；`verbose: true` 可显示 ACM 工具调用。off-path 摘要以脚注标出。`search` 全树搜索（含 off-path）。`list_checkpoints: true` 列 checkpoint 清单（可配合 `search` 缩小，显示上限 50），`full_tree: true` 看整棵树 |
+| `acm_travel` | 穿越到任意锚点，留一份 handoff summary。上下文切换到目标节点 + summary；token 可能降（回到过去）也可能升（前往未来）。旧路径保留，随时再 travel。返回 `estimatedUsageAfter`、`estimatedEffect`、`structuralEffect`、`sessionMessages`；官方 `usageAfter` 为 pending 直到下次 LLM context event |
 
 ## 时间旅行
 
@@ -30,14 +30,14 @@ omp-context 让 agent 像管理 git 分支一样管理上下文：
 - 完成嘈杂阶段后只留结论
 - 进入新阶段前整理调查过程
 
-副作用通常是 **context 变小**（目标在噪音产生之前）。
+副作用**可能**是 context 变小（目标在噪音产生之前），也可能不变或变大——以 travel 返回的 `estimatedEffect`、`structuralEffect` 和 `sessionMessages` 为准，再用 `acm_timeline` HUD 确认官方 %（`usageAfter` 在下次 LLM 调用前为 pending）。
 
 **前往未来** — travel 到 off-path 或更晚的锚点，恢复该节点之前的 raw history：
 - 通过 `backupCurrentHeadAs` 找回被离开的分支
 - 比较不同方案
 - 恢复 summary 里丢失的细节
 
-副作用通常是 **context 变大**（目标在大量 read/tool 结果之后）。
+副作用**可能**是 context 变大（目标在大量 read/tool 结果之后），也可能不变或变小——以 travel 返回的 `estimatedEffect`、`structuralEffect` 和 `sessionMessages` 为准。
 
 旧路径永远不删除——每次 travel 创建新分支，老分支完整保留在树里。
 

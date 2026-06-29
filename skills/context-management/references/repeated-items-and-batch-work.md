@@ -61,6 +61,14 @@ acm_travel({
 });
 ```
 
+## Common mistakes
+
+Avoid:
+- carrying every completed item's raw reasoning into the next item
+- traveling without a repeated-work anchor when the batch will continue
+- omitting the reusable method or item-specific takeaway from the travel summary
+- assuming the batch anchor is obvious without running `acm_timeline` after several items
+
 ## Warning signs
 
 Use stronger checkpoint/timeline/travel discipline when:

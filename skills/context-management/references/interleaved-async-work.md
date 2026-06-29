@@ -85,7 +85,7 @@ A travel to an old anchor or even `root` is appropriate when:
 - the next action does not require inspecting the interleaved raw discussion
 - you can name what remains active, what is parked, and what is done
 
-Use a backup checkpoint for safety when the interleaved raw path may still matter, but do not keep it active just because it is long.
+Use `backupCurrentHeadAs` for safety when the interleaved raw path may still matter, but do not keep it active just because it is long.
 
 Before a deep travel, ask:
 

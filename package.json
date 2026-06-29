@@ -7,10 +7,13 @@
   "files": [
     "src",
     "skills",
-    "README.md"
+    "README.md",
+    "AGENTS.md",
+    ".omp-plugin"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
   },
   "devDependencies": {
     "@oh-my-pi/pi-agent-core": "*",

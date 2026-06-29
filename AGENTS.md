@@ -24,7 +24,7 @@
 
 ### 扩展入口
 
-`src/index.ts` 默认导出 `function(pi: ExtensionAPI): void`，在加载时注册三个工具和两个事件 handler。
+`src/index.ts` 默认导出 `function(pi: ExtensionAPI): void`，在加载时注册三个工具和三个事件 handler（`context`、`session_start`、`session_shutdown`）。
 
 `package.json` 的 `omp` 字段是 OMP 发现入口：
 
@@ -37,7 +37,7 @@
 
 ### checkpoint 使用 appendLabelChange
 
-不要用 `pi.setLabel(id, name)` 给会话节点打 label。OMP 16.2.5 的类型声明看起来支持两个参数，但实际 `ConcreteExtensionAPI.setLabel(label: string)` 只修改扩展显示名，不会写 session label。
+不要用 `pi.setLabel(id, name)` 给会话节点打 label。OMP 16.1.x 的类型声明看起来支持两个参数，但实际 `ConcreteExtensionAPI.setLabel(label: string)` 只修改扩展显示名，不会写 session label。
 
 当前实现用 `setEntryLabel(sm, entryId, label)` guarded cast 到完整 `SessionManager`，调用：
 
@@ -45,7 +45,7 @@
 sm.appendLabelChange(entryId, label)
 ```
 
-`acm_checkpoint` 的默认 target 是 active branch 上最近的有意义 **USER/AI 消息**，跳过 tool result、无可见文字的 internal-tool-only AI turn、空消息等。显式 `target` 可用任意节点 ID（含 tool result），但会 warning；**auto-resolve 仍只选 USER/AI**。
+`acm_checkpoint` 的默认 target 是 active branch 上最近的有意义 **USER/AI 消息**，跳过 tool result、bash/custom/system 消息、无可见文字的 internal-tool-only AI turn、空消息等。显式 `target` 可用任意节点 ID（含 tool result），但会 warning；**auto-resolve 仍只选 USER/AI**。
 
 checkpoint / `backupCurrentHeadAs` **名称**在整棵树内必须唯一，但**同一节点可挂多个别名**（多次 `acm_checkpoint` 或 `backupCurrentHeadAs` 追加 label journal entry，不覆盖旧名）。omp-context 通过扫描全部 `label` 条目重建别名索引；OMP 原生 `getLabel()` 只反映最新一个。label 重放时若同名指向新 entry，会从旧 entry 的 alias list 移除该名。
 
@@ -55,7 +55,7 @@ checkpoint / `backupCurrentHeadAs` **名称**在整棵树内必须唯一，但**
 
 ### timeline 是会话树结构视图
 
-`acm_timeline` 默认只展示 **active path**（LLM 实际看到的 spine），并附带 context HUD:
+`acm_timeline` 默认只展示 **active path**（LLM 实际看到的 spine），并附带 context HUD。`verbose: true` 时在 timeline 中显示 ACM 工具调用节点。
 
 - context usage
 - active path 节点数
@@ -71,6 +71,8 @@ checkpoint / `backupCurrentHeadAs` **名称**在整棵树内必须唯一，但**
 `full_tree: true` 会渲染 `sm.getTree()` 返回的整棵会话树，包含 off-path branch、checkpoint label、HEAD、`branch_summary` 的 `branchPoint` / `origin` 元数据等。深度/行数超限时会截断并提示用 `list_checkpoints` 或 `search`。
 
 `search` **默认全树搜索**（active + off-path），按 label、节点 ID、内容匹配；传了 `search` 就不再限于 active path。`list_checkpoints` 可与 `search` 组合缩小清单。
+
+**模式优先级**（多参数同时传时只跑一种，其余忽略）：`list_checkpoints` > `search` > `full_tree` > 默认 active path。
 
 ### travel 使用 branchWithSummary + context event
 
@@ -91,8 +93,10 @@ sm.branchWithSummary(targetId, summary, {
 }, true)
 ```
 
-5. 设置 `pendingContextRefresh`。
-6. `pi.on("context", ...)` 在之后每次 LLM 调用前执行 `sm.buildSessionContext()`，用当前 leaf 重建 messages 并返回给 OMP。
+5. 设置 `pendingContextRefresh.mark(sessionManager)`（按 session 实例隔离）。
+6. `pi.on("context", ...)` 在**下一次** LLM 调用前执行一次 `sm.buildSessionContext()` 重建 messages；`try/finally` 保证 flag 一次清除，失败时 `ui.notify` 提示 reload。`session_start` / `session_shutdown` 也会清除 stale flag。
+
+travel tool result `details` 含 `sessionMessages`（字符串 delta）、`messagesBefore`/`messagesAfter`、`summaryEntryId` 与别名 `summaryEntry`。
 
 travel 改的是 OMP 会话历史树和发给模型的上下文，不会回滚磁盘文件、进程、浏览器状态、远端服务或任何外部副作用。
 
@@ -146,6 +150,8 @@ Node16 moduleResolution 下需要从 OMP 子路径导入类型：
 | 路径 | 作用 |
 |---|---|
 | `src/index.ts` | 三个工具注册、checkpoint label、timeline 渲染、同步 travel、context refresh |
+| `src/lib.ts` | 可单测的纯逻辑（label maps、resolve、usage 估算、meaningful entry、timeline 模式） |
+| `src/lib.test.ts` | `lib.ts` 单元测试 |
 | `skills/context-management/SKILL.md` | 驱动 agent 使用 checkpoint/timeline/travel 的 prompt |
 | `skills/context-management/references/` | 场景化上下文管理参考 |
 | `README.md` | 面向用户的安装和功能说明 |

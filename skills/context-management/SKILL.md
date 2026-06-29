@@ -118,7 +118,7 @@ Do not ask only "is the whole task done?" Ask "will the next action start a new 
 
 Use semantic names such as `<task>-start`, `<task>-<phase>`, `<task>-<attempt>`, or `<task>-<milestone>`.
 
-Omit `target` to auto-anchor the nearest meaningful **USER/AI** turn near HEAD (skips tool results and internal-tool-only AI turns **without visible text**). The tool result explains what was chosen and what was skipped. Explicit `target` may be any node ID (including tool results) but triggers a warning — prefer USER/AI turns for milestone anchors.
+Omit `target` to auto-anchor the nearest meaningful **USER/AI** turn near HEAD (skips tool results, bash/custom/system messages, internal-tool-only AI turns **without visible text**, and empty messages). The tool result explains what was chosen and what was skipped. Explicit `target` may be any node ID (including tool results) but triggers a warning — prefer USER/AI turns for milestone anchors.
 
 **Multiple aliases on one node:** calling `acm_checkpoint` again on the same entry with a **new unique name** adds an alias; existing names remain travel targets. Reusing an exact name on the same node is idempotent.
 
@@ -128,10 +128,12 @@ Omit `target` to auto-anchor the nearest meaningful **USER/AI** turn near HEAD (
 
 Use as the structural view of the **active path** (default). The HUD shows context usage, active-path node count, off-path fork count, and a travel cue.
 
-- **Default:** active path only; off-path summaries at branch points show as `[off-path]` footnotes.
+- **Default:** active path only; off-path summaries at branch points show as `[off-path]` footnotes. Set `verbose: true` to include ACM tool traffic in the timeline.
 - **`list_checkpoints: true`:** checkpoint catalog across the full tree — **one line per alias**, with `~msgs` and `~% est.` for travel planning (display capped at 50; use `search` to narrow). Preferred before `full_tree` on deep sessions.
 - **`full_tree: true`:** render the full session tree (truncates by depth/line limit on large trees).
 - **`search`:** **full-tree** search by checkpoint label, node ID, or content (includes off-path branches). Returns matching nodes without rendering the whole tree.
+
+**Mode precedence** when multiple params are set (only one mode runs; others are ignored): `list_checkpoints` > `search` > `full_tree` > default active path. Example: `{ list_checkpoints: true, search: "foo" }` runs the checkpoint catalog filtered by `foo`; `{ search: "foo", full_tree: true }` runs search only.
 
 Judge context size from `contextUsage` / HUD, not file bytes or read line counts.
 
@@ -167,7 +169,7 @@ Typical travel boundaries: investigation -> execution, diagnosis -> fix, failed 
 
 Do not travel while exploration is still active, when the result is unstable, or just because the skill triggered.
 
-After `acm_travel`, the session tree updates immediately; estimated usage is in the tool result, official token % confirms on the next `acm_timeline`. The branch summary entry may appear **before** the tool call in the session log — trust `target` and `summaryEntry` from the tool result.
+After `acm_travel`, the session tree updates immediately; estimated usage is in the tool result, official token % confirms on the next `acm_timeline`. The branch summary entry may appear **before** the tool call in the session log — trust `target`, `summaryEntryId` (also `summaryEntry` in text), and `sessionMessages` from the tool result.
 
 ## Travel gate
 
