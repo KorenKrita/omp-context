@@ -609,7 +609,7 @@ export default function(pi: ExtensionAPI): void {
     autoResolved = findLastMeaningfulEntry(branch, sm, signal);
     id = autoResolved.entryId ?? "";
    }
-   if (signal?.aborted) {
+   if (signal?.aborted || autoResolved?.aborted) {
     return {
      content: [{ type: "text" as const, text: "acm_checkpoint aborted." }],
      details: { error: "aborted" },
@@ -1007,6 +1007,12 @@ export default function(pi: ExtensionAPI): void {
    let backupHadNoPriorLabels = false;
    if (params.backupCurrentHeadAs) {
     const headResolve = findLastMeaningfulEntry(branch, sm, signal);
+    if (headResolve.aborted) {
+     return {
+      content: [{ type: "text" as const, text: "acm_travel aborted during backup target resolution." }],
+      details: { error: "aborted", target: params.target, targetId: tid },
+     };
+    }
     backupEntryId = headResolve.entryId ?? undefined;
     if (!backupEntryId) {
      return {
@@ -1158,6 +1164,17 @@ export default function(pi: ExtensionAPI): void {
 
   try {
    const messages = getBuildSessionMessages(sm);
+   if (messages.length === 0) {
+    const message = "rebuilt messages array is empty";
+    const willRetry = contextRefresh.recordFailedAttempt(sm, message);
+    ctx.ui.notify(
+     willRetry
+      ? `Context refresh after travel failed (${contextRefresh.getAttemptCount(sm)}/${ContextRefreshRegistry.MAX_ATTEMPTS}): ${message}. Will retry on next LLM turn.`
+      : `Context refresh after travel failed: ${message}. Reload the session to sync messages.`,
+     "warning",
+    );
+    return { messages: event.messages };
+   }
    contextRefresh.markSuccess(sm);
    return { messages: messages as typeof event.messages };
   } catch (e) {

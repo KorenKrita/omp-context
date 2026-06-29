@@ -127,6 +127,7 @@ export interface MeaningfulResolveResult {
  role?: string;
  snippet?: string;
  skipped: SkippedEntry[];
+ aborted?: boolean;
 }
 
 export function isValidEntryId(id: string): boolean {
@@ -380,7 +381,9 @@ export function findLastMeaningfulEntry(
 ): MeaningfulResolveResult {
  const skipped: SkippedEntry[] = [];
  for (let i = branch.length - 1; i >= 0; i--) {
-  if (signal?.aborted) break;
+  if (signal?.aborted) {
+   return { entryId: null, skipped, aborted: true };
+  }
   const entry = branch[i];
   const skipReason = isSkipped(entry);
   if (skipReason) {

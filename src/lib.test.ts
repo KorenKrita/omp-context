@@ -282,4 +282,22 @@ describe("findLastMeaningfulEntry", () => {
   expect(result.entryId).toBe("u1");
   expect(result.skipped[0]?.reason).toBe("bash_execution");
  });
+
+ test("returns aborted when signal fires before a match", () => {
+  const branch = [
+   userEntry("u1", "task"),
+   userEntry("u2", "follow-up"),
+  ];
+  const controller = new AbortController();
+  controller.abort();
+  const result = findLastMeaningfulEntry(
+   branch,
+   getMeaningfulSkipReason,
+   () => "USER",
+   () => "",
+   controller.signal,
+  );
+  expect(result.entryId).toBeNull();
+  expect(result.aborted).toBe(true);
+ });
 });
