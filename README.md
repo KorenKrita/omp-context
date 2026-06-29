@@ -21,7 +21,7 @@ omp-context 让 agent 像管理 git 分支一样管理上下文：
 |---|---|
 | `acm_checkpoint` | 打锚点。零成本——不改上下文、不分支、不摘要。多打 = 后续更多选择 |
 | `acm_timeline` | 看结构图 + token 用量。`full_tree` 看所有分支，`search` 搜特定节点 |
-| `acm_compact` | 跳到任意锚点，留一份 handoff summary。旧路径保留，随时跳回 |
+| `acm_compact` | 跳到任意锚点，留一份 handoff summary。上下文立即切换到目标节点 + summary，token 即时降。旧路径保留，随时跳回 |
 
 ## 时间旅行
 

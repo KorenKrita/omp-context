@@ -13,7 +13,11 @@ import type { TextContent, ImageContent, ToolCall, TSchema, ThinkingContent, Red
 type AssistantContentPart = TextContent | ThinkingContent | RedactedThinkingContent | ToolCall;
 // ── Module state ──────────────────────────────────────────────
 
-const pendingCompactCounts = new Map<string, number>();
+/** One-shot flag: when set, next context event replaces messages via buildSessionContext(). */
+let pendingContextRefresh: string | null = null;
+
+
+/** Legacy ghost session tracking (kept for backward compat with older session logs). */
 const pendingGhostSessions = new Set<string>();
 
 const INTERNAL_TOOLS = new Set(["acm_checkpoint", "acm_timeline", "acm_compact"]);
@@ -652,14 +656,10 @@ export default function(pi: ExtensionAPI): void {
    const params = compactSchema.parse(rawParams);
    const sm = ctx.sessionManager;
    const tree = sm.getTree();
-   // Capture sessionId early — reused after branchWithSummary for continuation registration.
-   // Session ID doesn't change across branching, but capturing it here eliminates any
-   // timing window where getSessionId() could fail after a successful compact.
    const sessionId = sm.getSessionId();
    const branchIds: Set<string> = new Set(sm.getBranch().map((e: SessionEntry) => e.id));
    const resolved = resolveTargetId(sm, tree, params.target, branchIds);
    const tid = resolved.id;
-   // Validate that the resolved target actually exists in the tree
    const targetExists = findInTree(tree, (n) => n.entry.id === tid) !== undefined;
    if (!targetExists) {
     const hint = " It may be a misspelled checkpoint name — use acm_timeline with full_tree to see available labels and node IDs.";
@@ -668,7 +668,6 @@ export default function(pi: ExtensionAPI): void {
      details: { error: "target_not_found", requestedTarget: params.target, resolvedTargetId: tid },
     };
    }
-   // off-path notify deferred until after all validation checks pass
    const currentLeaf = sm.getLeafId();
    if (!currentLeaf) {
     return {
@@ -682,7 +681,6 @@ export default function(pi: ExtensionAPI): void {
      details: { error: "already_at_target", targetId: tid, leafId: currentLeaf },
     };
    }
-   // Abort check before any side effects or mutations (notify, backup label, branchWithSummary).
    if (signal?.aborted) {
     return {
      content: [{ type: "text" as const, text: "acm_compact aborted: signal was already aborted." }],
@@ -695,17 +693,13 @@ export default function(pi: ExtensionAPI): void {
 
    const originId = currentLeaf;
    const originLabel = sm.getLabel(originId) ?? undefined;
-   // originLabel is captured BEFORE backupCheckpoint may overwrite it.
-   // The summary references the original label for readability; agent should
-   // use originId (stable) to locate the node, not the label name.
    const fromPart = originLabel
     ? `(handoff summary from ${originLabel}, from: ${originId})`
     : `(handoff summary from: ${originId})`;
    const enrichedMessage = `${fromPart}\n${params.summary}`;
    const usageBeforeText = formatContextUsage(ctx.getContextUsage());
 
-   // Set backup label before branching
-   let backupLabelSet = false;
+   // Set backup label before compact
    if (params.backupCheckpoint) {
     const backupExists = findInTree(tree, (n) => sm.getLabel(n.entry.id) === params.backupCheckpoint && branchIds.has(n.entry.id))?.entry.id;
     if (backupExists && backupExists !== originId) {
@@ -719,7 +713,6 @@ export default function(pi: ExtensionAPI): void {
     }
     try {
      setEntryLabel(sm, originId, params.backupCheckpoint);
-     backupLabelSet = true;
     } catch (e) {
      return {
       content: [{ type: "text" as const, text: `Error: backup label '${params.backupCheckpoint}' could not be set: ${e instanceof Error ? e.message : String(e)}. Compact aborted.` }],
@@ -728,135 +721,67 @@ export default function(pi: ExtensionAPI): void {
     }
    }
 
-   // Synchronous compact: execute branchWithSummary immediately.
-   // leaf auto-set to new summary entry by insert().
-   // Agent sees the result in the next acm_timeline call — no delay, no confusion.
-   // NOTE: If branchWithSummary partially modifies the tree before throwing,
-   // we can only roll back the backup label — the session tree may be in an
-   // inconsistent state. This is an acceptable limitation given OMP's API.
-   let summaryEntryId: string;
-   let ghostEntry = false;
+   // ── branchWithSummary (instant) + context event (instant refresh) ─────────
+   // branchWithSummary restructures the tree from target. Instant, no LLM.
+   // context event handler (one-shot) replaces messages on the next LLM call
+   // in the same turn — agent immediately sees target's context + summary.
+
+   let summaryEntryId: string | undefined;
    try {
     summaryEntryId = branchWithSummary(sm, tid, enrichedMessage);
-    if (!summaryEntryId || typeof summaryEntryId !== "string") {
-     throw new Error(`branchWithSummary returned invalid entry ID: ${String(summaryEntryId)}`);
-    }
-    // Verify the returned ID actually exists in the tree.
-    // branchWithSummary already mutated the tree (leaf moved), so we can't roll back —
-    // downgrade to warning and let continuation fire so agent reads the summary.
-    const newTree = sm.getTree();
-    if (!findInTree(newTree, (n) => n.entry.id === summaryEntryId)) {
-     ghostEntry = true;
-     pi.logger.debug("branchWithSummary returned ID not found in tree", { summaryEntryId });
-     try { ctx.ui.notify(`Warning: compact succeeded but summary entry ${summaryEntryId} not found in tree. Session state may be inconsistent.`, "warning"); } catch (e) { pi.logger.debug("ghost entry notify failed", { error: e instanceof Error ? e.message : String(e) }); }
-    }
-   } catch (err) {
-    let rollbackFailed = false;
-    if (backupLabelSet) {
-     try {
-      setEntryLabel(sm, originId, originLabel);
-      // Verify rollback succeeded — check label matches expected state
-      const currentLabel = sm.getLabel(originId) ?? undefined;
-      if (currentLabel !== originLabel) {
-       rollbackFailed = true;
-      }
-     } catch (rollbackErr) {
-      rollbackFailed = true;
-      try { pi.logger.debug("compact rollback failed", { error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr) }); } catch { /* best-effort */ }
-     }
-     if (rollbackFailed) {
-      try { ctx.ui.notify(`Warning: backup label '${params.backupCheckpoint}' could not be rolled back after compact failure. Manual cleanup needed for node ${originId}.`, "warning"); } catch (ne) { pi.logger.debug("rollback notify failed", { error: ne instanceof Error ? ne.message : String(ne) }); }
-     }
-    }
-    const rollbackNote = rollbackFailed
-     ? ` Additionally, backup label '${params.backupCheckpoint}' could not be rolled back — node ${originId} still has label '${params.backupCheckpoint}'. Use acm_checkpoint with target '${originId}' to fix the label manually.`
-     : "";
+   } catch (e) {
     return {
-     content: [{ type: "text" as const, text: `acm_compact failed: ${err instanceof Error ? err.message : String(err)}${rollbackNote}` }],
-     details: { error: "compact_failed", target: params.target, targetId: tid, message: err instanceof Error ? err.message : String(err), rollbackFailed, backupCheckpoint: params.backupCheckpoint ?? null, ...(rollbackFailed ? { inconsistentLabelEntryId: originId, staleLabel: params.backupCheckpoint ?? null } : {}) },
+     content: [{ type: "text" as const, text: `Error: branchWithSummary failed: ${e instanceof Error ? e.message : String(e)}` }],
+     details: { error: "branch_failed" },
     };
    }
 
-   // Count increment immediately after successful branchWithSummary —
-   // session state is already mutated, continuation MUST fire even if notification fails.
-   // sessionId was captured at the top of execute() — no timing window.
-   // Map.set with string key cannot throw, so no try-catch needed.
-   pendingCompactCounts.set(sessionId, (pendingCompactCounts.get(sessionId) ?? 0) + 1);
-   if (ghostEntry) pendingGhostSessions.add(sessionId); else pendingGhostSessions.delete(sessionId);
+   // Arm context refresh: the NEXT LLM call (processing this tool result)
+   // will have its messages replaced with the new short branch via buildSessionContext().
+   // This gives instant context switch — no session_stop/continuation needed.
+   pendingContextRefresh = enrichedMessage;
 
-   let usageAfter: UsageLike | undefined;
-   try {
-    usageAfter = ctx.getContextUsage();
-   } catch (e) { pi.logger.debug("getContextUsage failed after compact", { error: e instanceof Error ? e.message : String(e) }); }
-   try {
-    ctx.ui.notify(
-     [
-      `Compacted to ${params.target}`,
-      `Context: ${usageBeforeText} → ${formatContextUsage(usageAfter)}`,
-      `Backup: ${params.backupCheckpoint || "none"}`,
-     ].join("\n"),
-     "info",
-    );
-   } catch (e) { pi.logger.debug("notify failed after compact", { error: e instanceof Error ? e.message : String(e) }); }
    return {
     content: [{
-     type: "text" as const, text: ghostEntry
-      ? `Compact complete but summary entry ${summaryEntryId} was not found in tree after creation. Session state may be inconsistent. A continuation turn will start — use acm_timeline to inspect current state before proceeding.`
-      : `Compact complete. Branch summary ${summaryEntryId} created at ${tid}. A continuation turn will start automatically. Read the injected summary and execute the Next Step.`
+     type: "text" as const,
+     text: `Compact complete. Target: ${tid}, backup: ${params.backupCheckpoint || "none"}. Branch summary: ${summaryEntryId}.`,
     }],
     details: {
      target: params.target,
      targetId: tid,
-     summaryEntryId,
      originId,
      originLabel,
-     hasBackup: backupLabelSet,
+     hasBackup: !!params.backupCheckpoint,
      backupCheckpoint: params.backupCheckpoint ?? null,
      usageBefore: usageBeforeText,
-     usageAfter: formatContextUsage(usageAfter),
-     ghostEntry,
+     summaryEntryId,
     },
    };
   },
  });
 
- // ── Event: session_stop → continuation turn ────────────────
- // compact is already executed synchronously in the tool. session_stop
- // only triggers a continuation turn so the agent reads the new leaf.
- pi.on("session_stop", (_event, ctx: ExtensionContext) => {
-  let capturedSid: string | undefined;
-  try {
-   const sid = ctx.sessionManager.getSessionId();
-   capturedSid = sid;
-   const count = pendingCompactCounts.get(sid) ?? 0;
-   if (count === 0) return { continue: false }; // No pending compact
-   const isGhost = pendingGhostSessions.has(sid);
-   let message: string;
-   if (isGhost) {
-    message = "acm_compact completed but the summary entry was not found in the tree. Session state may be inconsistent. Use acm_timeline to inspect current state before proceeding.";
-   } else if (count === 1) {
-    message = "acm_compact complete. A handoff summary of your previous conversation path was injected above. Read it to understand your new state. Execute the Next Step from the summary.";
-   } else {
-    message = `${count} compacts completed in this turn. Only the most recent handoff summary is on the active path — read it to understand your current state. Execute the Next Step from that summary.`;
-   }
-   return { continue: true, additionalContext: message };
-  } catch (e) {
-   pi.logger.debug("session_stop handler failed", { error: e instanceof Error ? e.message : String(e) });
-   // If getSessionId() threw, we can't identify this session.
-   // Can't safely use pendingCompactCounts.size > 0 (may match other sessions). Log only.
-   return { continue: false };
-  } finally {
-   if (capturedSid !== undefined) { pendingCompactCounts.delete(capturedSid); pendingGhostSessions.delete(capturedSid); }
-  }
+ // ── Event: context → persistent message rebuild after compact ───────────
+ // After branchWithSummary, the tree is correct but agent memory is stale.
+ // On EVERY LLM call while pendingContextRefresh is set, rebuild messages
+ // from the current branch via buildSessionContext(). This includes both
+ // the original context up to target + summary AND any new messages added
+ // after compact (new conversation grows naturally on the branch).
+ // Cleared on session_shutdown only.
+ pi.on("context", (event, ctx: ExtensionContext) => {
+  if (!pendingContextRefresh) return;
+
+  // Guarded runtime cast: ReadonlySessionManager is the full SessionManager at runtime.
+  const sm = ctx.sessionManager as unknown as
+   { buildSessionContext?: () => { messages: unknown[] } };
+  if (typeof sm.buildSessionContext !== "function") return;
+
+  const sessionContext = sm.buildSessionContext();
+  return { messages: sessionContext.messages as typeof event.messages };
  });
 
  // ── Session lifecycle: clear stale state ───────────────────
- // session_switch is not handled here: ctx.sessionManager already points to the
- // new session at switch time, so we can't clean up the old session's count.
- // Stale counts are harmless — they're consumed by the owning session's
- // session_stop, or cleared on process exit via session_shutdown.
  pi.on("session_shutdown", () => {
-  pendingCompactCounts.clear();
+  pendingContextRefresh = null;
   pendingGhostSessions.clear();
  });
 

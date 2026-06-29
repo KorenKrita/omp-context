@@ -96,7 +96,7 @@ Think of the tools as a phase pipeline: checkpoint marks anchors, work happens, 
 3. Add checkpoints at meaningful milestones: phase boundaries, risky attempts, reusable batch methods, and interruptions. More checkpoints = more compact target options later.
 4. Use `acm_timeline` when the active path structure affects the next decision or compact target. Use `full_tree: true` to see off-path branches. Use `search: "keyword"` to find specific nodes in large trees without overflowing context.
 5. At continuation boundaries, run the compact gate before starting another phase. If the whole requested task is complete and only the final response remains, answer and wait.
-6. After a successful compact, continue from the injected summary instead of dragging the full raw path forward.
+6. After a successful compact, your context has already switched. Continue working directly — the target's context + your summary is now the active working set.
 
 ## Continuation boundaries
 
@@ -162,7 +162,7 @@ Strong signals to consider compaction:
 
 Do not compact while exploration is still active, when the result is unstable, just because the skill triggered, or just because the user-visible task ended.
 
-After calling `acm_compact`, the compact executes immediately (synchronous). The tool returns "Compact complete" with the new summary entry ID. You can verify the result with `acm_timeline` right away. A continuation turn will start automatically to read the injected summary.
+After calling `acm_compact`, the compact executes immediately. Your context switches instantly to the target node's original conversation + the summary you provided. Token usage drops on the same turn. You can verify the new tree structure with `acm_timeline` right away.
 
 ## Compact gate
 
@@ -213,11 +213,12 @@ Before compacting, quickly check: stable state? real continuation? smallest suff
 
 ## After compact
 
-1. Read the injected summary carefully and treat it as the new active state.
-2. Verify it contains enough state for the next action.
-3. Remember that disk and external systems were not rolled back; inspect current files/tools/services when state matters.
-4. If a missing detail is cheap to reconstruct from disk, tools, or source anchors, retrieve it directly.
-5. Return to the backup checkpoint only when the missing raw context cannot be reconstructed cheaply. Use `acm_timeline({ full_tree: true, search: "backup-name" })` to find it.
+Your context has already switched — you are now working from the target node's conversation history plus the summary. Treat the current context as the ground truth:
+
+1. The summary you wrote is now part of your visible context. Verify it contains enough state for the next action.
+2. Disk and external systems were not rolled back; inspect current files/tools/services when state matters.
+3. If a missing detail is cheap to reconstruct from disk, tools, or source anchors, retrieve it directly.
+4. Return to the backup checkpoint only when the missing raw context cannot be reconstructed cheaply. Use `acm_timeline({ full_tree: true, search: "backup-name" })` to find it.
 
 ## Common mistakes
 
