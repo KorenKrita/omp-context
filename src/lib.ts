@@ -181,10 +181,13 @@ export function buildLabelMaps(entries: SessionEntry[]): LabelMaps {
   if (entry.type !== "label") continue;
   const { targetId, label } = entry;
   if (label === null || label === undefined) {
-   entryToLabels.delete(targetId);
-   for (const [name, id] of [...labelToEntryId.entries()]) {
-    if (id === targetId) labelToEntryId.delete(name);
+   const existingLabels = entryToLabels.get(targetId);
+   if (existingLabels) {
+    for (const l of existingLabels) {
+     labelToEntryId.delete(l);
+    }
    }
+   entryToLabels.delete(targetId);
    continue;
   }
   const previousOwner = labelToEntryId.get(label);

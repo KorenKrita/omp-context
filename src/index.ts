@@ -127,10 +127,10 @@ interface TravelSummaryDetails {
 function isTravelSummaryDetails(details: unknown): details is TravelSummaryDetails {
  if (typeof details !== "object" || details === null) return false;
  const d = details as Record<string, unknown>;
- if (d.originId !== undefined && typeof d.originId !== "string") return false;
+ if (typeof d.originId !== "string") return false;
  if (d.originLabel !== undefined && typeof d.originLabel !== "string") return false;
- if (d.target !== undefined && typeof d.target !== "string") return false;
- if (d.targetId !== undefined && typeof d.targetId !== "string") return false;
+ if (typeof d.target !== "string") return false;
+ if (typeof d.targetId !== "string") return false;
  if (
   d.backupCurrentHeadAs !== undefined &&
   d.backupCurrentHeadAs !== null &&
