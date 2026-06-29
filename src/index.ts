@@ -14,6 +14,7 @@ type AssistantContentPart = TextContent | ThinkingContent | RedactedThinkingCont
 // ── Module state ──────────────────────────────────────────────
 
 const pendingCompactCounts = new Map<string, number>();
+const pendingGhostSessions = new Set<string>();
 
 const INTERNAL_TOOLS = new Set(["acm_checkpoint", "acm_timeline", "acm_compact"]);
 
@@ -781,6 +782,7 @@ export default function(pi: ExtensionAPI): void {
    // sessionId was captured at the top of execute() — no timing window.
    // Map.set with string key cannot throw, so no try-catch needed.
    pendingCompactCounts.set(sessionId, (pendingCompactCounts.get(sessionId) ?? 0) + 1);
+   if (ghostEntry) pendingGhostSessions.add(sessionId); else pendingGhostSessions.delete(sessionId);
 
    let usageAfter: UsageLike | undefined;
    try {
@@ -828,9 +830,15 @@ export default function(pi: ExtensionAPI): void {
    capturedSid = sid;
    const count = pendingCompactCounts.get(sid) ?? 0;
    if (count === 0) return { continue: false }; // No pending compact
-   const message = count === 1
-    ? "acm_compact complete. A handoff summary of your previous conversation path was injected above. Read it to understand your new state. Execute the Next Step from the summary."
-    : `${count} compacts completed in this turn. Only the most recent handoff summary is on the active path — read it to understand your current state. Execute the Next Step from that summary.`;
+   const isGhost = pendingGhostSessions.has(sid);
+   let message: string;
+   if (isGhost) {
+    message = "acm_compact completed but the summary entry was not found in the tree. Session state may be inconsistent. Use acm_timeline to inspect current state before proceeding.";
+   } else if (count === 1) {
+    message = "acm_compact complete. A handoff summary of your previous conversation path was injected above. Read it to understand your new state. Execute the Next Step from the summary.";
+   } else {
+    message = `${count} compacts completed in this turn. Only the most recent handoff summary is on the active path — read it to understand your current state. Execute the Next Step from that summary.`;
+   }
    return { continue: true, additionalContext: message };
   } catch (e) {
    pi.logger.debug("session_stop handler failed", { error: e instanceof Error ? e.message : String(e) });
@@ -838,7 +846,7 @@ export default function(pi: ExtensionAPI): void {
    // Can't safely use pendingCompactCounts.size > 0 (may match other sessions). Log only.
    return { continue: false };
   } finally {
-   if (capturedSid !== undefined) pendingCompactCounts.delete(capturedSid);
+   if (capturedSid !== undefined) { pendingCompactCounts.delete(capturedSid); pendingGhostSessions.delete(capturedSid); }
   }
  });
 
@@ -849,6 +857,7 @@ export default function(pi: ExtensionAPI): void {
  // session_stop, or cleared on process exit via session_shutdown.
  pi.on("session_shutdown", () => {
   pendingCompactCounts.clear();
+  pendingGhostSessions.clear();
  });
 
 }
