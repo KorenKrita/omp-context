@@ -15,8 +15,8 @@
 ## 技术栈
 
 - TypeScript ESM (`"type": "module"`, `module: Node16`, `target: ES2022`, `strict: true`)
-- `@oh-my-pi/pi-coding-agent` ExtensionAPI 作为 peer dependency, 由 OMP 运行时提供
-- `@oh-my-pi/pi-agent-core`（token estimator）同为 peer/dev dependency
+- `@oh-my-pi/pi-coding-agent` ExtensionAPI 作为 peer dependency（`^16.1.22`）, 由 OMP 运行时提供
+- `@oh-my-pi/pi-agent-core`（token estimator）同为 peer/dev dependency（`^16.1.22`）
 - 工具参数 schema 使用运行时注入的 `pi.zod`
 - Source-first: OMP 直接加载 `src/*.ts`, 不打包 `dist/`
 
@@ -47,15 +47,17 @@ sm.appendLabelChange(entryId, label)
 
 `acm_checkpoint` 的默认 target 是 active branch 上最近的有意义 **USER/AI 消息**，跳过 tool result、bash/custom/system 消息、无可见文字的 internal-tool-only AI turn、空消息等。显式 `target` 可用任意节点 ID（含 tool result），但会 warning；**auto-resolve 仍只选 USER/AI**。
 
-checkpoint / `backupCurrentHeadAs` **名称**在整棵树内必须唯一，但**同一节点可挂多个别名**（多次 `acm_checkpoint` 或 `backupCurrentHeadAs` 追加 label journal entry，不覆盖旧名）。omp-context 通过扫描全部 `label` 条目重建别名索引；OMP 原生 `getLabel()` 只反映最新一个。label 重放时若同名指向新 entry，会从旧 entry 的 alias list 移除该名。
+checkpoint / `backupCurrentHeadAs` **名称**在整棵树内必须唯一且**大小写敏感**（`Foo` ≠ `foo`），但**同一节点可挂多个别名**（多次 `acm_checkpoint` 或 `backupCurrentHeadAs` 追加 label journal entry，不覆盖旧名）。omp-context 通过扫描全部 `label` 条目重建别名索引；OMP 原生 `getLabel()` 只反映最新一个。label 重放时若同名指向新 entry，会从旧 entry 的 alias list 移除该名。`acm_timeline` 的 `search` 对 label/内容**大小写不敏感**。
 
 `list_checkpoints` 按**别名**逐条列出（同一 `entryId` 可出现多行）。timeline / `full_tree` 显示为 `checkpoint: foo, bar`。
 
-`acm_travel` 的 `backupCurrentHeadAs` 同样落在最近有意义的 USER/AI 消息上，而不是 raw HEAD（避免 backup 打在 `acm_timeline` 等 tool result 上）。若从 HEAD 回退，tool result 会写明 `backup@entryId (resolved from HEAD …)`。
+`target: "root"` 解析为 **第一个 top-level 节点**；多根会话会 notify，优先用显式 checkpoint 名或节点 ID。
+
+`acm_travel` 的 `backupCurrentHeadAs` 同样落在最近有意义的 USER/AI 消息上，而不是 raw HEAD（避免 backup 打在 `acm_timeline` 等 tool result 上）。若从 HEAD 回退，tool result 会写明 `backup@entryId (resolved from HEAD …)`。若 backup 已写入但 `branchWithSummary` 失败，backup label **仍会保留**，travel 整体 aborted。
 
 ### timeline 是会话树结构视图
 
-`acm_timeline` 默认只展示 **active path**（LLM 实际看到的 spine），并附带 context HUD。`verbose: true` 时在 timeline 中显示 ACM 工具调用节点。
+`acm_timeline` 默认只展示 **active path**（LLM 实际看到的 spine），并附带 context HUD。`verbose: true` 仅在 **active path 模式**下显示 ACM 工具调用及 system/custom 元消息；`list_checkpoints` / `search` / `full_tree` 会忽略 `verbose`。
 
 - context usage
 - active path 节点数
@@ -93,10 +95,10 @@ sm.branchWithSummary(targetId, summary, {
 }, true)
 ```
 
-5. 设置 `pendingContextRefresh.mark(sessionManager)`（按 session 实例隔离）。
-6. `pi.on("context", ...)` 在**下一次** LLM 调用前执行一次 `sm.buildSessionContext()` 重建 messages；`try/finally` 保证 flag 一次清除，失败时 `ui.notify` 提示 reload。`session_start` / `session_shutdown` 也会清除 stale flag。
+5. 设置 `contextRefresh.markPending(sessionManager)`（按 session 实例隔离）。
+6. `pi.on("context", ...)` 在**下一次** LLM 调用前执行一次 `sm.buildSessionContext()` 重建 messages；成功则清除状态，失败则 `ui.notify` + 写入 failure 供 timeline HUD 显示。`session_start` / `session_shutdown` 也会清除 stale 状态。
 
-travel tool result `details` 含 `sessionMessages`（字符串 delta）、`messagesBefore`/`messagesAfter`、`summaryEntryId` 与别名 `summaryEntry`。
+travel tool result `details` 含 `sessionMessages`（字符串 delta）、`messagesBefore`/`messagesAfter`、`summaryEntryId`、`contextRefreshPending`。**无** legacy `summaryEntry` 别名字段。
 
 travel 改的是 OMP 会话历史树和发给模型的上下文，不会回滚磁盘文件、进程、浏览器状态、远端服务或任何外部副作用。
 

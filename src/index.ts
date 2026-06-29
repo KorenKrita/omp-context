@@ -25,7 +25,7 @@ import {
  getBuildSessionMessages,
  getEntryLabels,
  getMeaningfulSkipReason,
- PendingContextRefreshRegistry,
+ ContextRefreshRegistry,
  resolveTargetId,
  resolveTimelineMode,
  type MeaningfulResolveResult,
@@ -37,7 +37,7 @@ type AssistantContentPart = TextContent | ThinkingContent | RedactedThinkingCont
 // ── Module state ──────────────────────────────────────────────
 
 /** After travel, rebuild LLM messages once on the next context event (post-travel stale agent.messages). */
-const pendingContextRefresh = new PendingContextRefreshRegistry();
+const contextRefresh = new ContextRefreshRegistry();
 
 function getMessageRoleLabel(entry: SessionEntry): string | undefined {
  if (entry.type !== "message") return undefined;
@@ -166,6 +166,18 @@ function branchWithSummary(
 
 // ── Content extraction for timeline ───────────────────────────
 
+/** Extract plain text from user/assistant/system/custom message content. */
+function extractMessageText(content: unknown): string {
+ if (typeof content === "string") return content.trim();
+ if (Array.isArray(content)) {
+  return content
+   .map((p: { type?: string; text?: string }) => (p.type === "text" && p.text ? p.text : ""))
+   .join(" ")
+   .trim();
+ }
+ return "";
+}
+
 /** Extract a human-readable summary string from a session entry. */
 function getMsgContent(entry: SessionEntry, sm: ReadonlySessionManager, verbose: boolean): string {
  if (entry.type === "branch_summary" || entry.type === "compaction") {
@@ -195,6 +207,11 @@ function getMsgContent(entry: SessionEntry, sm: ReadonlySessionManager, verbose:
  }
  if (msg.role === "bashExecution") {
   return `[Bash] ${msg.command}`;
+ }
+ if (msg.role === "system" || msg.role === "custom") {
+  const text = extractMessageText(msg.content);
+  const label = msg.role === "system" ? "System" : "Custom";
+  return text ? `[${label}] ${text}` : "";
  }
 
  if (msg.role === "user" || msg.role === "assistant") {
@@ -543,8 +560,20 @@ export default function(pi: ExtensionAPI): void {
    let autoResolved: MeaningfulResolveResult | undefined;
    let targetEntry: SessionEntry | undefined;
    if (params.target) {
+    if (params.target.toLowerCase() === "root" && tree.length === 0) {
+     return {
+      content: [{ type: "text" as const, text: "Error: Cannot checkpoint root — session tree is empty." }],
+      details: { error: "empty_session", requestedTarget: params.target },
+     };
+    }
     const resolved = resolveTargetId(sm, tree, params.target, branchIds, labelMaps);
     id = resolved.id;
+    if (params.target.toLowerCase() === "root" && tree.length > 1) {
+     ctx.ui.notify(
+      `Note: 'root' resolved to the first top-level node (${id}); this session has ${tree.length} top-level roots.`,
+      "info",
+     );
+    }
     targetEntry = findEntryInTree(tree, id);
     if (!targetEntry) {
      const hint = " It may be a misspelled checkpoint name — use acm_timeline to see available labels and node IDs.";
@@ -578,7 +607,7 @@ export default function(pi: ExtensionAPI): void {
     const isEmpty = branch.length === 0;
     const msg = isEmpty
      ? "No session entry to checkpoint. The conversation is empty."
-     : "No meaningful entry to checkpoint. All recent messages are internal tool traffic. Specify a target explicitly.";
+     : "No meaningful entry to checkpoint. Recent HEAD traffic is tool/bash/custom/system-only or empty — specify a target explicitly.";
     return {
      content: [{ type: "text" as const, text: msg }],
      details: { error: isEmpty ? "empty_session" : "no_meaningful_entry" },
@@ -642,13 +671,13 @@ export default function(pi: ExtensionAPI): void {
  const timelineSchema = zod.object({
   limit: zod.number().optional().describe("In default active-path mode: maximum visible entries (default 50). In full_tree mode: maximum tree depth to render (capped at 50). With search: maximum results returned (capped at 50)."),
   verbose: zod.boolean().optional().describe(
-   "Show all messages including internal tool traffic. Default false.",
+   "Show all messages including internal tool traffic, system/custom meta messages, and ACM tool calls. Applies only in default active-path mode; ignored when list_checkpoints, search, or full_tree is active.",
   ),
   full_tree: zod.boolean().optional().describe(
-   "Show all branches including off-path nodes with IDs. Default false (active path only). Prefer list_checkpoints or search on large trees.",
+   "Show all branches including off-path nodes with IDs. Default false (active path only). Prefer list_checkpoints or search on large trees. Ignored when list_checkpoints or search is set.",
   ),
   list_checkpoints: zod.boolean().optional().describe(
-   "List checkpoint labels across the full tree with node IDs and on-path/off-path tags. Display is capped at 50 — use search to narrow.",
+   "List checkpoint labels across the full tree with node IDs and on-path/off-path tags. Display is capped at 50 — use search to narrow. Ignores verbose and full_tree when set.",
   ),
   search: zod.string().optional().describe(
    "Search the full session tree (active + off-path) for matching checkpoint labels, node IDs, or content. When set without list_checkpoints, returns matching nodes. With list_checkpoints, filters the checkpoint catalog. Mode precedence when multiple params are set: list_checkpoints > search > full_tree > default active path.",
@@ -770,8 +799,8 @@ export default function(pi: ExtensionAPI): void {
      const content = (contentCache.get(entry.id) ?? "").replace(/\s+/g, " ");
      const role = getDisplayRole(entry);
 
-     // Hide custom messages (count as hidden for accurate totals)
-     if (role === "CUSTOM") { hiddenCount++; continue; }
+     // Hide system/custom meta messages unless verbose (count as hidden for accurate totals)
+     if (!verbose && (role === "CUSTOM" || role === "SYSTEM")) { hiddenCount++; continue; }
 
      const isRoot = branch.length > 0 && entry.id === branch[0].id;
      const metaParts = [
@@ -817,6 +846,8 @@ export default function(pi: ExtensionAPI): void {
     nearestCheckpointName === null
      ? "create a checkpoint before the next noisy phase"
      : `if this segment has produced a stable result and another phase remains, travel to '${nearestCheckpointName}' with a handoff summary before continuing`;
+   const refreshFailure = contextRefresh.getFailure(sm);
+   const refreshPending = contextRefresh.isPending(sm);
    const hudParts = [
     `[Context Dashboard]`,
     `• Context Usage:    ${usageStr}`,
@@ -825,6 +856,11 @@ export default function(pi: ExtensionAPI): void {
     `• Segment Size:     ${stepsSinceCheckpoint} steps since last checkpoint '${nearestCheckpointName ?? "None"}'`,
     `• Travel Cue:       ${travelCue}`,
    ];
+   if (refreshFailure) {
+    hudParts.push(`• Context Sync:     last travel refresh failed — ${refreshFailure}`);
+   } else if (refreshPending) {
+    hudParts.push(`• Context Sync:     refresh pending on next LLM turn (post-travel message rebuild)`);
+   }
    if (!listCheckpoints && !useFullTree) {
     hudParts.push(`• Tip:              large trees → list_checkpoints or search before full_tree`);
    } else if (useFullTree && treeTruncated) {
@@ -848,6 +884,8 @@ export default function(pi: ExtensionAPI): void {
      verbose,
      treeTruncated,
      outputLines: lines.length,
+     contextRefreshPending: refreshPending,
+     contextRefreshFailure: refreshFailure ?? null,
     },
    };
   },
@@ -892,6 +930,12 @@ export default function(pi: ExtensionAPI): void {
      content: [{ type: "text" as const, text: "Error: Cannot travel to root — session tree is empty." }],
      details: { error: "empty_session", requestedTarget: params.target },
     };
+   }
+   if (params.target.toLowerCase() === "root" && tree.length > 1) {
+    ctx.ui.notify(
+     `Note: 'root' resolved to the first top-level node (${tid}); this session has ${tree.length} top-level roots.`,
+     "info",
+    );
    }
    const targetExists = findInTree(tree, (n) => n.entry.id === tid) !== undefined;
    if (!targetExists) {
@@ -995,7 +1039,7 @@ export default function(pi: ExtensionAPI): void {
     };
    }
 
-   pendingContextRefresh.mark(sm);
+   contextRefresh.markPending(sm);
 
    const afterMessages = getBuildSessionMessages(sm);
    const messagesAfter = afterMessages.length;
@@ -1014,7 +1058,8 @@ export default function(pi: ExtensionAPI): void {
     content: [{
      type: "text" as const,
      text: [
-      `Travel complete. target=${params.target} (${tid}); backupCurrentHeadAs=${backupText}; context ${usageBeforeText} → ${estimatedUsageAfterText} est. (estimatedEffect=${estimatedEffect}, structuralEffect=${structuralEffect}); sessionMessages=${messageDelta}; summaryEntry=${summaryEntryId}.`,
+      `Travel complete. target=${params.target} (${tid}); backupCurrentHeadAs=${backupText}; context ${usageBeforeText} → ${estimatedUsageAfterText} est. (estimatedEffect=${estimatedEffect}, structuralEffect=${structuralEffect}); sessionMessages=${messageDelta}; summaryEntryId=${summaryEntryId}.`,
+      "Context refresh pending on the next LLM turn — run acm_timeline if official token % or sync status is unclear.",
       estimatedUsagePreview
        ? `Pre-travel preview was ${estimatedPreviewText} est. — compare with post-travel estimate above.`
        : null,
@@ -1043,7 +1088,7 @@ export default function(pi: ExtensionAPI): void {
      messagesBefore,
      messagesAfter,
      summaryEntryId,
-     summaryEntry: summaryEntryId,
+     contextRefreshPending: true,
      fromOffPath: resolved.fromOffPath,
     },
    };
@@ -1055,11 +1100,13 @@ export default function(pi: ExtensionAPI): void {
  // Rebuild once from buildSessionContext(), then let normal session growth proceed.
  pi.on("context", (event, ctx: ExtensionContext) => {
   const sm = ctx.sessionManager;
-  if (!pendingContextRefresh.has(sm)) return;
+  if (!contextRefresh.isPending(sm)) return;
 
   try {
    const full = sm as unknown as { buildSessionContext?: () => { messages: unknown[] } };
    if (typeof full.buildSessionContext !== "function") {
+    const message = "buildSessionContext unavailable";
+    contextRefresh.setFailure(sm, message);
     ctx.ui.notify(
      "Context refresh after travel failed: buildSessionContext unavailable. Reload the session to sync messages.",
      "warning",
@@ -1067,24 +1114,27 @@ export default function(pi: ExtensionAPI): void {
     return;
    }
    const sessionContext = full.buildSessionContext();
+   contextRefresh.clear(sm);
    return { messages: sessionContext.messages as typeof event.messages };
   } catch (e) {
+   const message = e instanceof Error ? e.message : String(e);
+   contextRefresh.setFailure(sm, message);
    ctx.ui.notify(
-    `Context refresh after travel failed: ${e instanceof Error ? e.message : String(e)}. Reload the session to sync messages.`,
+    `Context refresh after travel failed: ${message}. Reload the session to sync messages.`,
     "warning",
    );
   } finally {
-   pendingContextRefresh.clear(sm);
+   contextRefresh.clearPending(sm);
   }
  });
 
  // ── Session lifecycle: clear stale state ───────────────────
  pi.on("session_start", (_event, ctx: ExtensionContext) => {
-  pendingContextRefresh.clear(ctx.sessionManager);
+  contextRefresh.clear(ctx.sessionManager);
  });
 
  pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
-  pendingContextRefresh.clear(ctx.sessionManager);
+  contextRefresh.clear(ctx.sessionManager);
  });
 
 }

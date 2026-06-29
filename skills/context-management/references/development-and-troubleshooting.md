@@ -73,3 +73,11 @@ Switch into stronger context-management behavior when:
 - the thread contains multiple fix attempts
 - you keep revisiting earlier reasoning
 - the next step is clear but the path behind it is getting noisy
+
+## Common mistakes
+
+Avoid:
+- traveling away from a failed attempt without naming what failed and what to try next
+- omitting disk/process side effects from the travel summary after implementation work
+- assuming travel rolled back file changes — it only changes conversation context
+- relying on `backupCurrentHeadAs` when `branchWithSummary` fails — the backup label may already exist even though travel aborted

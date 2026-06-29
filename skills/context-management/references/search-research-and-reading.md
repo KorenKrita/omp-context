@@ -101,3 +101,11 @@ After traveling, you should be able to continue with:
 - the next narrower investigation
 
 You should not still need the whole raw trail in active context unless the investigation is still ongoing.
+
+## Common mistakes
+
+Avoid:
+- traveling before the finding is stable enough to summarize
+- omitting source anchors (URLs, file paths, query IDs) from the travel summary
+- carrying the entire search trail forward instead of a focused handoff
+- assuming search matched a checkpoint because content matched — checkpoint **names** are case-sensitive

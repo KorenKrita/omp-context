@@ -122,16 +122,20 @@ Omit `target` to auto-anchor the nearest meaningful **USER/AI** turn near HEAD (
 
 **Multiple aliases on one node:** calling `acm_checkpoint` again on the same entry with a **new unique name** adds an alias; existing names remain travel targets. Reusing an exact name on the same node is idempotent.
 
+**Checkpoint names are case-sensitive** (`Parser-Start` ≠ `parser-start`). `acm_timeline` search matches checkpoint labels and content **case-insensitively**.
+
+**`root` target:** resolves to the **first top-level tree node** when multiple roots exist; prefer explicit checkpoint names or node IDs when unsure.
+
 **Milestone checkpoints:** auto-resolve may land on a short **meta-instruction** user line (e.g. "now create a checkpoint") instead of the assistant's status report (e.g. "loaded 438k across 5 files"). The label is still valid — everything **before** that node is in context when you travel there — but the timeline label can look misleading. For phase-complete anchors (`*-loaded`, `*-done`, `*-validated`), prefer an explicit `target` on the **substantive assistant or user turn** that marks the milestone, or call checkpoint immediately after that turn before more tool traffic accumulates.
 
 ### `acm_timeline`
 
 Use as the structural view of the **active path** (default). The HUD shows context usage, active-path node count, off-path fork count, and a travel cue.
 
-- **Default:** active path only; off-path summaries at branch points show as `[off-path]` footnotes. Set `verbose: true` to include ACM tool traffic in the timeline.
-- **`list_checkpoints: true`:** checkpoint catalog across the full tree — **one line per alias**, with `~msgs` and `~% est.` for travel planning (display capped at 50; use `search` to narrow). Preferred before `full_tree` on deep sessions.
-- **`full_tree: true`:** render the full session tree (truncates by depth/line limit on large trees).
-- **`search`:** **full-tree** search by checkpoint label, node ID, or content (includes off-path branches). Returns matching nodes without rendering the whole tree.
+- **Default:** active path only; off-path summaries at branch points show as `[off-path]` footnotes. Set `verbose: true` to include ACM tool traffic and system/custom meta messages in the timeline.
+- **`list_checkpoints: true`:** checkpoint catalog across the full tree — **one line per alias**, with `~msgs` and `~% est.` for travel planning (display capped at 50; use `search` to narrow). Preferred before `full_tree` on deep sessions. **`verbose` is ignored** in this mode.
+- **`full_tree: true`:** render the full session tree (truncates by depth/line limit on large trees). **`verbose` is ignored** in this mode.
+- **`search`:** **full-tree** search by checkpoint label, node ID, or content (includes off-path branches). Returns matching nodes without rendering the whole tree. **`verbose` is ignored** in this mode.
 
 **Mode precedence** when multiple params are set (only one mode runs; others are ignored): `list_checkpoints` > `search` > `full_tree` > default active path. Example: `{ list_checkpoints: true, search: "foo" }` runs the checkpoint catalog filtered by `foo`; `{ search: "foo", full_tree: true }` runs search only.
 
@@ -165,11 +169,11 @@ Travel to a checkpoint or node ID with a handoff summary. The target becomes the
 
 Typical travel boundaries: investigation -> execution, diagnosis -> fix, failed attempt -> next attempt, completed noisy task -> new user task.
 
-`backupCurrentHeadAs` labels the nearest meaningful USER/AI message before travel — not the raw HEAD tool result. Read `backupEntryId` / `backupResolvedFromHead` in the tool result if HEAD was tool traffic.
+`backupCurrentHeadAs` labels the nearest meaningful USER/AI message before travel — not the raw HEAD tool result. Read `backupEntryId` / `backupResolvedFromHead` in the tool result if HEAD was tool traffic. If `branchWithSummary` fails after a backup label was written, the backup checkpoint **remains** on the tree even though travel aborted.
 
 Do not travel while exploration is still active, when the result is unstable, or just because the skill triggered.
 
-After `acm_travel`, the session tree updates immediately; estimated usage is in the tool result, official token % confirms on the next `acm_timeline`. The branch summary entry may appear **before** the tool call in the session log — trust `target`, `summaryEntryId` (also `summaryEntry` in text), and `sessionMessages` from the tool result.
+After `acm_travel`, the session tree updates immediately; estimated usage is in the tool result, official token % confirms on the next `acm_timeline`. The branch summary entry may appear **before** the tool call in the session log — trust `target`, `summaryEntryId`, and `sessionMessages` from the tool result. `contextRefreshPending: true` means LLM messages rebuild on the next turn; if refresh fails, `acm_timeline` HUD shows `Context Sync: last travel refresh failed`.
 
 ## Travel gate
 

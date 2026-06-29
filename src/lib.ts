@@ -52,22 +52,40 @@ export function resolveTimelineMode(params: {
  return "active_path";
 }
 
-/** One-shot context rebuild flag keyed by session manager instance. */
-export class PendingContextRefreshRegistry {
+/** One-shot context rebuild state keyed by session manager instance. */
+export class ContextRefreshRegistry {
  private pending = new WeakSet<object>();
+ private failures = new WeakMap<object, string>();
 
- mark(sm: object): void {
+ markPending(sm: object): void {
   this.pending.add(sm);
+  this.failures.delete(sm);
  }
 
- has(sm: object): boolean {
+ isPending(sm: object): boolean {
   return this.pending.has(sm);
+ }
+
+ clearPending(sm: object): void {
+  this.pending.delete(sm);
+ }
+
+ setFailure(sm: object, message: string): void {
+  this.failures.set(sm, message);
+ }
+
+ getFailure(sm: object): string | undefined {
+  return this.failures.get(sm);
  }
 
  clear(sm: object): void {
   this.pending.delete(sm);
+  this.failures.delete(sm);
  }
 }
+
+/** @deprecated Use ContextRefreshRegistry */
+export const PendingContextRefreshRegistry = ContextRefreshRegistry;
 
 export interface SkippedEntry {
  id: string;
@@ -152,7 +170,8 @@ export function findCheckpointLabelOwner(
  return { entryId, onActivePath: backboneIds.has(entryId) };
 }
 
-/** Resolve "root" / label / raw hex ID to an entry ID. */
+/** Resolve "root" / label / raw hex ID to an entry ID.
+ *  "root" maps to the first top-level node when the forest has multiple roots. */
 export function resolveTargetId(
  sm: ReadonlySessionManager,
  tree: SessionTreeNode[],

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import {
- PendingContextRefreshRegistry,
+ ContextRefreshRegistry,
  buildLabelMaps,
  classifyStructuralMessageEffect,
  classifyTravelEffect,
@@ -109,26 +109,29 @@ describe("resolveTimelineMode", () => {
  });
 });
 
-describe("PendingContextRefreshRegistry", () => {
- test("marks, checks, and clears per session manager", () => {
-  const registry = new PendingContextRefreshRegistry();
+describe("ContextRefreshRegistry", () => {
+ test("marks pending, records failures, and clears per session manager", () => {
+  const registry = new ContextRefreshRegistry();
   const smA = {};
   const smB = {};
-  registry.mark(smA);
-  expect(registry.has(smA)).toBe(true);
-  expect(registry.has(smB)).toBe(false);
+  registry.markPending(smA);
+  expect(registry.isPending(smA)).toBe(true);
+  expect(registry.isPending(smB)).toBe(false);
+  registry.setFailure(smA, "boom");
+  expect(registry.getFailure(smA)).toBe("boom");
   registry.clear(smA);
-  expect(registry.has(smA)).toBe(false);
+  expect(registry.isPending(smA)).toBe(false);
+  expect(registry.getFailure(smA)).toBeUndefined();
  });
 
  test("sessions are isolated", () => {
-  const registry = new PendingContextRefreshRegistry();
+  const registry = new ContextRefreshRegistry();
   const smA = {};
   const smB = {};
-  registry.mark(smA);
-  registry.mark(smB);
-  registry.clear(smA);
-  expect(registry.has(smB)).toBe(true);
+  registry.markPending(smA);
+  registry.markPending(smB);
+  registry.clearPending(smA);
+  expect(registry.isPending(smB)).toBe(true);
  });
 });
 
