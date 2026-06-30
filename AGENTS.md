@@ -96,13 +96,21 @@ sm.branchWithSummary(targetId, summary, {
 ```
 
 5. 设置 `contextRefresh.markPending(sessionManager)`（按 session 实例隔离）。
-6. `pi.on("context", ...)` 在**下一次** LLM 调用前执行 `sm.buildSessionContext()` 重建 messages；成功则 `markSuccess`；失败则 `recordFailedAttempt`（最多 3 次重试，HUD 显示 retry 进度），耗尽后保留 failure 并提示 reload。
+6. `pi.on("context", ...)` 在**每次** LLM 调用前从 `sm.buildSessionContext()` 重建 messages 并覆盖发给模型的上下文。`branchWithSummary` 只切 session-manager 的 leaf，不同步 OMP agent 持有的 `agent.state.messages`（扩展无 `agent.replaceMessages` 能力——OMP 核心每次改 tree 后都显式调它，扩展层做不到）。因此采用持久覆盖：travel 后**每个** LLM turn 都 rebuild，保证模型始终看到新分支。session-manager leaf 正确、新消息也 append 到正确 leaf，故每轮 rebuild 都含最新交互。rebuild 失败则 `recordFailedAttempt`（最多 3 次重试，HUD 显示 retry 进度），耗尽后 `clearPending` 并回退到 `event.messages`、保留 failure 提示 reload。pending 由 `session_start`/`session_shutdown` 或 rebuild 失败耗尽清除。
 
 travel tool result `details` 含 `sessionMessages`（字符串 delta）、`messagesBefore`/`messagesAfter`、`summaryEntryId`、`contextRefreshPending`。**无** legacy `summaryEntry` 别名字段。
 
 travel 改的是 OMP 会话历史树和发给模型的上下文，不会回滚磁盘文件、进程、浏览器状态、远端服务或任何外部副作用。
 
 travel 不保证降 token：目标在噪音之前通常 structural `shrunk`，目标在大量 raw history 之后通常 structural `restored`。tool result 报告可靠的 `usageBefore` 与同步 **估算** `estimatedUsageAfter` / `estimatedEffect`（`buildSessionContext` + token estimator）；官方 `usageAfter` 仍为 `pending_next_context_event`，下一步 `acm_timeline` HUD 可确认。details **无** legacy `effect` 字段。`list_checkpoints` 的 `~% est.` 仅估算 target path（不含 travel summary）。`sessionMessages` / `structuralEffect` 立即可信。
+
+### 已知限制：compaction 可能冲掉 travel
+
+持久覆盖只修了 LLM outbound context——模型每轮看到的 messages 是对的。但 OMP agent 内部的 `agent.state.messages` 仍旧是 travel 前的旧数组，扩展无法同步（需 OMP 上游暴露 `replaceMessages` 或在 `branchWithSummary(fromExtension=true)` 时自动同步）。
+
+由此带来一个隐患：`#runPrePromptCompactionIfNeeded`（agent-session 内部，在 `emitContext` 之前）基于 `agent.state.messages` 判断是否触发自动压缩。travel 的目的常是逃离大上下文，但旧 `agent.state.messages` 仍是大数组——若它触发 compaction，会用旧路径压缩后的 messages 调 `replaceMessages`，彻底覆盖 travel。扩展层的持久 context 覆盖拦不住这个（compaction 在 `emitContext` 之前执行）。
+
+当前缓解：无扩展层方案。旧 `agent.state.messages` 若已低于 compaction 阈值则安全；若接近/超过阈值，travel 后仍可能触发 compaction 冲掉新分支。用户可手动检查 `acm_timeline` HUD 确认状态。彻底修复需 OMP 上游配合（暴露 state 同步能力，或让 extension 触发的 `branchWithSummary` 也走核心的 state-sync 路径）。
 
 ### 没有 /acm command
 

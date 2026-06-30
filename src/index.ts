@@ -875,9 +875,9 @@ export default function(pi: ExtensionAPI): void {
    } else if (refreshPending) {
     const attempt = contextRefresh.getAttemptCount(sm);
     const retrySuffix = attempt > 0
-     ? ` (retry ${attempt}/${ContextRefreshRegistry.MAX_ATTEMPTS} on next LLM turn)`
-     : " on next LLM turn (post-travel message rebuild)";
-    hudParts.push(`• Context Sync:     refresh pending${retrySuffix}`);
+     ? ` (retry ${attempt}/${ContextRefreshRegistry.MAX_ATTEMPTS})`
+     : "";
+    hudParts.push(`• Context Sync:     persistent rebuild active (travel pending)${retrySuffix}`);
    }
    if (!listCheckpoints && !useFullTree) {
     hudParts.push(`• Tip:              large trees → list_checkpoints or search before full_tree`);
@@ -1119,7 +1119,7 @@ export default function(pi: ExtensionAPI): void {
      type: "text" as const,
      text: [
       `Travel complete. target=${params.target} (${tid}); backupCurrentHeadAs=${backupText}; context ${usageBeforeText} → ${estimatedUsageAfterText} est. (estimatedEffect=${estimatedEffect}, structuralEffect=${structuralEffect}); sessionMessages=${messageDelta}; summaryEntryId=${summaryEntryId}.`,
-      "Context refresh pending on the next LLM turn — run acm_timeline if official token % or sync status is unclear.",
+      "Context rebuild is now persistent: every subsequent LLM turn is rebuilt from the new branch until the next travel or session reload. Run acm_timeline if official token % or sync status is unclear.",
       estimatedUsagePreview
        ? `Pre-travel preview was ${estimatedPreviewText} est. — compare with post-travel estimate above.`
        : null,
@@ -1155,9 +1155,13 @@ export default function(pi: ExtensionAPI): void {
   },
  });
 
- // ── Event: context → one-shot message rebuild after travel ─────────────
- // After branchWithSummary, agent.messages is stale until the next context event.
- // Rebuild once from buildSessionContext(), then let normal session growth proceed.
+ // ── Event: context → persistent message rebuild after travel ─────────
+ // After branchWithSummary, agent.state.messages stays stale — the extension
+ // has no access to agent.replaceMessages (OMP core calls it after every tree
+ // mutation; extensions don't). So rebuild from buildSessionContext() on EVERY
+ // context event while a travel is active, so every LLM turn sees the new
+ // branch. Pending is cleared only on session_start/shutdown or after repeated
+ // rebuild failures (falls back to event.messages as a degraded mode).
  pi.on("context", (event, ctx: ExtensionContext) => {
   const sm = ctx.sessionManager;
   if (!contextRefresh.isPending(sm)) return;
@@ -1175,7 +1179,6 @@ export default function(pi: ExtensionAPI): void {
     );
     return { messages: event.messages };
    }
-   contextRefresh.markSuccess(sm);
    return { messages: messages as typeof event.messages };
   } catch (e) {
    const message = e instanceof Error ? e.message : String(e);
