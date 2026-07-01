@@ -34,6 +34,7 @@ import {
  resolveTimelineMode,
  type MeaningfulResolveResult,
  type LabelMaps,
+ type UsageLike,
 } from "./lib.js";
 
 /** Content part types that can appear in assistant message arrays. */
@@ -642,6 +643,8 @@ export default function(pi: ExtensionAPI): void {
  const zod = pi.zod;
  /** Per-extension-instance refresh state (avoids cross-instance sharing on hot reload). */
  const contextRefresh = new ContextRefreshRegistry();
+ /** Accurate token cache from turn_end — keyed by session manager for per-session isolation. */
+ const cachedUsageMap = new WeakMap<object, UsageLike>();
 
  // ── Tool: acm_checkpoint ───────────────────────────────────
  const checkpointSchema = zod.object({
@@ -948,8 +951,9 @@ export default function(pi: ExtensionAPI): void {
    }
 
    // ── Context Dashboard HUD ──
-   const usage = ctx.getContextUsage();
-   const usageStr = formatContextUsage(usage, true);
+   const officialUsage = ctx.getContextUsage();
+   const officialStr = formatContextUsage(officialUsage, true);
+   const lastLlmStr = cachedUsageMap.has(sm) ? formatContextUsage(cachedUsageMap.get(sm), true) : "N/A";
 
    let stepsSinceCheckpoint = 0;
    let nearestCheckpointName: string | null = null;
@@ -970,7 +974,8 @@ export default function(pi: ExtensionAPI): void {
    const refreshPending = contextRefresh.isPending(sm);
    const hudParts = [
     `[Context Dashboard]`,
-    `• Context Usage:    ${usageStr}`,
+    `• Context Usage:    ${officialStr} (official)`,
+    `• Last LLM Prompt:  ${lastLlmStr} (turn_end)`,
     `• Active Path:      ${branch.length} node(s) — LLM context follows this spine`,
     `• Off-path Summaries: ${offPathForks} branch point(s) with abandoned summaries`,
     `• Segment Size:     ${stepsSinceCheckpoint} steps since last checkpoint '${nearestCheckpointName ?? "None"}'`,
@@ -995,7 +1000,7 @@ export default function(pi: ExtensionAPI): void {
    return {
     content: [{ type: "text" as const, text: hud + "\n" + (lines.join("\n") || "(Root Path Only)") }],
     details: {
-     contextUsage: usage ? { percent: usage.percent, tokens: usage.tokens, contextWindow: usage.contextWindow } : null,
+     contextUsage: officialUsage ? { percent: officialUsage.percent, tokens: officialUsage.tokens, contextWindow: officialUsage.contextWindow } : null,
      leafId: currentLeafId,
      nearestCheckpoint: nearestCheckpointName,
      stepsSinceCheckpoint,
@@ -1300,13 +1305,50 @@ export default function(pi: ExtensionAPI): void {
   }
  });
 
+ // ── Event: turn_end → cache accurate token usage ─────────────
+ pi.on("turn_end", (event, ctx: ExtensionContext) => {
+  const msg = event.message;
+  if (msg.role !== "assistant") return;
+  const usage = msg.usage;
+  if (!usage) return;
+  const promptTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0);
+  const officialUsage = ctx.getContextUsage();
+  const contextWindow = officialUsage?.contextWindow;
+  if (typeof contextWindow === "number" && contextWindow > 0) {
+   cachedUsageMap.set(ctx.sessionManager, { tokens: promptTokens, contextWindow, percent: (promptTokens / contextWindow) * 100 });
+  }
+ });
+
+ // ── Event: session_before_compact → auto checkpoint ──────────
+ pi.on("session_before_compact", (event, ctx: ExtensionContext) => {
+ const sm = ctx.sessionManager;
+ const branch = sm.getBranch();
+ if (branch.length === 0) return;
+ const labelMaps = buildLabelMaps(sm.getEntries());
+ const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+ const checkpointName = `pre-compact-${ts}`;
+ const resolve = findLastMeaningfulEntry(branch, sm, event.signal);
+ if (!resolve.entryId) return;
+ const priorLabels = getEntryLabels(labelMaps, resolve.entryId);
+ if (priorLabels.includes(checkpointName)) return;
+ setEntryLabel(sm, resolve.entryId, checkpointName);
+ });
+
+ // ── Event: session_compact → sync refresh state ──────────────
+ pi.on("session_compact", (_event, ctx: ExtensionContext) => {
+  contextRefresh.clear(ctx.sessionManager);
+  cachedUsageMap.delete(ctx.sessionManager);
+ });
+
  // ── Session lifecycle: clear stale state ───────────────────
  pi.on("session_start", (_event, ctx: ExtensionContext) => {
   contextRefresh.clear(ctx.sessionManager);
+  cachedUsageMap.delete(ctx.sessionManager);
  });
 
  pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
   contextRefresh.clear(ctx.sessionManager);
+  cachedUsageMap.delete(ctx.sessionManager);
  });
 
 }
