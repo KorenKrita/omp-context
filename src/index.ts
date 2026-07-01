@@ -8,6 +8,7 @@ import type {
  SessionTreeNode,
 } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import type { TextContent, ImageContent, ToolCall, TSchema, ThinkingContent, RedactedThinkingContent } from "@oh-my-pi/pi-ai/types";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import {
  ACM_INTERNAL_TOOLS as INTERNAL_TOOLS,
  buildLabelMaps,
@@ -528,6 +529,111 @@ function formatTreeSearchResults(
   lines.push(`${isHead ? "*" : " "} ${m.node.entry.id}${meta} [${role}] ${body}`);
  }
  return lines;
+}
+
+// ── Post-processing: fix orphaned tool_use after travel ────────
+
+// After branchWithSummary, the rebuilt message array may have an assistant
+// message with tool_use blocks whose tool_results are on the abandoned branch.
+// The LLM API requires every tool_use to have a corresponding tool_result in
+// the immediately following message. This function injects synthetic tool_result
+// messages for any orphaned tool_use blocks.
+/** Type guard: detect a ToolCall content block in an unknown array element. */
+function isToolCallBlock(block: unknown): block is ToolCall {
+ return (
+  typeof block === "object" &&
+  block !== null &&
+  "type" in block &&
+  block.type === "toolCall" &&
+  "id" in block &&
+  "name" in block
+ );
+}
+
+function fixOrphanedToolUse(messages: AgentMessage[]): AgentMessage[] {
+ const result = [...messages];
+
+ // Pass 1: Remove orphaned toolResult messages (toolResult references a
+ // toolCallId not present in the preceding assistant message's tool_use blocks).
+ for (let i = result.length - 1; i >= 0; i--) {
+  const msg = result[i];
+  if (msg.role !== "toolResult") continue;
+  const toolCallId = msg.toolCallId;
+  if (!toolCallId) {
+   // A toolResult without toolCallId is invalid — remove it.
+   result.splice(i, 1);
+   continue;
+  }
+
+  let handled = false;
+  for (let j = i - 1; j >= 0; j--) {
+   const prev = result[j];
+   if (prev.role === "assistant" && Array.isArray(prev.content)) {
+    const hasMatch = prev.content.some(
+     (block: unknown) => isToolCallBlock(block) && block.id === toolCallId,
+    );
+    if (!hasMatch) {
+     result.splice(i, 1);
+    }
+    handled = true;
+    break;
+   } else if (prev.role === "toolResult") {
+    continue;
+   } else {
+    result.splice(i, 1);
+    handled = true;
+    break;
+   }
+  }
+  // Inner loop exhausted without finding assistant or non-toolResult — orphaned.
+  if (!handled) {
+   result.splice(i, 1);
+  }
+ }
+
+ // Pass 2: Inject synthetic toolResults for orphaned tool_use blocks
+ // (assistant has tool_use but no subsequent toolResult with matching ID).
+ for (let i = 0; i < result.length; i++) {
+  const msg = result[i];
+  if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+
+  const toolUseIds: { id: string; name: string }[] = [];
+  for (const block of msg.content as unknown[]) {
+   if (isToolCallBlock(block)) {
+    if (block.id) toolUseIds.push({ id: block.id, name: block.name });
+   }
+  }
+  if (toolUseIds.length === 0) continue;
+
+  const resolvedIds = new Set<string>();
+  for (let j = i + 1; j < result.length; j++) {
+   const tr = result[j];
+   if (tr.role === "toolResult") {
+    if (tr.toolCallId) resolvedIds.add(tr.toolCallId);
+   } else {
+    break;
+   }
+  }
+
+  const orphaned = toolUseIds.filter((t) => !resolvedIds.has(t.id));
+  if (orphaned.length === 0) continue;
+
+  const synthetics: AgentMessage[] = orphaned.map((t) => ({
+   role: "toolResult" as const,
+   toolCallId: t.id,
+   toolName: t.name,
+   content: [{ type: "text" as const, text: "[Interrupted by context travel]" }],
+   timestamp: Date.now(),
+   isError: true,
+  }));
+
+  // Insert synthetics immediately after the assistant message. LLM APIs
+  // match tool_result to tool_use by toolCallId, not by position.
+  result.splice(i + 1, 0, ...synthetics);
+  i += synthetics.length;
+ }
+
+ return result;
 }
 
 // ── Extension factory ─────────────────────────────────────────
@@ -1179,7 +1285,8 @@ export default function(pi: ExtensionAPI): void {
     );
     return { messages: event.messages };
    }
-   return { messages: messages as typeof event.messages };
+   const fixed = fixOrphanedToolUse(messages);
+   return { messages: fixed as typeof event.messages };
   } catch (e) {
    const message = e instanceof Error ? e.message : String(e);
    const willRetry = contextRefresh.recordFailedAttempt(sm, message);
