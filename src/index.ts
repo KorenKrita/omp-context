@@ -854,7 +854,7 @@ export default function(pi: ExtensionAPI): void {
      const targetMessages = getBuildSessionMessages(sm, cp.entryId);
      const estimated = estimateUsageAfterMessageChange(usage, currentMessages, targetMessages);
      const estPart = estimated
-      ? `~${targetMessages.length} msgs, ~${formatContextUsage(estimated, true)} est. (target path only; travel summary not included)`
+      ? `~${targetMessages.length} msgs, ~${formatContextUsage(estimated, true)} est. (+summary)`
       : `~${targetMessages.length} msgs`;
      lines.push(`  ${cp.label} → ${cp.entryId} (${pathTag}${headTag}) ${estPart}`);
     }
@@ -878,10 +878,11 @@ export default function(pi: ExtensionAPI): void {
     }
     if (lines.length >= 200) treeTruncated = true;
     if (treeTruncated) {
-     lines.push("... (tree truncated by depth/line limit — use list_checkpoints: true or search: \"name\") ...");
+     lines.unshift("⚠ tree truncated by depth/line limit — use list_checkpoints or search to see hidden nodes");
     }
    } else {
     const sequence: SessionEntry[] = [...branch];
+    if (params.search !== undefined && searchTerm === "") lines.push("query is empty; showing active path");
 
     const contentCache = new Map<string, string>();
     for (const e of sequence) {
@@ -988,7 +989,8 @@ export default function(pi: ExtensionAPI): void {
     const retrySuffix = attempt > 0
      ? ` (retry ${attempt}/${ContextRefreshRegistry.MAX_ATTEMPTS})`
      : "";
-    hudParts.push(`• Context Sync:     persistent rebuild active (travel pending)${retrySuffix}`);
+    const pendingSuffix = contextRefresh.hasRebuilt(sm) ? "" : " (travel pending)";
+    hudParts.push(`• Context Sync:     persistent rebuild active${pendingSuffix}${retrySuffix}`);
    }
    if (!listCheckpoints && !useFullTree) {
     hudParts.push(`• Tip:              large trees → list_checkpoints or search before full_tree`);
@@ -1291,6 +1293,7 @@ export default function(pi: ExtensionAPI): void {
     return { messages: event.messages };
    }
    const fixed = fixOrphanedToolUse(messages);
+   contextRefresh.markRebuilt(sm);
    return { messages: fixed as typeof event.messages };
   } catch (e) {
    const message = e instanceof Error ? e.message : String(e);

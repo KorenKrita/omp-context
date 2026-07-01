@@ -66,11 +66,13 @@ export class ContextRefreshRegistry {
  private pending = new WeakSet<object>();
  private failures = new WeakMap<object, string>();
  private attempts = new WeakMap<object, number>();
+ private rebuilt = new WeakSet<object>();
 
  markPending(sm: object): void {
   this.pending.add(sm);
   this.failures.delete(sm);
   this.attempts.set(sm, 0);
+  this.rebuilt.delete(sm);
  }
 
  isPending(sm: object): boolean {
@@ -113,6 +115,15 @@ export class ContextRefreshRegistry {
   this.pending.delete(sm);
   this.failures.delete(sm);
   this.attempts.delete(sm);
+  this.rebuilt.delete(sm);
+ }
+
+ markRebuilt(sm: object): void {
+  this.rebuilt.add(sm);
+ }
+
+ hasRebuilt(sm: object): boolean {
+  return this.rebuilt.has(sm);
  }
 }
 
