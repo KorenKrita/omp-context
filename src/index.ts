@@ -645,6 +645,7 @@ export default function(pi: ExtensionAPI): void {
  const contextRefresh = new ContextRefreshRegistry();
  /** Accurate token cache from turn_end — keyed by session manager for per-session isolation. */
  const cachedUsageMap = new WeakMap<object, UsageLike>();
+ const registerTool = (tool: Parameters<ExtensionAPI["registerTool"]>[0] & { strict?: boolean }) => pi.registerTool(tool);
 
  // ── Tool: acm_checkpoint ───────────────────────────────────
  const checkpointSchema = zod.object({
@@ -656,12 +657,13 @@ export default function(pi: ExtensionAPI): void {
   ),
  });
 
- pi.registerTool({
+ registerTool({
   name: "acm_checkpoint",
   label: "ACM Checkpoint",
   description:
    "Create a named anchor on a conversation history node. Zero cost: no branch, no summary, no context change — just a label you can travel back to later. The same node may hold multiple checkpoint aliases; each name must be unique across the session tree. Create checkpoints liberally before noisy work, at phase boundaries, before risky attempts, and after milestones. More checkpoints = more travel target options later.",
   parameters: checkpointSchema as unknown as TSchema,
+  strict: false,
   async execute(
    _id: string,
    rawParams: unknown,
@@ -807,12 +809,13 @@ export default function(pi: ExtensionAPI): void {
   ),
  });
 
- pi.registerTool({
+ registerTool({
   name: "acm_timeline",
   label: "ACM Timeline",
   description:
    "Inspect the conversation tree: active path (default), full tree, checkpoint catalog, or global search. Default shows the active path spine; search scans the entire tree including off-path branches.",
   parameters: timelineSchema as unknown as TSchema,
+  strict: false,
   async execute(
    _id: string,
    rawParams: unknown,
@@ -1035,12 +1038,13 @@ export default function(pi: ExtensionAPI): void {
   ),
  });
 
- pi.registerTool({
+ registerTool({
   name: "acm_travel",
   label: "ACM Travel",
   description:
    "Travel on the conversation timeline to any checkpoint or node (name, node ID, or 'root'). The target becomes the branch point; your summary replaces only the path after it. Context may shrink (travel to an earlier anchor before noisy work) or grow (travel to a later/off-path anchor that still carries raw history). The old path is preserved as an off-path branch. Executes synchronously; verify with acm_timeline. Changes conversation history only — not disk files or external systems.",
   parameters: travelSchema as unknown as TSchema,
+  strict: false,
   async execute(
    _id: string,
    rawParams: unknown,
