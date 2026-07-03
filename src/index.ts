@@ -1302,6 +1302,7 @@ export default function(pi: ExtensionAPI): void {
        : null,
       "Estimates use buildSessionContext + token model; official % confirms on the next LLM context event or acm_timeline.",
       "Note: the branch summary entry is appended synchronously and may appear before this tool call in the session log.",
+      "Continue from the handoff summary and anchor the new phase with acm_checkpoint as you proceed.",
      ].filter((line): line is string => line !== null).join("\n"),
     }],
     details: {
