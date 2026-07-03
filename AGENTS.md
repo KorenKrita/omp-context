@@ -53,6 +53,8 @@ checkpoint / `backupCurrentHeadAs` **名称**在整棵树内必须唯一且**大
 
 `target: "root"` 解析为 **第一个 top-level 节点**；多根会话会 notify，优先用显式 checkpoint 名或节点 ID。
 
+`acm_checkpoint` 的成功 tool result 会附带当前 context usage 和阈值提示（≥40% 建议在下个 phase boundary travel，≥70% 建议尽快 travel），让 agent 在正常工作流中被动看到自己的上下文占用，无需主动调 `acm_timeline`。三个工具的 description 也内嵌了主动触发规则（何时 checkpoint / travel / timeline），因为 tool description 是唯一常驻模型上下文的表面。
+
 `acm_travel` 的 `backupCurrentHeadAs` 同样落在最近有意义的 USER/AI 消息上，而不是 raw HEAD（避免 backup 打在 `acm_timeline` 等 tool result 上）。若从 HEAD 回退，tool result 会写明 `backup@entryId (resolved from HEAD …)`。若 backup 已写入但 `branchWithSummary` 失败，extension 会 **best-effort 回滚** backup label；回滚失败时 error/details 会注明 label 仍留在树上。
 
 ### timeline 是会话树结构视图
@@ -162,8 +164,8 @@ Node16 moduleResolution 下需要从 OMP 子路径导入类型：
 | `src/index.ts` | 三个工具注册、checkpoint label、timeline 渲染、同步 travel、context refresh |
 | `src/lib.ts` | 可单测的纯逻辑（label maps、resolve、usage 估算、meaningful entry、timeline 模式） |
 | `src/lib.test.ts` | `lib.ts` 单元测试 |
-| `skills/context-management/SKILL.md` | 驱动 agent 使用 checkpoint/timeline/travel 的 prompt |
-| `skills/context-management/references/` | 场景化上下文管理参考 |
+| `skills/context-management/SKILL.md` | 驱动 agent 使用 checkpoint/timeline/travel 的 prompt（反射表 + 40%/70% 阈值驱动） |
+| `skills/context-management/references/playbook.md` | 单文件场景 playbook（research / dev / plan / batch / retry / switch / async） |
 | `README.md` | 面向用户的安装和功能说明 |
 | `.omp-plugin/marketplace.json` | marketplace 元数据 |
 
