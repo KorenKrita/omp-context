@@ -682,7 +682,7 @@ export default function(pi: ExtensionAPI): void {
  // ── Tool: acm_checkpoint ───────────────────────────────────
  const checkpointSchema = zod.object({
   name: zod.string().min(1).max(64).regex(/^[\w\-\.]+$/).describe(
-   "Unique semantic anchor name encoding task+phase, e.g. parser-fix-start, timeout-investigation-search. Avoid generic names like start, checkpoint-1. Only letters, digits, hyphens, underscores, and dots. Max 64 chars.",
+   "Unique semantic anchor name encoding task+phase. Suffix carries meaning: '<name>-start' = future fold target (you will travel back here when the phase ends), '<name>-done' = recovery bookmark on finished work (never a fold target). E.g. parser-fix-start, timeout-investigation-start, cache-migration-done. Avoid generic names like start, checkpoint-1. Only letters, digits, hyphens, underscores, and dots. Max 64 chars.",
   ),
   target: zod.string().min(1).optional().describe(
    "History node ID or checkpoint name to label. Defaults to current meaningful position near HEAD.",
@@ -693,7 +693,7 @@ export default function(pi: ExtensionAPI): void {
   name: "acm_checkpoint",
   label: "ACM Checkpoint",
   description:
-   "Create a named anchor on a conversation history node. Zero cost: no branch, no summary, no context change — just a label you can travel back to later. Call constantly, without being asked: at task start, at each new user request, before each phase's first action, before risky steps, and after milestones. When unsure, checkpoint — it is free. Names must be unique across the session tree; the same node may hold multiple aliases. The result reports current context usage and a fold preview showing what traveling back to the previous anchor would leave.",
+   "Create a named anchor on a conversation history node. Zero cost: no branch, no summary, no context change — just a label you can travel back to later. Call at every one of these events, without being asked: task start, each new user request, before each phase's first action ('<phase>-start' — a promise to fold back there when the phase ends), before risky steps, after milestones ('<milestone>-done' — a recovery bookmark, never a fold target). When unsure, checkpoint — it is free. Names must be unique across the session tree; the same node may hold multiple aliases. The result reports current context usage and a fold preview showing what traveling back to the previous anchor would leave — react to it.",
   parameters: checkpointSchema as unknown as TSchema,
   async execute(
    _id: string,
@@ -822,7 +822,7 @@ export default function(pi: ExtensionAPI): void {
     const targetMessages = getBuildSessionMessages(sm, prevAnchorEntryId);
     estimatedAtPrevAnchor = estimateUsageAfterMessageChange(usage, currentMessages, targetMessages);
     if (estimatedAtPrevAnchor) {
-     foldPreview = ` Fold preview: acm_travel to previous anchor '${prevAnchorLabel}' would leave ~${formatContextUsage(estimatedAtPrevAnchor, true)} est. (+summary). Fold whenever the trail since an anchor is mostly dead weight — worthwhile at any usage level.`;
+     foldPreview = ` Fold preview: traveling to previous anchor '${prevAnchorLabel}' would leave ~${formatContextUsage(estimatedAtPrevAnchor, true)} est. (+summary). If the work since '${prevAnchorLabel}' is finished — conclusion written, attempt judged, item done — fold now: acm_travel({ target: "${prevAnchorLabel}", summary: <filled template> }). Skip only if the preview shows almost no saving.`;
     }
    }
    const usageSuffix = ` Context usage: ${usageText}.${foldPreview}`;
@@ -1033,8 +1033,8 @@ export default function(pi: ExtensionAPI): void {
 
    const travelCue =
     nearestCheckpointName === null
-     ? "create a checkpoint before the next noisy phase"
-     : `if this segment has produced a stable result and another phase remains, travel to '${nearestCheckpointName}' with a handoff summary before continuing`;
+     ? "no anchor on this path yet — checkpoint before the next phase's first action"
+     : `if the work since '${nearestCheckpointName}' is finished (conclusion written, attempt judged, item done), fold now: acm_travel({ target: "${nearestCheckpointName}", summary: <filled template> })`;
    const refreshFailure = contextRefresh.getFailure(sm);
    const refreshPending = contextRefresh.isPending(sm);
    const hudParts = [
@@ -1092,7 +1092,7 @@ export default function(pi: ExtensionAPI): void {
    "Checkpoint name, history node ID, or 'root'. Use acm_timeline with full_tree or search to see all available targets.",
   ),
   summary: zod.string().min(1).max(10000).describe(
-   "Handoff state summary: current task/state, decisions/constraints, external side effects (changed files, processes, remote state), validation status, source anchors, and explicit next step. This is NOT a recap—it's the state needed to resume. Max 10000 chars.",
+   "Handoff summary — your only memory after the travel. Fill every slot, write 'none' rather than dropping one: Task (goal; quote a triggering new user request verbatim), Done (conclusions with key numbers/errors/IDs), Files/External (disk/process/remote side effects — travel does NOT undo them), Do not repeat (judged dead ends), Recover raw via (backup or checkpoint name on the path being left), NEXT (the single action to take after landing). Pointers over dumps. Max 10000 chars.",
   ),
   backupCurrentHeadAs: zod.string().min(1).max(64).regex(/^[\w\-\.]+$/).optional().describe(
    "Optional checkpoint name for the current HEAD before traveling. Recovery pointer only; summary must still be self-contained. Not the travel target.",
@@ -1103,7 +1103,7 @@ export default function(pi: ExtensionAPI): void {
   name: "acm_travel",
   label: "ACM Travel",
   description:
-   "Travel on the conversation timeline to any checkpoint or node (name, node ID, or 'root'). The target becomes the branch point; your summary replaces only the path after it. Call on your own judgment whenever folding the trail behind you is worth it: a phase produced a stable result, an approach failed, a task switch, or the segment since an anchor is mostly dead weight. Benefit decides, not usage level — shedding 13% down to 5% is worth doing. Context may shrink (earlier anchor before noisy work) or grow (later/off-path anchor carrying raw history). The old path is preserved as an off-path branch. Changes conversation history only — not disk files or external systems.",
+   "Travel on the conversation timeline to any checkpoint or node (name, node ID, or 'root'). The target becomes the branch point; your summary replaces only the path after it. Folding is the DEFAULT action at these moments — call without being asked: (1) a phase produced its conclusion and the next step acts on it (fold before the next phase's first action, do not wait for a new user message); (2) an attempt failed and you switch approach; (3) a batch item finished and more remain; (4) a new user message starts work unrelated to a finished task (fold first, quote the new request verbatim in the summary). Skip only when the fold preview shows almost no saving. Folding is safe: the old path is preserved off-path forever and forward travel recovers it. Context may shrink (earlier anchor) or grow (later/off-path anchor restoring raw history). Changes conversation history only — not disk files or external systems.",
   parameters: travelSchema as unknown as TSchema,
   async execute(
    _id: string,
@@ -1302,7 +1302,7 @@ export default function(pi: ExtensionAPI): void {
        : null,
       "Estimates use buildSessionContext + token model; official % confirms on the next LLM context event or acm_timeline.",
       "Note: the branch summary entry is appended synchronously and may appear before this tool call in the session log.",
-      "Continue from the handoff summary and anchor the new phase with acm_checkpoint as you proceed.",
+      "Execute the summary's NEXT step and checkpoint the new phase ('<phase>-start') as you proceed.",
      ].filter((line): line is string => line !== null).join("\n"),
     }],
     details: {
