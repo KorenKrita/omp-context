@@ -9,10 +9,13 @@ import {
  estimateUsageAfterMessageChange,
  estimateUsageAtTravelTarget,
  findLastMeaningfulEntry,
+ formatBoundaryTravelCue,
+ formatFoldCandidatePreview,
  getMeaningfulSkipReason,
  resolveTargetId,
  resolveTimelineMode,
  isValidEntryId,
+ HANDOFF_SLOT_HINT,
  type UsageLike,
 } from "./lib.js";
 
@@ -192,6 +195,35 @@ describe("estimateUsageAtTravelTarget", () => {
   const withSummary = estimateUsageAtTravelTarget(usageBefore, current, target, "handoff summary");
   const withoutSummary = estimateUsageAfterMessageChange(usageBefore, current, target);
   expect(withSummary?.tokens).toBeGreaterThan(withoutSummary?.tokens ?? 0);
+ });
+});
+
+describe("runtime guidance text", () => {
+ test("fold preview presents candidates and boundary selection", () => {
+  const text = formatFoldCandidatePreview([
+   "nearest anchor 'phase-start' → phase/burst candidate ~5.0% est.",
+   "earliest on-path -start 'task-start' → possible task-chain candidate ~3.0% est.",
+  ]);
+  expect(text).toContain("Fold candidates (+handoff)");
+  expect(text).toContain("candidate");
+  expect(text).toContain("Choose by boundary, not proximity");
+  expect(text).toContain("semantic chain");
+ });
+
+ test("timeline cue names boundary before target", () => {
+  expect(formatBoundaryTravelCue(null)).toContain("name the boundary first");
+  const cue = formatBoundaryTravelCue("phase-start");
+  expect(cue).toContain("candidate target");
+  expect(cue).toContain("phase start");
+  expect(cue).toContain("pre-burst node");
+  expect(cue).toContain("attempt start");
+  expect(cue).toContain("method anchor");
+  expect(cue).toContain("semantic chain start");
+  expect(cue).toContain("Boundary Playbook");
+ });
+
+ test("handoff slot hint uses executable-state vocabulary", () => {
+  expect(HANDOFF_SLOT_HINT).toBe("Goal/State/Evidence/External/Exclusions/Recover/NEXT");
  });
 });
 
