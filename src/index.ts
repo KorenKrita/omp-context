@@ -693,7 +693,7 @@ export default function(pi: ExtensionAPI): void {
   name: "acm_checkpoint",
   label: "ACM Checkpoint",
   description:
-   "Create a named anchor on a conversation history node. Zero cost: no branch, no summary, no context change — just a label you can travel back to later. The same node may hold multiple checkpoint aliases; each name must be unique across the session tree. Create checkpoints liberally before noisy work, at phase boundaries, before risky attempts, and after milestones. More checkpoints = more travel target options later.",
+   "Create a named anchor on a conversation history node. Zero cost: no branch, no summary, no context change — just a label you can travel back to later. Call proactively, without being asked: at the start of any multi-step task, at each phase boundary, and before risky attempts — about one checkpoint per phase. Names must be unique across the session tree; the same node may hold multiple aliases. The result reports current context usage: above 40%, plan an acm_travel at the next phase boundary; above 70%, travel at the next stable point.",
   parameters: checkpointSchema as unknown as TSchema,
   async execute(
    _id: string,
@@ -858,7 +858,7 @@ export default function(pi: ExtensionAPI): void {
   name: "acm_timeline",
   label: "ACM Timeline",
   description:
-   "Inspect the conversation tree: active path (default), full tree, checkpoint catalog, or global search. Default shows the active path spine; search scans the entire tree including off-path branches.",
+   "Inspect the conversation tree: active path (default), full tree, checkpoint catalog, or global search. Default shows the active path spine; search scans the entire tree including off-path branches. Call when choosing a travel target, when orientation is unclear, or to check context usage — the HUD reports official token % and a travel cue. On large trees prefer list_checkpoints or search over full_tree.",
   parameters: timelineSchema as unknown as TSchema,
   async execute(
    _id: string,
@@ -1086,7 +1086,7 @@ export default function(pi: ExtensionAPI): void {
   name: "acm_travel",
   label: "ACM Travel",
   description:
-   "Travel on the conversation timeline to any checkpoint or node (name, node ID, or 'root'). The target becomes the branch point; your summary replaces only the path after it. Context may shrink (travel to an earlier anchor before noisy work) or grow (travel to a later/off-path anchor that still carries raw history). The old path is preserved as an off-path branch. Executes synchronously; verify with acm_timeline. Changes conversation history only — not disk files or external systems.",
+   "Travel on the conversation timeline to any checkpoint or node (name, node ID, or 'root'). The target becomes the branch point; your summary replaces only the path after it. Call on your own judgment when a phase has produced a stable result and more work remains, when an approach failed, when a new task follows a noisy completed one, or when context usage passes 70% — folding noisy history into a handoff summary is routine, not exceptional. Context may shrink (earlier anchor before noisy work) or grow (later/off-path anchor carrying raw history). The old path is preserved as an off-path branch. Changes conversation history only — not disk files or external systems.",
   parameters: travelSchema as unknown as TSchema,
   async execute(
    _id: string,
