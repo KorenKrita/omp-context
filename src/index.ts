@@ -646,6 +646,39 @@ export default function(pi: ExtensionAPI): void {
  /** Accurate token cache from turn_end — keyed by session manager for per-session isolation. */
  const cachedUsageMap = new WeakMap<object, UsageLike>();
 
+ const acmToolNames = new Set(["acm_checkpoint", "acm_timeline", "acm_travel"]);
+ pi.on("before_provider_request", (event) => {
+  const payload = event.payload;
+  if (!payload || typeof payload !== "object") return undefined;
+  const record = payload as Record<string, unknown>;
+  if (!Array.isArray(record.tools)) return undefined;
+
+  let changed = false;
+  const tools = record.tools.map((tool) => {
+   if (!tool || typeof tool !== "object") return tool;
+   const toolRecord = tool as Record<string, unknown>;
+
+   if (toolRecord.type === "function" && typeof toolRecord.name === "string" && acmToolNames.has(toolRecord.name)) {
+    changed = true;
+    return { ...toolRecord, strict: false };
+   }
+
+   const fn = toolRecord.function;
+   if (toolRecord.type === "function" && fn && typeof fn === "object") {
+    const fnRecord = fn as Record<string, unknown>;
+    if (typeof fnRecord.name === "string" && acmToolNames.has(fnRecord.name)) {
+     changed = true;
+     return { ...toolRecord, function: { ...fnRecord, strict: false } };
+    }
+   }
+
+   return tool;
+  });
+
+  if (!changed) return undefined;
+  return { ...record, tools };
+ });
+
  // ── Tool: acm_checkpoint ───────────────────────────────────
  const checkpointSchema = zod.object({
   name: zod.string().min(1).max(64).regex(/^[\w\-\.]+$/).describe(
