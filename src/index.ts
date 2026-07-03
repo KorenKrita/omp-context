@@ -798,19 +798,34 @@ export default function(pi: ExtensionAPI): void {
 
    const aliasSuffix = priorLabels.length > 0 ? ` Added alias alongside: ${priorLabels.join(", ")}.` : "";
    const explicitRole = targetEntry ? getMessageRoleLabel(targetEntry) : "NODE";
-   // Push context usage into every checkpoint result so the agent sees its
-   // fill level during normal work, without having to call acm_timeline.
+   // Push context usage plus a fold preview into every checkpoint result,
+   // so the agent sees its fill level and the concrete benefit of folding
+   // to the previous anchor during normal work, without calling acm_timeline.
    const usage = ctx.getContextUsage();
    const usageText = formatContextUsage(usage, true);
-   let usageCue = "";
-   if (typeof usage?.percent === "number") {
-    if (usage.percent >= 70) {
-     usageCue = " High usage — travel to a clean anchor with a handoff summary at the next stable point.";
-    } else if (usage.percent >= 40) {
-     usageCue = " Plan an acm_travel back to an anchor at the next phase boundary.";
+   let prevAnchorLabel: string | null = null;
+   let prevAnchorEntryId: string | null = null;
+   for (let i = branch.length - 1; i >= 0; i--) {
+    const eid = branch[i].id;
+    if (eid === id) continue;
+    const labels = getEntryLabels(labelMaps, eid);
+    if (labels.length > 0) {
+     prevAnchorLabel = labels[labels.length - 1];
+     prevAnchorEntryId = eid;
+     break;
     }
    }
-   const usageSuffix = ` Context usage: ${usageText}.${usageCue}`;
+   let foldPreview = "";
+   let estimatedAtPrevAnchor: UsageLike | undefined;
+   if (prevAnchorEntryId && prevAnchorLabel && usage) {
+    const currentMessages = getBuildSessionMessages(sm);
+    const targetMessages = getBuildSessionMessages(sm, prevAnchorEntryId);
+    estimatedAtPrevAnchor = estimateUsageAfterMessageChange(usage, currentMessages, targetMessages);
+    if (estimatedAtPrevAnchor) {
+     foldPreview = ` Fold preview: acm_travel to previous anchor '${prevAnchorLabel}' would leave ~${formatContextUsage(estimatedAtPrevAnchor, true)} est. (+summary). Fold whenever the trail since an anchor is mostly dead weight — worthwhile at any usage level.`;
+    }
+   }
+   const usageSuffix = ` Context usage: ${usageText}.${foldPreview}`;
    return {
     content: [{
      type: "text" as const,
@@ -824,6 +839,8 @@ export default function(pi: ExtensionAPI): void {
      aliases: [...priorLabels, params.name],
      target: params.target ?? "auto",
      contextUsage: usage ? { percent: usage.percent, tokens: usage.tokens, contextWindow: usage.contextWindow } : null,
+     previousAnchor: prevAnchorLabel,
+     estimatedUsageAtPreviousAnchor: estimatedAtPrevAnchor ? formatContextUsage(estimatedAtPrevAnchor, true) : null,
      autoResolved: autoResolved
       ? {
          role: autoResolved.role,
