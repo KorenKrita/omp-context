@@ -798,18 +798,32 @@ export default function(pi: ExtensionAPI): void {
 
    const aliasSuffix = priorLabels.length > 0 ? ` Added alias alongside: ${priorLabels.join(", ")}.` : "";
    const explicitRole = targetEntry ? getMessageRoleLabel(targetEntry) : "NODE";
+   // Push context usage into every checkpoint result so the agent sees its
+   // fill level during normal work, without having to call acm_timeline.
+   const usage = ctx.getContextUsage();
+   const usageText = formatContextUsage(usage, true);
+   let usageCue = "";
+   if (typeof usage?.percent === "number") {
+    if (usage.percent >= 70) {
+     usageCue = " High usage — travel to a clean anchor with a handoff summary at the next stable point.";
+    } else if (usage.percent >= 40) {
+     usageCue = " Plan an acm_travel back to an anchor at the next phase boundary.";
+    }
+   }
+   const usageSuffix = ` Context usage: ${usageText}.${usageCue}`;
    return {
     content: [{
      type: "text" as const,
      text: autoResolved
-      ? `Created checkpoint '${params.name}' at ${id} (${formatMeaningfulResolveSummary(autoResolved)}).${aliasSuffix}`
-      : `Created checkpoint '${params.name}' at ${id} (${explicitRole}${params.target ? `, target='${params.target}'` : ""}).${aliasSuffix}`,
+      ? `Created checkpoint '${params.name}' at ${id} (${formatMeaningfulResolveSummary(autoResolved)}).${aliasSuffix}${usageSuffix}`
+      : `Created checkpoint '${params.name}' at ${id} (${explicitRole}${params.target ? `, target='${params.target}'` : ""}).${aliasSuffix}${usageSuffix}`,
     }],
     details: {
      entryId: id,
      label: params.name,
      aliases: [...priorLabels, params.name],
      target: params.target ?? "auto",
+     contextUsage: usage ? { percent: usage.percent, tokens: usage.tokens, contextWindow: usage.contextWindow } : null,
      autoResolved: autoResolved
       ? {
          role: autoResolved.role,
