@@ -1,6 +1,18 @@
 # Scenario Playbook
 
-How the anchor → work → look → fold rhythm adapts to common task shapes. Anchor names below are examples; keep yours semantic (`<task>-<phase>`). All summaries must honor the summary contract in SKILL.md.
+## The universal procedure
+
+Every task, whatever its shape, decomposes into the same primitives: a **start**, one or more **phases**, occasional **risky steps**, occasional **failures**, periodic **stable points**, and sometimes a **switch** to other work. Context management attaches to those primitives, not to task categories:
+
+- **Anchor** every primitive you might return to: start, phase entry, pre-risk, post-milestone, pre-switch.
+- At every **stable point**, ask three questions:
+  1. What is my immediate next action?
+  2. What must stay raw for it — live intent, constraints, code/evidence I will inspect directly?
+  3. How much of the trail behind me is dead weight — distilled searches, diagnosed logs, judged attempts, finished sub-work?
+- If the answer to 3 is "most of it" and a summary can carry the answers to 1–2, **fold** to the anchor that leaves the smallest sufficient context. Benefit decides, not usage level.
+- Write the summary by the contract in SKILL.md: task state, external side effects, validation state, pointers not dumps, explicit next step.
+
+The sections below work this procedure through common shapes. They are illustrations, not a taxonomy — hybrid and novel tasks compose the same primitives, so when nothing below matches, apply the procedure directly.
 
 ## Research and heavy reading
 
@@ -48,7 +60,7 @@ Work anchored to an explicit plan, roadmap, or todo list that execution keeps re
 Many similar items (tickets, reviews, cases) processed with a reusable method.
 
 - Checkpoint the batch start; checkpoint again once the first item teaches a reusable method (`<batch>-method-clear`).
-- Default between-item move: fold to the method anchor after each item, carrying only the cumulative tally + method refinements. Item-specific reasoning should not accumulate across items.
+- Default between-item move: fold to the method anchor after each item, carrying only the cumulative tally + method refinements. Item-specific reasoning should not accumulate across items — these folds are worth taking even when usage is low.
 
 ```javascript
 acm_travel({
@@ -71,7 +83,7 @@ Side tasks, interruptions, new task after a noisy completed one, or a thread tha
 
 - Before switching away: checkpoint the paused mainline (`<task>-paused`) so you can return.
 - New user task after a noisy completed task: fold the old task first so the new task starts on a clean working set. This is the single most commonly missed fold.
-- Adopting context management late in an already-messy thread: run `acm_timeline` to find (or create) the best pre-noise anchor, then fold with a strong summary. It is never too late.
+- Adopting context management late in an already-messy thread: run `acm_timeline` to find the best pre-noise anchor (any node ID works, checkpointed or not), then fold with a strong summary. It is never too late.
 - Finished a task with no known continuation: answer and wait. Fold when the next message starts new work.
 
 ## Interleaved async fronts
@@ -89,3 +101,7 @@ Trigger: build exit status | Next: on success summarize validation; on failure i
 - When a delayed result returns: capture it into its front, decide whether it interrupts the current focus, park it if not.
 - Fold when switching fronts after a noisy phase, or when the middle of the thread is completed fronts. Interleaving makes recent anchors poor targets — an old anchor (even `root`) plus capsules for every live front is often the right fold.
 - Before a deep fold, answer: which front is active, which are parked (with pointers), which are done, and what is the immediate next action.
+
+## None of these fit?
+
+Return to the universal procedure at the top. Identify the primitives in your task — where it starts, where phases turn over, what is risky, where stable points land, what counts as a switch — and attach anchors and folds to those moments. The three questions at each stable point plus the summary contract are sufficient for any shape; the scenarios above are just pre-worked answers for frequent ones.
