@@ -646,6 +646,7 @@ export default function(pi: ExtensionAPI): void {
  const contextRefresh = new ContextRefreshRegistry();
  /** Accurate token cache from turn_end — keyed by session manager for per-session isolation. */
  const cachedUsageMap = new WeakMap<object, UsageLike>();
+ const registerTool = (tool: Parameters<ExtensionAPI["registerTool"]>[0] & { strict?: boolean }) => pi.registerTool(tool);
 
  // ── Tool: acm_checkpoint ───────────────────────────────────
  const checkpointSchema = zod.object({
@@ -657,12 +658,13 @@ export default function(pi: ExtensionAPI): void {
   ),
  });
 
- pi.registerTool({
+ registerTool({
   name: "acm_checkpoint",
   label: "ACM Checkpoint",
   description:
    "Create a recoverability anchor on a conversation node. Zero cost: no branch, no handoff, no context change. Checkpoint before task chains, phase starts, bursts whose output cannot be bounded, risky steps, and milestones. A checkpoint does not fold context; it makes a future boundary fold possible. Names are unique across the session tree; one node may hold multiple aliases. The result reports context usage and fold candidates — choose by boundary, not proximity.",
   parameters: checkpointSchema as unknown as TSchema,
+  strict: false,
   async execute(
    _id: string,
    rawParams: unknown,
@@ -880,12 +882,13 @@ export default function(pi: ExtensionAPI): void {
   ),
  });
 
- pi.registerTool({
+ registerTool({
   name: "acm_timeline",
   label: "ACM Timeline",
   description:
    "Inspect the conversation tree: active path (default), full tree, checkpoint catalog, or global search. Default shows the active path spine; search scans the entire tree including off-path branches. Call when choosing a travel target, when orientation is unclear, or to check context usage — list_checkpoints estimates what every anchor would leave after a fold. On large trees prefer list_checkpoints or search over full_tree.",
   parameters: timelineSchema as unknown as TSchema,
+  strict: false,
   async execute(
    _id: string,
    rawParams: unknown,
@@ -1105,12 +1108,13 @@ export default function(pi: ExtensionAPI): void {
   ),
  });
 
- pi.registerTool({
+ registerTool({
   name: "acm_travel",
   label: "ACM Travel",
   description:
    "Fold conversation history into a recoverable handoff by traveling to a checkpoint, node ID, or root. Use at stable boundaries: burst distilled, phase complete, direction failed, batch item done, task chain complete, or new request over finished work. Name the boundary first, choose a target before that boundary, and write a handoff with executable NEXT plus recovery pointers. Fold by boundary, not proximity. At task end, set backupCurrentHeadAs to '<task>-done', travel to the semantic task-chain start, then answer from the handoff. Travel changes conversation history only, not disk files or external systems.",
   parameters: travelSchema as unknown as TSchema,
+  strict: false,
   async execute(
    _id: string,
    rawParams: unknown,
