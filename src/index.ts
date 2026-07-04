@@ -73,8 +73,8 @@ function isCheckpointableMessage(entry: SessionEntry): boolean {
  return role === "user" || role === "assistant";
 }
 
-function describeEntrySnippet(entry: SessionEntry, sm: ReadonlySessionManager, maxLen = 60): string {
- const content = getMsgContent(entry, sm, false).replace(/\s+/g, " ").trim();
+function describeEntrySnippet(entry: SessionEntry, maxLen = 60): string {
+ const content = getMsgContent(entry, false).replace(/\s+/g, " ").trim();
  if (!content) return "";
  return content.length > maxLen ? `${content.slice(0, maxLen)}...` : content;
 }
@@ -95,14 +95,13 @@ function describeSkipReason(reason: ReturnType<typeof getMeaningfulSkipReason>, 
 
 function findLastMeaningfulEntry(
  branch: SessionEntry[],
- sm: ReadonlySessionManager,
  signal?: AbortSignal,
 ): MeaningfulResolveResult {
  return findLastMeaningfulEntryCore(
   branch,
   getMeaningfulSkipReason,
   getMessageRoleLabel,
-  (entry) => describeEntrySnippet(entry, sm),
+  (entry) => describeEntrySnippet(entry),
   signal,
  );
 }
@@ -207,7 +206,7 @@ function extractMessageText(content: unknown): string {
 }
 
 /** Extract a human-readable summary string from a session entry. */
-function getMsgContent(entry: SessionEntry, sm: ReadonlySessionManager, verbose: boolean): string {
+function getMsgContent(entry: SessionEntry, verbose: boolean): string {
  if (entry.type === "branch_summary" || entry.type === "compaction") {
   return entry.summary || "[No summary provided]";
  }
@@ -443,7 +442,7 @@ function renderTreeNode(
  if (entry.type === "compaction") metaParts.push(`firstKept: ${entry.firstKeptEntryId}`);
  if (isHead) metaParts.push("*HEAD*");
 
- const content = getMsgContent(entry, sm, false).replace(/\s+/g, " ");
+ const content = getMsgContent(entry, false).replace(/\s+/g, " ");
  const body = content.length > 50 ? content.slice(0, 50) + "..." : content;
  const connector = isLast ? "└─" : "├─";
  const meta = metaParts.length > 0 ? ` (${metaParts.join(", ")})` : "";
@@ -472,7 +471,6 @@ interface TreeSearchMatch {
 
 /** Full-tree search across all branches (active + off-path). */
 function searchFullSessionTree(
- sm: ReadonlySessionManager,
  tree: SessionTreeNode[],
  labelMaps: LabelMaps,
  searchTerm: string,
@@ -489,7 +487,7 @@ function searchFullSessionTree(
   const n = searchStack.pop()!;
   if (n.children?.length) pushTreeChildrenPreOrder(searchStack, n.children);
   const checkpointLabels = formatEntryLabels(labelMaps, n.entry.id) ?? "";
-  const content = getMsgContent(n.entry, sm, false);
+  const content = getMsgContent(n.entry, false);
   if (
    checkpointLabels.toLowerCase().includes(searchTerm) ||
    entryMatchesLabelSearch(labelMaps, n.entry.id, searchTerm) ||
@@ -649,39 +647,6 @@ export default function(pi: ExtensionAPI): void {
  /** Accurate token cache from turn_end — keyed by session manager for per-session isolation. */
  const cachedUsageMap = new WeakMap<object, UsageLike>();
 
- const acmToolNames = new Set(["acm_checkpoint", "acm_timeline", "acm_travel"]);
- pi.on("before_provider_request", (event) => {
-  const payload = event.payload;
-  if (!payload || typeof payload !== "object") return undefined;
-  const record = payload as Record<string, unknown>;
-  if (!Array.isArray(record.tools)) return undefined;
-
-  let changed = false;
-  const tools = record.tools.map((tool) => {
-   if (!tool || typeof tool !== "object") return tool;
-   const toolRecord = tool as Record<string, unknown>;
-
-   if (toolRecord.type === "function" && typeof toolRecord.name === "string" && acmToolNames.has(toolRecord.name)) {
-    changed = true;
-    return { ...toolRecord, strict: false };
-   }
-
-   const fn = toolRecord.function;
-   if (toolRecord.type === "function" && fn && typeof fn === "object") {
-    const fnRecord = fn as Record<string, unknown>;
-    if (typeof fnRecord.name === "string" && acmToolNames.has(fnRecord.name)) {
-     changed = true;
-     return { ...toolRecord, function: { ...fnRecord, strict: false } };
-    }
-   }
-
-   return tool;
-  });
-
-  if (!changed) return undefined;
-  return { ...record, tools };
- });
-
  // ── Tool: acm_checkpoint ───────────────────────────────────
  const checkpointSchema = zod.object({
   name: zod.string().min(1).max(64).regex(/^[\w\-\.]+$/).describe(
@@ -751,7 +716,7 @@ export default function(pi: ExtensionAPI): void {
      ctx.ui.notify(`Note: target '${params.target}' resolved from an off-path branch. Checkpoint will be placed on a non-active node.`, "warning");
     }
    } else {
-    autoResolved = findLastMeaningfulEntry(branch, sm, signal);
+    autoResolved = findLastMeaningfulEntry(branch, signal);
     id = autoResolved.entryId ?? "";
    }
    if (signal?.aborted || autoResolved?.aborted) {
@@ -972,7 +937,7 @@ export default function(pi: ExtensionAPI): void {
    } else if (searchTerm) {
     const searchLimit = Math.min(limit > 0 ? limit : 50, 50);
     const { matches, truncated } = searchFullSessionTree(
-     sm, tree, labelMaps, searchTerm, searchLimit, signal,
+     tree, labelMaps, searchTerm, searchLimit, signal,
     );
     lines.push(...formatTreeSearchResults(matches, currentLeafId, params.search!, searchLimit, truncated));
    } else if (useFullTree) {
@@ -995,7 +960,7 @@ export default function(pi: ExtensionAPI): void {
     const contentCache = new Map<string, string>();
     for (const e of sequence) {
      if (signal?.aborted) break;
-     contentCache.set(e.id, getMsgContent(e, sm, verbose));
+     contentCache.set(e.id, getMsgContent(e, verbose));
     }
 
     const visibleSequenceIds = new Set<string>();
@@ -1224,7 +1189,7 @@ export default function(pi: ExtensionAPI): void {
    let backupLabelWrittenThisCall = false;
    let backupHadNoPriorLabels = false;
    if (params.backupCurrentHeadAs) {
-    const headResolve = findLastMeaningfulEntry(branch, sm, signal);
+    const headResolve = findLastMeaningfulEntry(branch, signal);
     if (headResolve.aborted) {
      return {
       content: [{ type: "text" as const, text: "acm_travel aborted during backup target resolution." }],
@@ -1437,7 +1402,7 @@ export default function(pi: ExtensionAPI): void {
  const labelMaps = buildLabelMaps(sm.getEntries());
  const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
  const checkpointName = `pre-compact-${ts}`;
- const resolve = findLastMeaningfulEntry(branch, sm, event.signal);
+ const resolve = findLastMeaningfulEntry(branch, event.signal);
  if (!resolve.entryId) return;
  const priorLabels = getEntryLabels(labelMaps, resolve.entryId);
  if (priorLabels.includes(checkpointName)) return;
