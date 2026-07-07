@@ -7,7 +7,7 @@ import type {
  SessionEntry,
  SessionTreeNode,
 } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import type { TextContent, ImageContent, ToolCall, TSchema, ThinkingContent, RedactedThinkingContent } from "@oh-my-pi/pi-ai/types";
+import type { TextContent, ImageContent, ToolCall, TSchema, ThinkingContent, RedactedThinkingContent, AnthropicFallbackContent } from "@oh-my-pi/pi-ai/types";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import {
  ACM_INTERNAL_TOOLS as INTERNAL_TOOLS,
@@ -41,7 +41,7 @@ import {
 } from "./lib.js";
 
 /** Content part types that can appear in assistant message arrays. */
-type AssistantContentPart = TextContent | ThinkingContent | RedactedThinkingContent | ToolCall;
+type AssistantContentPart = TextContent | ThinkingContent | RedactedThinkingContent | ToolCall | AnthropicFallbackContent;
 
 function formatBackupText(
  name: string | undefined,
@@ -63,7 +63,7 @@ function getMessageRoleLabel(entry: SessionEntry): string | undefined {
  if (msg.role === "toolResult") return `TOOL:${msg.toolName}`;
  if (msg.role === "bashExecution") return "BASH";
  if (msg.role === "custom") return "CUSTOM";
- if (msg.role === "system") return "SYSTEM";
+ if ((msg.role as string) === "system") return "SYSTEM";
  return msg.role.toUpperCase();
 }
 
@@ -235,9 +235,9 @@ function getMsgContent(entry: SessionEntry, verbose: boolean): string {
  if (msg.role === "bashExecution") {
   return `[Bash] ${msg.command}`;
  }
- if (msg.role === "system" || msg.role === "custom") {
-  const text = extractMessageText(msg.content);
-  const label = msg.role === "system" ? "System" : "Custom";
+ if ((msg.role as string) === "system" || msg.role === "custom") {
+  const text = "content" in msg ? extractMessageText(msg.content) : "";
+  const label = (msg.role as string) === "system" ? "System" : "Custom";
   return text ? `[${label}] ${text}` : "";
  }
 
@@ -291,7 +291,7 @@ function getDisplayRole(entry: SessionEntry): string {
   if (m.role === "user") return "USER";
   if (m.role === "bashExecution") return "BASH";
   if (m.role === "custom") return "CUSTOM";
-  if (m.role === "system") return "SYSTEM";
+  if ((m.role as string) === "system") return "SYSTEM";
   return "TOOL";
  }
  if (entry.type === "branch_summary" || entry.type === "compaction") return "SUMMARY";

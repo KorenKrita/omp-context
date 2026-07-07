@@ -4,7 +4,7 @@ import { countTokens } from "@oh-my-pi/pi-agent-core/tokenizer";
 import type { ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
-import type { TextContent, ToolCall, ThinkingContent, RedactedThinkingContent } from "@oh-my-pi/pi-ai/types";
+import type { TextContent, ToolCall, ThinkingContent, RedactedThinkingContent, AnthropicFallbackContent } from "@oh-my-pi/pi-ai/types";
 
 export const ACM_INTERNAL_TOOLS = new Set(["acm_checkpoint", "acm_timeline", "acm_travel"]);
 
@@ -30,7 +30,7 @@ export function formatBoundaryTravelCue(nearestCheckpointName: string | null): s
  return `name the boundary first. '${nearestCheckpointName}' is only a candidate target. Choose the target that sits before the boundary: phase start, pre-burst node, attempt start, method anchor, or semantic chain start. See the Boundary Playbook if unclear`;
 }
 
-type AssistantContentPart = TextContent | ThinkingContent | RedactedThinkingContent | ToolCall;
+type AssistantContentPart = TextContent | ThinkingContent | RedactedThinkingContent | ToolCall | AnthropicFallbackContent;
 
 export type TravelEffect = "shrunk" | "restored" | "unchanged" | "unknown";
 
@@ -369,14 +369,14 @@ export function getMeaningfulSkipReason(entry: SessionEntry): MeaningfulSkipReas
  if (msg.role === "toolResult") return "tool_result";
  if (msg.role === "bashExecution") return "bash_execution";
  if (msg.role === "custom") return "custom_message";
- if (msg.role === "system") return "system_message";
+ if ((msg.role as string) === "system") return "system_message";
  if (msg.role === "assistant") {
   if (Array.isArray(msg.content)) {
    const toolCalls = msg.content.filter(
     (c: AssistantContentPart): c is ToolCall => c.type === "toolCall",
    );
    const hasVisibleText = msg.content.some(
-    (c: AssistantContentPart) => c.type === "text" && c.text.trim().length > 0,
+    (c: AssistantContentPart) => c.type === "text" && (c as TextContent).text.trim().length > 0,
    );
    const onlyInternalTools = toolCalls.length > 0 &&
     toolCalls.every((tc: ToolCall) => ACM_INTERNAL_TOOLS.has(tc.name));
@@ -384,10 +384,14 @@ export function getMeaningfulSkipReason(entry: SessionEntry): MeaningfulSkipReas
    if (!hasVisibleText && toolCalls.length === 0) return "empty_assistant";
   } else if (msg.content === null || msg.content === undefined) {
    return "empty_assistant";
-  } else if (typeof msg.content === "string") {
-   if (msg.content.trim().length === 0) return "empty_assistant";
-  } else if (extractTextFromContent(msg.content).length === 0) {
-   return "empty_assistant";
+  } else {
+   // Defensive: older harness versions may pass string content
+   const raw: unknown = msg.content;
+   if (typeof raw === "string") {
+    if (raw.trim().length === 0) return "empty_assistant";
+   } else if (extractTextFromContent(raw).length === 0) {
+    return "empty_assistant";
+   }
   }
  } else if (msg.role === "user") {
   const isEmpty = msg.content === null || msg.content === undefined ||
