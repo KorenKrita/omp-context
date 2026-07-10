@@ -1397,15 +1397,25 @@ export default function(pi: ExtensionAPI): void {
   },
  });
 
- // ── Event: context → persistent message rebuild after travel ─────────
- // After branchWithSummary, agent.state.messages stays stale — the extension
- // has no access to agent.replaceMessages. Rebuild from buildSessionContext()
- // on every context event while a travel is active. A stable summary-leaf
- // fallback handles runtimes that temporarily move HEAD while persisting the
- // current tool result.
+ // ── Event: context → request sanitation + persistent travel rebuild ─────
+ // Sanitize every outbound request, including the first request after a
+ // restored session. The in-memory travel registry is cleared at session_start,
+ // but branchWithSummary can persist the acm_travel tool result after the branch
+ // summary. On reload that result has no matching assistant tool call on the
+ // active branch, so providers reject it unless it is removed even when no
+ // travel refresh is pending.
+ //
+ // While a travel is active, rebuild from buildSessionContext() on every
+ // context event. A stable summary-leaf fallback handles runtimes that
+ // temporarily move HEAD while persisting the current tool result.
  pi.on("context", (event, ctx: ExtensionContext) => {
   const sm = ctx.sessionManager;
-  if (!contextRefresh.isPending(sm)) return;
+  if (!contextRefresh.isPending(sm)) {
+   const original = event.messages as AgentMessage[];
+   const fixed = fixOrphanedToolUse(original);
+   const changed = fixed.length !== original.length || fixed.some((message, index) => message !== original[index]);
+   return changed ? { messages: fixed as typeof event.messages } : undefined;
+  }
 
   const reportFailure = (message: string) => {
    const willRetry = contextRefresh.recordFailedAttempt(sm, message);
