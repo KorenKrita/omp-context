@@ -74,7 +74,7 @@ export function resolveTimelineMode(params: {
  return "active_path";
 }
 
-/** One-shot context rebuild state keyed by session manager instance. */
+/** Persistent post-travel context rebuild state keyed by session manager instance. */
 export class ContextRefreshRegistry {
  static readonly MAX_ATTEMPTS = 3;
 
@@ -135,6 +135,8 @@ export class ContextRefreshRegistry {
 
  markRebuilt(sm: object): void {
   this.rebuilt.add(sm);
+  this.failures.delete(sm);
+  this.attempts.set(sm, 0);
  }
 
  hasRebuilt(sm: object): boolean {
@@ -281,8 +283,8 @@ export function resolveTargetId(
  return { id: target, fromOffPath: !ids.has(target) };
 }
 
-export function formatTokens(tokens: number): string {
- if (!Number.isFinite(tokens) || tokens < 0) return "N/A";
+export function formatTokens(tokens: number | null | undefined): string {
+ if (tokens == null || !Number.isFinite(tokens) || tokens < 0) return "N/A";
  if (tokens >= 999_950) return `${(tokens / 1_000_000).toFixed(1)}M`;
  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`;
  return String(tokens);
@@ -313,12 +315,19 @@ export function classifyStructuralMessageEffect(before: number | undefined, afte
  return delta < 0 ? "shrunk" : "restored";
 }
 
+export function getBuildSessionMessagesFromEntries(
+ entries: SessionEntry[],
+ leafId: string | null,
+ byId: Map<string, SessionEntry> = new Map(entries.map((entry) => [entry.id, entry])),
+): AgentMessage[] {
+ if (entries.length === 0) return [];
+ return buildSessionContext(entries, leafId, byId).messages as AgentMessage[];
+}
+
 export function getBuildSessionMessages(sm: ReadonlySessionManager, leafId?: string | null): AgentMessage[] {
  const entries = sm.getEntries();
- if (entries.length === 0) return [];
- const byId = new Map(entries.map((e) => [e.id, e]));
  const effectiveLeaf = leafId === undefined ? sm.getLeafId() : leafId;
- return buildSessionContext(entries, effectiveLeaf, byId).messages as AgentMessage[];
+ return getBuildSessionMessagesFromEntries(entries, effectiveLeaf);
 }
 
 export function compareEntriesByTimestamp(a: SessionEntry, b: SessionEntry): number {

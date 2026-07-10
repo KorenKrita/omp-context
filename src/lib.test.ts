@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import {
  ContextRefreshRegistry,
@@ -11,6 +12,7 @@ import {
  findLastMeaningfulEntry,
  formatBoundaryTravelCue,
  formatFoldCandidatePreview,
+ formatTokens,
  getMeaningfulSkipReason,
  resolveTargetId,
  resolveTimelineMode,
@@ -18,6 +20,7 @@ import {
  HANDOFF_SLOT_HINT,
  type UsageLike,
 } from "./lib.js";
+import { fixOrphanedToolUse } from "./index.js";
 
 function labelEntry(id: string, targetId: string, label: string, timestamp = "2026-01-01T00:00:00.000Z"): SessionEntry {
  return {
@@ -157,6 +160,65 @@ describe("ContextRefreshRegistry", () => {
   registry.clearPending(smA);
   expect(registry.isPending(smB)).toBe(true);
  });
+
+ test("successful rebuild resets failure state while keeping persistent pending", () => {
+  const registry = new ContextRefreshRegistry();
+  const sm = {};
+  registry.markPending(sm);
+  registry.recordFailedAttempt(sm, "temporary");
+  registry.markRebuilt(sm);
+  expect(registry.isPending(sm)).toBe(true);
+  expect(registry.hasRebuilt(sm)).toBe(true);
+  expect(registry.getAttemptCount(sm)).toBe(0);
+  expect(registry.getFailure(sm)).toBeUndefined();
+ });
+});
+
+describe("formatTokens", () => {
+ test("handles missing and invalid values", () => {
+  expect(formatTokens(undefined)).toBe("N/A");
+  expect(formatTokens(null)).toBe("N/A");
+  expect(formatTokens(Number.NaN)).toBe("N/A");
+ });
+});
+
+describe("fixOrphanedToolUse", () => {
+ const assistantWithTool = (stopReason: "stop" | "error" | "aborted" = "stop"): AgentMessage => ({
+  role: "assistant" as const,
+  content: [{ type: "toolCall" as const, id: "call-1", name: "read", arguments: {} }],
+  stopReason,
+  timestamp: 1,
+ } as AgentMessage);
+ const toolResult: AgentMessage = {
+  role: "toolResult" as const,
+  toolCallId: "call-1",
+  toolName: "read",
+  content: [{ type: "text" as const, text: "ok" }],
+  isError: false,
+  timestamp: 2,
+ };
+
+ test("does not synthesize results for error or aborted assistants", () => {
+  for (const reason of ["error", "aborted"] as const) {
+   const fixed = fixOrphanedToolUse([assistantWithTool(reason)]);
+   expect(fixed).toHaveLength(1);
+   expect(fixed.some((message) => message.role === "toolResult")).toBe(false);
+  }
+ });
+
+ test("removes results attached to assistants stripped by provider transforms", () => {
+  const fixed = fixOrphanedToolUse([assistantWithTool("error"), toolResult]);
+  expect(fixed).toHaveLength(1);
+  expect(fixed[0]?.role).toBe("assistant");
+ });
+
+ test("keeps valid result batches and synthesizes missing results as errors", () => {
+  expect(fixOrphanedToolUse([assistantWithTool(), toolResult])).toEqual([assistantWithTool(), toolResult]);
+  const fixed = fixOrphanedToolUse([assistantWithTool()]);
+  expect(fixed).toHaveLength(2);
+  expect(fixed[1]?.role).toBe("toolResult");
+  if (fixed[1]?.role === "toolResult") expect(fixed[1].isError).toBe(true);
+ });
 });
 
 describe("classify effects", () => {
@@ -252,7 +314,7 @@ describe("getMeaningfulSkipReason", () => {
    type: "message",
    id: "s1",
    message: { role: "system", content: "rules" },
-  } as SessionEntry;
+  } as unknown as SessionEntry;
   expect(getMeaningfulSkipReason(bash)).toBe("bash_execution");
   expect(getMeaningfulSkipReason(custom)).toBe("custom_message");
   expect(getMeaningfulSkipReason(system)).toBe("system_message");
@@ -263,7 +325,7 @@ describe("getMeaningfulSkipReason", () => {
    type: "message",
    id: "a1",
    message: { role: "assistant", content: { type: "text", text: "done" } },
-  } as SessionEntry;
+  } as unknown as SessionEntry;
   expect(getMeaningfulSkipReason(assistant)).toBeNull();
  });
 });
