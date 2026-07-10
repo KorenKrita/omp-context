@@ -702,7 +702,7 @@ export default function(pi: ExtensionAPI): void {
   name: "acm_checkpoint",
   label: "ACM Checkpoint",
   description:
-   "Create a recoverability anchor on a conversation node. Zero cost: no branch, no handoff, no context change. Checkpoint before task chains, phase starts, bursts whose output cannot be bounded, risky steps, and milestones. A checkpoint does not fold context; it makes a future boundary fold possible. Names are unique across the session tree; one node may hold multiple aliases. The result reports context usage and fold candidates — choose by boundary, not proximity.",
+   "Create a recoverability anchor on a conversation node. Structurally lightweight: creates no branch or handoff and does not change the active context. Checkpoint before task chains, phase starts, bursts whose output cannot be bounded, risky steps, and milestones. A checkpoint does not fold context; it makes a future boundary fold possible. Names are unique across the session tree; one node may hold multiple aliases. The result reports context usage and fold candidates — choose by boundary, not proximity.",
   parameters: checkpointSchema as unknown as TSchema,
   strict: false,
   async execute(
@@ -867,14 +867,14 @@ export default function(pi: ExtensionAPI): void {
      foldPreview = formatFoldCandidatePreview(previewParts);
     }
    }
-   // Name-triggered directive: a '-done' checkpoint marks finished work — the
-   // fold that closes it should follow immediately, not wait for the next message.
+   // Name-triggered guidance: a '-done' checkpoint marks finished work and
+   // task-end handling follows the preview rather than forcing a no-op fold.
    let doneDirective = "";
    if (params.name.endsWith("-done")) {
     const base = params.name.slice(0, -"-done".length);
     const siblingStart = `${base}-start`;
     const startRef = labelMaps.labelToEntryId.has(siblingStart) ? siblingStart : "<task>-start";
-    doneDirective = ` '${params.name}' is a milestone/archive pointer. If later work moves past it, this is a recovery target. If this closes the task, fold before the final answer and answer from the handoff: acm_travel({ target: "${startRef}", summary: <${HANDOFF_SLOT_HINT} handoff> }) — this '-done' label bookmarks the raw archive path.`;
+    doneDirective = ` '${params.name}' is a milestone/archive pointer. If later work moves past it, this is a recovery target. If this closes the task, use the preview to choose the close: when travel would produce meaningful structural saving, fold before the final answer and answer from the handoff with acm_travel({ target: "${startRef}", summary: <${HANDOFF_SLOT_HINT} handoff> }); when the preview shows almost no saving, keep this unique '-done' checkpoint and answer directly. Boundary decides whether folding is semantically appropriate; preview only measures savings.`;
    }
    const usageSuffix = ` Context usage: ${usageText}.${foldPreview}${doneDirective}`;
    return {
@@ -928,7 +928,7 @@ export default function(pi: ExtensionAPI): void {
   name: "acm_timeline",
   label: "ACM Timeline",
   description:
-   "Inspect the conversation tree: active path (default), full tree, checkpoint catalog, or global search. Default shows the active path spine; search scans the entire tree including off-path branches. Call when choosing a travel target, when orientation is unclear, or to check context usage — list_checkpoints estimates what every anchor would leave after a fold. On large trees prefer list_checkpoints or search over full_tree.",
+   "Inspect the conversation tree: active path (default), full tree, checkpoint catalog, or global search. Default shows the active path spine; search scans the entire tree including off-path branches. Call when choosing a travel target, when orientation is unclear, or to check context usage. list_checkpoints estimates post-fold usage for the displayed matching anchors when usage data is available; display limits still apply. On large trees prefer list_checkpoints or search over full_tree.",
   parameters: timelineSchema as unknown as TSchema,
   strict: false,
   async execute(
@@ -1150,13 +1150,13 @@ export default function(pi: ExtensionAPI): void {
  // ── Tool: acm_travel ───────────────────────────────────────
  const travelSchema = zod.object({
   target: zod.string().min(1).max(256).describe(
-   "Checkpoint name, history node ID, or 'root'. Name the boundary first, then choose a target before that boundary. Use acm_timeline with full_tree or search to see labels and node IDs.",
+   "Checkpoint name, history node ID, or 'root'. Name the boundary first, then choose a target before that boundary. On large trees use acm_timeline with list_checkpoints or search; use full_tree only when the surrounding branch structure is needed.",
   ),
   summary: zod.string().min(1).max(10000).describe(
    `Handoff summary — the working state after travel. It must make the next action executable without rereading the folded trail. Fill every slot, write 'none' rather than dropping one: ${HANDOFF_SLOT_HINT}. Include recovery pointers; pointers over dumps. Max 10000 chars.`,
   ),
   backupCurrentHeadAs: zod.string().min(1).max(64).regex(/^[\w\-\.]+$/).optional().describe(
-   "Optional archive bookmark for the raw path being folded away. At task end use '<task>-done'. This is a recovery pointer, never the travel target and never a substitute for a self-contained handoff. Omit when the path being left already carries a checkpoint.",
+   "Optional archive bookmark for the raw path being folded away. At task end, use '<task>-done' when the preview shows meaningful structural saving and the path does not already carry a suitable '-done' checkpoint. If the preview shows almost no saving, create a unique '-done' checkpoint and answer directly instead of calling travel merely to set this field. This is a recovery pointer, never the travel target or a substitute for a self-contained handoff.",
   ),
  });
 
@@ -1164,7 +1164,7 @@ export default function(pi: ExtensionAPI): void {
   name: "acm_travel",
   label: "ACM Travel",
   description:
-   "Fold conversation history into a recoverable handoff by traveling to a checkpoint, node ID, or root. Use at stable boundaries: burst distilled, phase complete, direction failed, batch item done, task chain complete, or new request over finished work. Name the boundary first, choose a target before that boundary, and write a handoff with executable NEXT plus recovery pointers. Fold by boundary, not proximity. At task end, set backupCurrentHeadAs to '<task>-done', travel to the semantic task-chain start, then answer from the handoff. Travel changes conversation history only, not disk files or external systems.",
+   "Fold conversation history into a recoverable handoff by traveling to a checkpoint, node ID, or root. Use at stable boundaries: burst distilled, phase complete, direction failed, batch item done, task chain complete, or new request over finished work. Name the boundary first, choose a target before that boundary, and write a handoff with executable NEXT plus recovery pointers. Fold by boundary, not proximity. At task end, travel to the semantic task-chain start and set backupCurrentHeadAs to '<task>-done' only when the preview shows meaningful structural saving; if it shows almost no saving, create a unique '-done' checkpoint and answer directly. Boundary decides whether folding is semantically appropriate; preview only measures savings. Travel changes conversation history only, not disk files or external systems.",
   parameters: travelSchema as unknown as TSchema,
   strict: false,
   async execute(
