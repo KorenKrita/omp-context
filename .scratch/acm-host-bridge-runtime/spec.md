@@ -1,6 +1,6 @@
 # ACM OMP Host Bridge and Runtime Reliability
 
-Status: ready-for-agent
+Status: resolved
 
 ## Problem Statement
 

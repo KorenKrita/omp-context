@@ -1,6 +1,6 @@
 # ACM Canonical Repository, Version, and Manual Sync Contract
 
-Status: ready-for-agent
+Status: resolved
 
 ## Problem Statement
 

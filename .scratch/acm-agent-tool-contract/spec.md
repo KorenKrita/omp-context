@@ -1,6 +1,6 @@
 # ACM Agent-Facing Tool Contract
 
-Status: ready-for-agent
+Status: resolved
 
 ## Problem Statement
 

@@ -4,17 +4,17 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] The command verifies the canonical standalone root and integrated consumer root before reading or writing mapped artifacts.
-- [ ] Source/destination mappings and declared transformations are defined centrally and are inspectable as one synchronization manifest.
-- [ ] Every required source, destination root, mapping, transform, generator capability, and duplicate-path conflict is validated before the first destination write; any preflight failure leaves the complete consumer tree byte-for-byte unchanged.
-- [ ] Integrated-only wrappers can be declared as preserved and remain byte-for-byte unchanged.
-- [ ] The command supports direct copies and declared generated/transformed outputs without undocumented hand editing.
-- [ ] Every mapped destination is compared with its expected source or generated result after synchronization.
-- [ ] Any post-copy mismatch exits non-zero and names the failing artifact.
-- [ ] A successful run prints a concise list of changed destinations.
-- [ ] Repeating the command on aligned repositories produces a no-change result.
-- [ ] The command behaves identically when launched from the canonical repository, the integrated repository, or another working directory with explicit roots.
-- [ ] The command never fetches, stages, commits, rebases, merges, pushes, or modifies Git configuration.
-- [ ] Temporary fixture tests cover first copy, no-op repeat, changed source, missing source, incompatible destination, missing transform capability, duplicate mapping, transformed output, corrupted destination, and preserved wrapper behavior; every preflight-failure test compares the destination snapshot before and after and proves no write occurred.
+- [x] The command verifies the canonical standalone root and integrated consumer root before reading or writing mapped artifacts.
+- [x] Source/destination mappings and declared transformations are defined centrally and are inspectable as one synchronization manifest.
+- [x] Every required source, destination root, mapping, transform, generator capability, and duplicate-path conflict is validated before the first destination write; any preflight failure leaves the complete consumer tree byte-for-byte unchanged.
+- [x] Integrated-only wrappers can be declared as preserved and remain byte-for-byte unchanged.
+- [x] The command supports direct copies and declared generated/transformed outputs without undocumented hand editing.
+- [x] Every mapped destination is compared with its expected source or generated result after synchronization.
+- [x] Any post-copy mismatch exits non-zero and names the failing artifact.
+- [x] A successful run prints a concise list of changed destinations.
+- [x] Repeating the command on aligned repositories produces a no-change result.
+- [x] The command behaves identically when launched from the canonical repository, the integrated repository, or another working directory with explicit roots.
+- [x] The command never fetches, stages, commits, rebases, merges, pushes, or modifies Git configuration.
+- [x] Temporary fixture tests cover first copy, no-op repeat, changed source, missing source, incompatible destination, missing transform capability, duplicate mapping, transformed output, corrupted destination, and preserved wrapper behavior; every preflight-failure test compares the destination snapshot before and after and proves no write occurred.

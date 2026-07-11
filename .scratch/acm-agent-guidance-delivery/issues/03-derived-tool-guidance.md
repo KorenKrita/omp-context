@@ -4,16 +4,16 @@
 
 **Blocked by:** 01 — Deliver canonical always-on CORE in standalone; 02 — Route advanced context-management branches progressively
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Canonical guidance exposes explicit derivation sections for checkpoint, timeline, travel, normal next cues, and exceptional recovery pointers.
-- [ ] Generated tool descriptions use the same leading words and normal-path decisions as CORE.
-- [ ] Successful checkpoint guidance contains observed placement facts and one next cue rather than restating the full discipline.
-- [ ] Successful timeline guidance identifies the selected view and one relevant navigation cue without loading advanced recovery prose.
-- [ ] Successful travel guidance contains factual transition evidence and one state-appropriate next cue.
-- [ ] Exceptional guidance selects only the recovery branch relevant to the observed failure.
-- [ ] Generated descriptions and cues remain concise enough that loading a tool does not reproduce CORE or the advanced Skill.
-- [ ] A canonical guidance edit updates every derived artifact through one generation operation.
-- [ ] Generation is deterministic, idempotent, and fails when required canonical markers are missing or duplicated.
-- [ ] Contract tests prove that generated artifacts match the canonical source and contain no independently authored behavioral rules.
-- [ ] Tool schema, result-detail fields, and raw context-delta behavior remain outside this ticket and retain their current contract until the agent-tool-contract tickets land.
+- [x] Canonical guidance exposes explicit derivation sections for checkpoint, timeline, travel, normal next cues, and exceptional recovery pointers.
+- [x] Generated tool descriptions use the same leading words and normal-path decisions as CORE.
+- [x] Successful checkpoint guidance contains observed placement facts and one next cue rather than restating the full discipline.
+- [x] Successful timeline guidance identifies the selected view and one relevant navigation cue without loading advanced recovery prose.
+- [x] Successful travel guidance contains factual transition evidence and one state-appropriate next cue.
+- [x] Exceptional guidance selects only the recovery branch relevant to the observed failure.
+- [x] Generated descriptions and cues remain concise enough that loading a tool does not reproduce CORE or the advanced Skill.
+- [x] A canonical guidance edit updates every derived artifact through one generation operation.
+- [x] Generation is deterministic, idempotent, and fails when required canonical markers are missing or duplicated.
+- [x] Contract tests prove that generated artifacts match the canonical source and contain no independently authored behavioral rules.
+- [x] Tool schema, result-detail fields, and raw context-delta behavior remain outside this ticket and retain their current contract until the agent-tool-contract tickets land.
