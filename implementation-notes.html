@@ -42,7 +42,7 @@
       <tr>
         <td>user-decided</td>
         <td>Remain plugin-only.</td>
-        <td>Do not require an OMP upstream API change and do not mutate the private agent message array. Preserve the known host limitation explicitly.</td>
+        <td><code>branchWithSummary()</code> updates the SessionManager tree before OMP's host-owned in-memory message array is necessarily synchronized. The plugin never mutates that private array; it rebuilds outbound context through the public hook. The remaining risk is an unnecessary early native compaction, not inevitable data loss.</td>
       </tr>
       <tr>
         <td>user-decided</td>
@@ -87,7 +87,7 @@
       <tr>
         <td>user-decided</td>
         <td>Context pressure triggers boundary inspection.</td>
-        <td>Pressure does not independently authorize travel. Native token compaction remains OMP's responsibility; travel remains a semantic-boundary operation.</td>
+        <td>Pressure does not independently authorize travel. Native token compaction remains OMP's responsibility and the plugin never cancels, replaces, or delays it; travel remains a semantic-boundary operation.</td>
       </tr>
       <tr>
         <td>user-decided</td>

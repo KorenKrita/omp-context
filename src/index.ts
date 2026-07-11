@@ -1615,11 +1615,13 @@ export default function(pi: ExtensionAPI): void {
   if (branch.length === 0) return;
   const labelMaps = bridge.buildLabelMaps();
   const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-  const checkpointName = `pre-compact-${ts}`;
+  const checkpointBase = `pre-compact-${ts}`;
+  let checkpointName = checkpointBase;
+  for (let ordinal = 2; labelMaps.labelToEntryId.has(checkpointName); ordinal++) {
+   checkpointName = `${checkpointBase}-${ordinal}`;
+  }
   const resolve = findLastMeaningfulEntry(branch, event.signal);
   if (!resolve.entryId) return;
-  const priorLabels = getEntryLabels(labelMaps, resolve.entryId);
-  if (priorLabels.includes(checkpointName)) return;
   const append = bridge.appendCheckpointLabel(resolve.entryId, checkpointName);
   if (!append.ok) {
    ctx.ui.notify(`Could not create pre-compaction checkpoint: ${append.message}`, "warning");
