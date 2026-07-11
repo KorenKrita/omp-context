@@ -170,3 +170,17 @@ Node16 moduleResolution 下需要从 OMP 子路径导入类型：
 - 不要在代码中用 `console.log`；需要日志时优先使用 OMP 提供的 logger 能力。
 - 不要把 travel 解释成文件系统回滚。它只影响会话上下文。
 - 验证类型用 `bun run typecheck`。
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked as local Markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The canonical triage labels are `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repository uses a single-context domain documentation layout. See `docs/agents/domain.md`.
