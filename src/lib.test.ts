@@ -15,7 +15,6 @@ import {
  formatTokens,
  getMeaningfulSkipReason,
  resolveTargetId,
- resolveTimelineMode,
  isValidEntryId,
  HANDOFF_SLOT_HINT,
  validateHandoffStructure,
@@ -110,20 +109,6 @@ describe("isValidEntryId", () => {
  });
 });
 
-describe("resolveTimelineMode", () => {
- test("list_checkpoints wins over search and full_tree", () => {
-  expect(resolveTimelineMode({ list_checkpoints: true, search: "x", full_tree: true })).toBe("list_checkpoints");
- });
-
- test("search wins over full_tree", () => {
-  expect(resolveTimelineMode({ search: "x", full_tree: true })).toBe("search");
- });
-
- test("defaults to active_path", () => {
-  expect(resolveTimelineMode({})).toBe("active_path");
-  expect(resolveTimelineMode({ full_tree: false })).toBe("active_path");
- });
-});
 
 describe("ContextRefreshRegistry", () => {
  test("marks pending, records failures, and clears per session manager", () => {

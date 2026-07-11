@@ -29,7 +29,6 @@ import {
  isValidEntryId,
  pushTreeChildrenPreOrder,
  resolveTargetId,
- resolveTimelineMode,
  validateHandoffStructure,
  type MeaningfulResolveResult,
  type LabelMaps,
@@ -343,7 +342,7 @@ function formatOffPathFootnotes(
   );
  }
  if (offPath.length > maxShow) {
-  footnotes.push(`  :  [off-path] +${offPath.length - maxShow} more — use search or full_tree`);
+  footnotes.push(`  :  [off-path] +${offPath.length - maxShow} more — use view search or tree`);
  }
  return footnotes;
 }
@@ -508,11 +507,12 @@ function searchFullSessionTree(
  signal?: AbortSignal,
 ): { matches: TreeSearchMatch[]; visited: number; truncated: boolean } {
  const matched: TreeSearchMatch[] = [];
- const searchStack: SessionTreeNode[] = [...tree];
+ const searchStack: SessionTreeNode[] = [];
+ pushTreeChildrenPreOrder(searchStack, tree);
  const contentPattern = createLiteralSearchPattern(searchTerm);
  let visited = 0;
  const maxVisited = 10000;
- while (searchStack.length > 0 && matched.length < searchLimit * 2 && visited < maxVisited) {
+ while (searchStack.length > 0 && visited < maxVisited) {
   if (signal?.aborted) break;
   visited++;
   const n = searchStack.pop()!;
@@ -530,14 +530,16 @@ function searchFullSessionTree(
    });
   }
  }
- matched.sort((a, b) => compareEntriesByTimestamp(a.node.entry, b.node.entry));
+ matched.sort((a, b) => {
+  const timestampOrder = compareEntriesByTimestamp(a.node.entry, b.node.entry);
+  return timestampOrder !== 0 ? timestampOrder : a.node.entry.id.localeCompare(b.node.entry.id);
+ });
  return {
   matches: matched,
   visited,
-  truncated: matched.length >= searchLimit * 2 || visited >= maxVisited,
+  truncated: matched.length > searchLimit || searchStack.length > 0 || signal?.aborted === true,
  };
 }
-
 function formatTreeSearchResults(
  matches: TreeSearchMatch[],
  currentLeafId: string | null,
@@ -546,9 +548,9 @@ function formatTreeSearchResults(
  truncated: boolean,
 ): string[] {
  const lines: string[] = [];
- const totalCount = truncated ? `${Math.min(matches.length, searchLimit * 2)}+` : String(matches.length);
+ const displayedCount = Math.min(matches.length, searchLimit);
  lines.push(
-  `Found ${totalCount} node(s) matching '${searchQuery}' across full tree (showing first ${Math.min(matches.length, searchLimit)}):${truncated ? " Results may be incomplete — narrow your search." : ""}`,
+  `Search '${searchQuery}': ${displayedCount} displayed${truncated ? "; additional matches truncated" : ` of ${matches.length} matching node(s)`}.`,
  );
  for (const m of matches.slice(0, searchLimit)) {
   const isHead = m.node.entry.id === currentLeafId;
@@ -903,28 +905,41 @@ export default function(pi: ExtensionAPI): void {
  });
 
  // ── Tool: acm_timeline ─────────────────────────────────────
- const timelineSchema = zod.object({
-  limit: zod.number().int().min(1).max(50).optional().describe("In default active-path mode: maximum visible entries (default 50). In full_tree mode: maximum tree depth to render. With search: maximum results returned. Range 1..50."),
-  verbose: zod.boolean().optional().describe(
-   "Show all messages including internal tool traffic, system/custom meta messages, and ACM tool calls. Applies only in default active-path mode; ignored when list_checkpoints, search, or full_tree is active.",
-  ),
-  full_tree: zod.boolean().optional().describe(
-   "Show all branches including off-path nodes with IDs. Default false (active path only). Prefer list_checkpoints or search on large trees. Ignored when list_checkpoints or search is set.",
-  ),
-  list_checkpoints: zod.boolean().optional().describe(
-   "List checkpoint labels across the full tree with node IDs and on-path/off-path tags. Display is capped at 50 — use search to narrow. Ignores verbose and full_tree when set.",
-  ),
-  search: zod.string().max(500).optional().describe(
-   "Search the full session tree (active + off-path) for matching checkpoint labels, node IDs, or content. When set without list_checkpoints, returns matching nodes. With list_checkpoints, filters the checkpoint catalog. Mode precedence when multiple params are set: list_checkpoints > search > full_tree > default active path.",
-  ),
- });
+ const timelineLimitSchema = zod.number().int().min(1).max(50).default(50).describe(
+  "Maximum recent visible entries (active), sorted aliases (checkpoints), matches (search), or traversal depth per root (tree). Range 1..50; default 50.",
+ );
+ const timelineViewSchema = zod.discriminatedUnion("view", [
+  zod.object({
+   view: zod.literal("active"),
+   limit: timelineLimitSchema,
+   verbose: zod.boolean().optional().describe("Show all active-path messages, including internal tool traffic and system/custom metadata."),
+  }).strict(),
+  zod.object({
+   view: zod.literal("checkpoints"),
+   limit: timelineLimitSchema,
+   filter: zod.string().trim().min(1).max(500).optional().describe("Optional non-blank checkpoint label or entry-ID filter, matched case-insensitively."),
+  }).strict(),
+  zod.object({
+   view: zod.literal("search"),
+   limit: timelineLimitSchema,
+   query: zod.string().trim().min(1).max(500).describe("Required non-blank full-tree query matching labels, node IDs, or rendered content case-insensitively."),
+  }).strict(),
+  zod.object({
+   view: zod.literal("tree"),
+   limit: timelineLimitSchema,
+  }).strict(),
+ ]);
+ const timelineSchema = zod.preprocess((rawParams) => {
+  if (typeof rawParams !== "object" || rawParams === null || Array.isArray(rawParams) || "view" in rawParams) return rawParams;
+  return { ...rawParams, view: "active" };
+ }, timelineViewSchema);
 
  registerTool({
   name: "acm_timeline",
   label: "ACM Timeline",
   description: TOOL_DESCRIPTIONS.timeline,
   parameters: timelineSchema as unknown as TSchema,
-  strict: false,
+  strict: true,
   async execute(
    _id: string,
    rawParams: unknown,
@@ -937,12 +952,12 @@ export default function(pi: ExtensionAPI): void {
    const bridge = getHostBridge(sm);
    const tree = bridge.getTree();
    const currentLeafId = bridge.getLeafId();
-   const verbose = params.verbose ?? false;
-   const limit = params.limit ?? 50;
-   const timelineMode = resolveTimelineMode(params);
-   const useFullTree = timelineMode === "full_tree";
-   const listCheckpoints = timelineMode === "list_checkpoints";
-   const searchTerm = params.search?.toLowerCase().trim() ?? "";
+   const view = params.view;
+   const verbose = view === "active" ? params.verbose ?? false : false;
+   const limit = params.limit;
+   const useFullTree = view === "tree";
+   const listCheckpoints = view === "checkpoints";
+   const searchTerm = (view === "search" ? params.query : view === "checkpoints" ? params.filter : undefined)?.toLowerCase() ?? "";
 
    const lines: string[] = [];
    const branch = bridge.getBranch();
@@ -954,16 +969,25 @@ export default function(pi: ExtensionAPI): void {
    const childIndex = buildChildIndex(tree);
    const offPathForks = countOffPathForks(branch, childIndex, backboneIds);
    let treeTruncated = false;
+   let activeVisibleEntries = 0;
+   let activeDisplayedEntries = 0;
+   let activeOmittedEntries = 0;
+   let checkpointsMatchingAliases = 0;
+   let checkpointsDisplayedAliases = 0;
+   let searchDisplayedMatches = 0;
+   let searchWasTruncated = false;
 
    if (listCheckpoints) {
     const listings = collectCheckpointListings(
      labelMaps, backboneIds, currentLeafId, searchTerm, entriesById, pathOrderById,
     );
+    checkpointsMatchingAliases = listings.length;
+    checkpointsDisplayedAliases = Math.min(listings.length, limit);
     const listLimit = limit;
     const usage = ctx.getContextUsage();
     const currentMessagesResult = bridge.buildSessionMessages(currentLeafId);
     if (!currentMessagesResult.ok) {
-     lines.push(`Checkpoints (${listings.length} total${searchTerm ? ` matching '${params.search}'` : ""}, showing up to ${listLimit}; cap 50). Current messages could not be built: ${currentMessagesResult.message}`);
+     lines.push(`Checkpoints (${listings.length} matching aliases, 0 displayed). Current messages could not be built: ${currentMessagesResult.message}`);
      return {
       content: [{ type: "text" as const, text: lines.join("\n") }],
       details: { error: currentMessagesResult.error, message: currentMessagesResult.message },
@@ -973,7 +997,7 @@ export default function(pi: ExtensionAPI): void {
     const targetCache = new Map<string, AgentMessage[]>();
     const currentUsageText = formatContextUsage(usage, true);
     lines.push(
-     `Checkpoints (${listings.length} total${searchTerm ? ` matching '${params.search}'` : ""}, showing up to ${listLimit}; cap 50). Current: ${currentMessages.length} msgs, ${currentUsageText}:`
+     `Checkpoints (${listings.length} matching aliases, ${checkpointsDisplayedAliases} displayed${searchTerm ? ` for '${params.filter}'` : ""}; cap 50). Current: ${currentMessages.length} msgs, ${currentUsageText}:`
     );
     for (const cp of listings.slice(0, listLimit)) {
      const pathTag = cp.onActivePath ? "on-path" : "off-path";
@@ -991,30 +1015,30 @@ export default function(pi: ExtensionAPI): void {
      lines.push(`  ${cp.label} → ${cp.entryId} (${pathTag}${headTag}) ${estPart}`);
     }
     if (listings.length > listLimit) {
-     lines.push(`  ... +${listings.length - listLimit} more — use search to narrow (display cap 50)`);
+     lines.push(`  ... +${listings.length - listLimit} more — use a narrower filter`);
     }
-   } else if (searchTerm) {
-    const searchLimit = limit;
+   } else if (view === "search") {
     const { matches, truncated } = searchFullSessionTree(
-     tree, labelMaps, searchTerm, searchLimit, signal,
+     tree, labelMaps, searchTerm, limit, signal,
     );
-    lines.push(...formatTreeSearchResults(matches, currentLeafId, params.search!, searchLimit, truncated));
+    searchDisplayedMatches = Math.min(matches.length, limit);
+    searchWasTruncated = truncated;
+    lines.push(...formatTreeSearchResults(matches, currentLeafId, params.query!, limit, truncated));
    } else if (useFullTree) {
     const maxDepth = limit;
     for (let i = 0; i < tree.length; i++) {
      if (signal?.aborted) break;
      const truncated = renderTreeNode(
-      tree[i], labelMaps, currentLeafId, backboneIds, 0, maxDepth, "", i === tree.length - 1, lines, signal,
+     tree[i], labelMaps, currentLeafId, backboneIds, 1, maxDepth, "", i === tree.length - 1, lines, signal,
      );
      if (truncated) treeTruncated = true;
     }
     if (lines.length >= 200) treeTruncated = true;
     if (treeTruncated) {
-     lines.unshift("⚠ tree truncated by depth/line limit — use list_checkpoints or search to see hidden nodes");
+     lines.unshift("⚠ tree truncated by depth/line limit — use view checkpoints or view search to see hidden nodes");
     }
    } else {
     const sequence: SessionEntry[] = [...branch];
-    if (params.search !== undefined && searchTerm === "") lines.push("query is empty; showing active path");
 
     const contentCache = new Map<string, string>();
     for (const e of sequence) {
@@ -1030,19 +1054,25 @@ export default function(pi: ExtensionAPI): void {
      }
     }
 
+    const allVisibleSequenceIds = new Set(visibleSequenceIds);
     const visibleEntries = sequence.filter((e: SessionEntry) => visibleSequenceIds.has(e.id));
-    const effectiveLimit = limit;
-    if (visibleEntries.length > effectiveLimit) {
-     const allowedIds = new Set(visibleEntries.slice(-effectiveLimit).map((e) => e.id));
+    activeVisibleEntries = visibleEntries.length;
+    activeDisplayedEntries = Math.min(visibleEntries.length, limit);
+    activeOmittedEntries = Math.max(0, visibleEntries.length - limit);
+    if (activeOmittedEntries > 0) {
+     const allowedIds = new Set(visibleEntries.slice(-limit).map((e) => e.id));
      visibleSequenceIds.clear();
      allowedIds.forEach((id) => visibleSequenceIds.add(id));
     }
 
+    if (activeOmittedEntries > 0) {
+     lines.push(`  :  ... (${activeOmittedEntries} earlier visible entries omitted by limit) ...`);
+    }
     let hiddenCount = 0;
     for (const entry of sequence) {
      if (signal?.aborted) break;
      if (!visibleSequenceIds.has(entry.id)) {
-      hiddenCount++;
+      if (!allVisibleSequenceIds.has(entry.id)) hiddenCount++;
       continue;
      }
      if (hiddenCount > 0) {
@@ -1121,10 +1151,10 @@ export default function(pi: ExtensionAPI): void {
     const pendingSuffix = contextRefresh.hasRebuilt(sm) ? "" : " (travel pending)";
     hudParts.push(`• Context Sync:     persistent rebuild active${pendingSuffix}${retrySuffix}`);
    }
-   if (!listCheckpoints && !useFullTree) {
-    hudParts.push(`• Tip:              large trees → list_checkpoints or search before full_tree`);
+   if (view === "active" || view === "search") {
+    hudParts.push(`• Tip:              large trees → view checkpoints or search before tree`);
    } else if (useFullTree && treeTruncated) {
-    hudParts.push(`• Tip:              tree truncated → list_checkpoints: true or search: "checkpoint-name"`);
+    hudParts.push(`• Tip:              tree truncated → { view: "checkpoints" } or { view: "search", query: "checkpoint-name" }`);
    }
    const hud = [...hudParts, `---------------------------------------------------`].join("\n");
 
@@ -1137,12 +1167,17 @@ export default function(pi: ExtensionAPI): void {
      stepsSinceCheckpoint,
      activePathNodes: branch.length,
      offPathSummaries: offPathForks,
-     fullTree: useFullTree,
-     listCheckpoints,
-     timelineMode,
-     search: searchTerm || null,
+     view,
+     limit,
      verbose,
      treeTruncated,
+     activeVisibleEntries: view === "active" ? activeVisibleEntries : null,
+     activeDisplayedEntries: view === "active" ? activeDisplayedEntries : null,
+     activeOmittedEntries: view === "active" ? activeOmittedEntries : null,
+     checkpointsMatchingAliases: view === "checkpoints" ? checkpointsMatchingAliases : null,
+     checkpointsDisplayedAliases: view === "checkpoints" ? checkpointsDisplayedAliases : null,
+     searchDisplayedMatches: view === "search" ? searchDisplayedMatches : null,
+     searchTruncated: view === "search" ? searchWasTruncated : false,
      outputLines: lines.length,
      contextRefreshPending: refreshPending,
      contextRefreshFailure: refreshFailure ?? null,
@@ -1154,7 +1189,7 @@ export default function(pi: ExtensionAPI): void {
  // ── Tool: acm_travel ───────────────────────────────────────
  const travelSchema = zod.object({
   target: zod.string().min(1).max(256).describe(
-   "Checkpoint name, history node ID, or 'root'. Name the boundary first, then choose a target before that boundary. On large trees use acm_timeline with list_checkpoints or search; use full_tree only when the surrounding branch structure is needed.",
+   "Checkpoint name, history node ID, or 'root'. Name the boundary first, then choose a target before that boundary. On large trees use acm_timeline with view checkpoints or search; use view tree only when the surrounding branch structure is needed.",
   ),
   summary: zod.string().min(1).max(10000).describe(
    `Handoff summary — the working state after travel. It must make the next action executable without rereading the folded trail. Fill every slot, write 'none' rather than dropping one: ${HANDOFF_SLOT_HINT}. Include recovery pointers; pointers over dumps. Max 10000 chars.`,

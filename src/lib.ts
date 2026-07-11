@@ -105,19 +105,6 @@ export type MeaningfulSkipReason =
  | "empty_assistant"
  | "empty_user";
 
-export type TimelineMode = "list_checkpoints" | "search" | "full_tree" | "active_path";
-
-/** When multiple timeline params are set, only the highest-priority mode runs. */
-export function resolveTimelineMode(params: {
- list_checkpoints?: boolean;
- search?: string;
- full_tree?: boolean;
-}): TimelineMode {
- if (params.list_checkpoints) return "list_checkpoints";
- if (params.search?.trim()) return "search";
- if (params.full_tree) return "full_tree";
- return "active_path";
-}
 
 /** Persistent post-travel context rebuild state keyed by session manager instance. */
 export class ContextRefreshRegistry {

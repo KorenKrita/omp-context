@@ -1,29 +1,25 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { TOOL_DESCRIPTIONS } from "./generated-guidance.js";
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-const agents = readFileSync(new URL("../AGENTS.md", import.meta.url), "utf8");
 
 describe("ACM tool description contract", () => {
- test("describes checkpoints as structurally lightweight without claiming zero cost", () => {
-  expect(source).toContain("Structurally lightweight: creates no branch or handoff and does not change the active context.");
-  expect(source).not.toContain("Zero cost: no branch, no handoff, no context change.");
+ test("registers every runtime description from canonical generated guidance", () => {
+  expect(source).toContain("description: TOOL_DESCRIPTIONS.checkpoint");
+  expect(source).toContain("description: TOOL_DESCRIPTIONS.timeline");
+  expect(source).toContain("description: TOOL_DESCRIPTIONS.travel");
  });
 
- test("keeps task-end travel conditional on meaningful structural saving", () => {
-  expect(source).toContain("when the preview shows meaningful structural saving");
-  expect(source).toContain("if it shows almost no saving, create a unique '-done' checkpoint and answer directly");
-  expect(source).toContain("Boundary decides whether folding is semantically appropriate; preview only measures savings.");
-  expect(source).not.toContain("At task end, set backupCurrentHeadAs to '<task>-done', travel");
+ test("describes timeline through the strict view discriminator", () => {
+  expect(TOOL_DESCRIPTIONS.timeline).toContain("one view: `active`, `checkpoints`, `search`, or `tree`");
+  expect(TOOL_DESCRIPTIONS.timeline).toContain("Omit view for `active`");
+  expect(`${source}\n${TOOL_DESCRIPTIONS.timeline}`).not.toMatch(/list_checkpoints|full_tree|active_path/);
  });
 
- test("states the scope of checkpoint estimates and large-tree target discovery", () => {
-  expect(source).toContain("displayed matching anchors when usage data is available; display limits still apply");
-  expect(source).toContain("On large trees use acm_timeline with list_checkpoints or search");
- });
-
- test("keeps repository guidance aligned with the runtime wording", () => {
-  expect(agents).toContain("Boundary decides whether folding is semantically appropriate; preview only measures savings.");
-  expect(agents).toContain("preview 几乎无 saving 时只创建唯一的 `<task>-done` checkpoint 后直接回答");
+ test("keeps checkpoint and travel descriptions concise and evidence-oriented", () => {
+  expect(TOOL_DESCRIPTIONS.checkpoint).toContain("Checkpoint does not branch or fold the active context");
+  expect(TOOL_DESCRIPTIONS.travel).toContain("Travel reports structural and context deltas");
+  expect(TOOL_DESCRIPTIONS.travel).not.toContain("preview");
  });
 });
