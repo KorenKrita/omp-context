@@ -14,6 +14,10 @@ export const TOOL_DESCRIPTIONS = {
 export const GUIDANCE_CUES = {
   "checkpointStart": "Recoverability created. Continue the current working set; choose any later fold target by boundary, not by nearest-anchor gravity.",
   "checkpointDone": "Milestone archived. Use this checkpoint as a retreat or raw-history recovery pointer if later work regresses.",
+  "timelineActive": "View `active` selected. Continue from the visible spine; inspect another view only when target identity or branch topology is not yet checkable.",
+  "timelineCheckpoints": "View `checkpoints` selected. Compare named candidates against the boundary, then inspect the chosen target's branch only if its placement remains ambiguous.",
+  "timelineSearch": "View `search` selected. Narrow by semantic label, node ID, or content until the pre-boundary target is identifiable; use the returned raw node ID when no checkpoint fits.",
+  "timelineTree": "View `tree` selected. Use branch topology to verify front ownership and target placement; narrow with search or checkpoints if the tree is truncated.",
   "travelPhase": "Checkpoint the next phase before its first action, then execute the handoff NEXT.",
   "travelTask": "Answer from the handoff branch; do not reintroduce archived process into the final response."
 } as const;

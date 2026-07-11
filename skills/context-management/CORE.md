@@ -118,6 +118,22 @@ Recoverability created. Continue the current working set; choose any later fold 
 Milestone archived. Use this checkpoint as a retreat or raw-history recovery pointer if later work regresses.
 <!-- ACM:CUE_CHECKPOINT_DONE:END -->
 
+<!-- ACM:CUE_TIMELINE_ACTIVE:START -->
+View `active` selected. Continue from the visible spine; inspect another view only when target identity or branch topology is not yet checkable.
+<!-- ACM:CUE_TIMELINE_ACTIVE:END -->
+
+<!-- ACM:CUE_TIMELINE_CHECKPOINTS:START -->
+View `checkpoints` selected. Compare named candidates against the boundary, then inspect the chosen target's branch only if its placement remains ambiguous.
+<!-- ACM:CUE_TIMELINE_CHECKPOINTS:END -->
+
+<!-- ACM:CUE_TIMELINE_SEARCH:START -->
+View `search` selected. Narrow by semantic label, node ID, or content until the pre-boundary target is identifiable; use the returned raw node ID when no checkpoint fits.
+<!-- ACM:CUE_TIMELINE_SEARCH:END -->
+
+<!-- ACM:CUE_TIMELINE_TREE:START -->
+View `tree` selected. Use branch topology to verify front ownership and target placement; narrow with search or checkpoints if the tree is truncated.
+<!-- ACM:CUE_TIMELINE_TREE:END -->
+
 <!-- ACM:CUE_TRAVEL_PHASE:START -->
 Checkpoint the next phase before its first action, then execute the handoff NEXT.
 <!-- ACM:CUE_TRAVEL_PHASE:END -->
