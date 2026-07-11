@@ -44,6 +44,14 @@ describe("exact OMP host support contract", () => {
     expect([...lockedOmpVersions]).toEqual([supportedVersion]);
   });
 
+  test("bootstraps the isolated fixture from its lock before building ACM source", async () => {
+    const fixture = await Bun.file(new URL("../test/host-fixture/package.json", import.meta.url)).json() as {
+      scripts?: Record<string, string>;
+    };
+
+    expect(fixture.scripts?.verify).toStartWith("bun install --frozen-lockfile && bun ./build-source.mjs &&");
+  });
+
   test("documents the exact release and the complete promotion checklist", async () => {
     const readme = await Bun.file(new URL("../README.md", import.meta.url)).text();
     const agents = await Bun.file(new URL("../AGENTS.md", import.meta.url)).text();
