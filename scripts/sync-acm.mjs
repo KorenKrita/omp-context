@@ -59,6 +59,20 @@ function resolveInside(root, path, label) {
   return resolved;
 }
 
+const OMP_HOST_PACKAGES = [
+  "@oh-my-pi/pi-agent-core",
+  "@oh-my-pi/pi-ai",
+  "@oh-my-pi/pi-coding-agent",
+];
+
+function parseJsonObject(source, label) {
+  const value = JSON.parse(source);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must contain a JSON object`);
+  }
+  return value;
+}
+
 const transforms = {
   copy(source) {
     return source;
@@ -68,7 +82,43 @@ const transforms = {
       .replaceAll('from "./index.js"', 'from "./tools.js"')
       .replaceAll("from './index.js'", "from './tools.js'")
       .replaceAll('new URL("./index.ts", import.meta.url)', 'new URL("./tools.ts", import.meta.url)')
-      .replaceAll("new URL('./index.ts', import.meta.url)", "new URL('./tools.ts', import.meta.url)");
+      .replaceAll("new URL('./index.ts', import.meta.url)", "new URL('./tools.ts', import.meta.url)")
+      .replaceAll("../skills/context-management", "../../skills/context-management");
+  },
+  "omp-host-test-imports"(source) {
+    return source
+      .replaceAll("../../src/index.js", "../tools.js")
+      .replaceAll("../../src/lib.js", "../lib.js")
+      .replaceAll("../../src/host-bridge.js", "../host-bridge.js")
+      .replaceAll("../../src/generated-guidance.js", "../generated-guidance.js");
+  },
+  "omp-package-metadata"(source, destination) {
+    if (destination === undefined) throw new Error("omp-package-metadata requires an existing destination package.json");
+    const canonical = parseJsonObject(source, "canonical package metadata");
+    const consumer = parseJsonObject(destination, "consumer package metadata");
+    for (const field of ["devDependencies", "peerDependencies"]) {
+      const canonicalDependencies = canonical[field];
+      if (!canonicalDependencies || typeof canonicalDependencies !== "object" || Array.isArray(canonicalDependencies)) {
+        throw new Error(`canonical package metadata is missing ${field}`);
+      }
+      const destinationDependencies = consumer[field];
+      if (destinationDependencies !== undefined && (typeof destinationDependencies !== "object" || Array.isArray(destinationDependencies))) {
+        throw new Error(`consumer package metadata has invalid ${field}`);
+      }
+      consumer[field] = destinationDependencies ?? {};
+      for (const packageName of OMP_HOST_PACKAGES) {
+        const version = canonicalDependencies[packageName];
+        if (typeof version !== "string" || version.length === 0) {
+          throw new Error(`canonical package metadata is missing exact ${field}.${packageName}`);
+        }
+        consumer[field][packageName] = version;
+      }
+      if (typeof consumer[field]["@oh-my-pi/pi-tui"] === "string") {
+        consumer[field]["@oh-my-pi/pi-tui"] = canonicalDependencies["@oh-my-pi/pi-coding-agent"];
+      }
+    }
+    const indentation = destination.match(/\n([\t ]+)"/)?.[1] ?? "  ";
+    return `${JSON.stringify(consumer, null, indentation)}\n`;
   },
 };
 
@@ -110,11 +160,12 @@ function preflight(options, manifest) {
     const transform = transforms[mapping.transform];
     if (!transform) throw new Error(`unsupported transform '${String(mapping.transform)}' for ${mapping.source}`);
     const source = readFileSync(sourcePath, "utf8");
+    const destination = existsSync(destinationPath) ? readFileSync(destinationPath, "utf8") : undefined;
     outputs.push({
       source: mapping.source,
       destination: mapping.destination,
       destinationPath,
-      expected: transform(source),
+      expected: transform(source, destination),
     });
   }
   return { outputs, preserved };

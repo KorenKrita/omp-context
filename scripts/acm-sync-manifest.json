@@ -6,9 +6,21 @@
     "packages/omp-plugin/src/acm"
   ],
   "preserve": [
-    "packages/omp-plugin/src/acm/prompt.ts"
+    "packages/omp-plugin/src/index.ts",
+    "packages/omp-plugin/src/acm/prompt.ts",
+    "packages/omp-plugin/src/acm/prompt.test.ts"
   ],
   "mappings": [
+    {
+      "source": "package.json",
+      "destination": "package.json",
+      "transform": "omp-package-metadata"
+    },
+    {
+      "source": "package.json",
+      "destination": "packages/omp-plugin/package.json",
+      "transform": "omp-package-metadata"
+    },
     {
       "source": "src/index.ts",
       "destination": "packages/omp-plugin/src/acm/tools.ts",
@@ -28,6 +40,71 @@
       "source": "src/generated-guidance.ts",
       "destination": "packages/omp-plugin/src/acm/generated-guidance.ts",
       "transform": "copy"
+    },
+    {
+      "source": "src/lib.test.ts",
+      "destination": "packages/omp-plugin/src/acm/lib.test.ts",
+      "transform": "omp-test-imports"
+    },
+    {
+      "source": "src/host-bridge.test.ts",
+      "destination": "packages/omp-plugin/src/acm/host-bridge.test.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "src/context-restore.test.ts",
+      "destination": "packages/omp-plugin/src/acm/context-restore.test.ts",
+      "transform": "omp-test-imports"
+    },
+    {
+      "source": "src/timeline.test.ts",
+      "destination": "packages/omp-plugin/src/acm/timeline.test.ts",
+      "transform": "omp-test-imports"
+    },
+    {
+      "source": "src/checkpoint.test.ts",
+      "destination": "packages/omp-plugin/src/acm/checkpoint.test.ts",
+      "transform": "omp-test-imports"
+    },
+    {
+      "source": "src/guidance.test.ts",
+      "destination": "packages/omp-plugin/src/acm/guidance.test.ts",
+      "transform": "omp-test-imports"
+    },
+    {
+      "source": "src/tool-descriptions.test.ts",
+      "destination": "packages/omp-plugin/src/acm/tool-descriptions.test.ts",
+      "transform": "omp-test-imports"
+    },
+    {
+      "source": "test/host-fixture/harness.ts",
+      "destination": "packages/omp-plugin/src/acm/host-fixture/harness.ts",
+      "transform": "omp-host-test-imports"
+    },
+    {
+      "source": "test/host-fixture/session-manager.test.ts",
+      "destination": "packages/omp-plugin/src/acm/host-fixture/session-manager.test.ts",
+      "transform": "omp-host-test-imports"
+    },
+    {
+      "source": "test/host-fixture/host-bridge.test.ts",
+      "destination": "packages/omp-plugin/src/acm/host-fixture/host-bridge.test.ts",
+      "transform": "omp-host-test-imports"
+    },
+    {
+      "source": "test/host-fixture/travel.test.ts",
+      "destination": "packages/omp-plugin/src/acm/host-fixture/travel.test.ts",
+      "transform": "omp-host-test-imports"
+    },
+    {
+      "source": "test/host-fixture/context-rebuild.test.ts",
+      "destination": "packages/omp-plugin/src/acm/host-fixture/context-rebuild.test.ts",
+      "transform": "omp-host-test-imports"
+    },
+    {
+      "source": "test/host-fixture/compaction-lifecycle.test.ts",
+      "destination": "packages/omp-plugin/src/acm/host-fixture/compaction-lifecycle.test.ts",
+      "transform": "omp-host-test-imports"
     },
     {
       "source": "skills/context-management/CORE.md",

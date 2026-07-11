@@ -163,6 +163,98 @@ describe("manual ACM sync command", () => {
     expect(verified.stderr).toContain("verification mismatch: packages/omp-plugin/src/acm/example.test.ts");
   });
 
+  test("transforms exact OMP metadata without replacing consumer-owned package fields", async () => {
+    const fixture = createFixture();
+    writeFileSync(join(fixture.canonical, "package.json"), JSON.stringify({
+      name: "omp-context",
+      devDependencies: {
+        "@oh-my-pi/pi-agent-core": "16.4.2",
+        "@oh-my-pi/pi-ai": "16.4.2",
+        "@oh-my-pi/pi-coding-agent": "16.4.2",
+      },
+      peerDependencies: {
+        "@oh-my-pi/pi-agent-core": "16.4.2",
+        "@oh-my-pi/pi-ai": "16.4.2",
+        "@oh-my-pi/pi-coding-agent": "16.4.2",
+      },
+    }, null, 2));
+    writeFileSync(join(fixture.consumer, "package.json"), JSON.stringify({
+      name: "magic-acm-context",
+      private: true,
+      devDependencies: { unrelated: "1.0.0", "@oh-my-pi/pi-tui": "^16.0.0" },
+      peerDependencies: {
+        "@oh-my-pi/pi-coding-agent": "^16.0.0",
+        "@oh-my-pi/pi-tui": "^16.0.0",
+      },
+    }, null, 2));
+    fixture.writeManifest({
+      version: 1,
+      canonicalPackage: "omp-context",
+      consumerPackage: "magic-acm-context",
+      requiredConsumerPaths: ["packages/omp-plugin/src/acm"],
+      preserve: ["packages/omp-plugin/src/acm/prompt.ts"],
+      mappings: [
+        { source: "package.json", destination: "package.json", transform: "omp-package-metadata" },
+      ],
+    });
+
+    const result = await runSync(fixture);
+    expect(result.exitCode).toBe(0);
+    const consumer = JSON.parse(readFileSync(join(fixture.consumer, "package.json"), "utf8"));
+    expect(consumer.name).toBe("magic-acm-context");
+    expect(consumer.private).toBe(true);
+    expect(consumer.devDependencies.unrelated).toBe("1.0.0");
+    for (const packageName of [
+      "@oh-my-pi/pi-agent-core",
+      "@oh-my-pi/pi-ai",
+      "@oh-my-pi/pi-coding-agent",
+    ]) {
+      expect(consumer.devDependencies[packageName]).toBe("16.4.2");
+      expect(consumer.peerDependencies[packageName]).toBe("16.4.2");
+    }
+    expect(consumer.devDependencies["@oh-my-pi/pi-tui"]).toBe("16.4.2");
+    expect(consumer.peerDependencies["@oh-my-pi/pi-tui"]).toBe("16.4.2");
+  });
+
+  test("rewrites standalone real-host imports through a declared transform", async () => {
+    const fixture = createFixture();
+    mkdirSync(join(fixture.canonical, "test", "host-fixture"), { recursive: true });
+    writeFileSync(
+      join(fixture.canonical, "test", "host-fixture", "travel.test.ts"),
+      [
+        'import register from "../../src/index.js";',
+        'import { helper } from "../../src/lib.js";',
+        'import { bridge } from "../../src/host-bridge.js";',
+        'import { GUIDANCE_CUES } from "../../src/generated-guidance.js";',
+      ].join("\n"),
+    );
+    fixture.writeManifest({
+      version: 1,
+      canonicalPackage: "omp-context",
+      consumerPackage: "magic-acm-context",
+      requiredConsumerPaths: ["packages/omp-plugin/src/acm"],
+      preserve: ["packages/omp-plugin/src/acm/prompt.ts"],
+      mappings: [
+        {
+          source: "test/host-fixture/travel.test.ts",
+          destination: "packages/omp-plugin/src/acm/host-fixture/travel.test.ts",
+          transform: "omp-host-test-imports",
+        },
+      ],
+    });
+
+    const result = await runSync(fixture);
+    expect(result.exitCode).toBe(0);
+    const destination = readFileSync(
+      join(fixture.consumer, "packages", "omp-plugin", "src", "acm", "host-fixture", "travel.test.ts"),
+      "utf8",
+    );
+    expect(destination).toContain('from "../tools.js"');
+    expect(destination).toContain('from "../lib.js"');
+    expect(destination).toContain('from "../host-bridge.js"');
+    expect(destination).toContain('from "../generated-guidance.js"');
+  });
+
   test("rejects an incompatible destination root", async () => {
     const fixture = createFixture();
     writeFileSync(join(fixture.consumer, "package.json"), JSON.stringify({ name: "wrong-consumer" }));
@@ -181,18 +273,37 @@ test("declares the complete canonical guidance surface for the integrated plugin
     mappings: z.array(z.object({ source: z.string(), destination: z.string(), transform: z.string() })),
   }).parse(parsed);
 
-  expect(manifest.preserve).toContain("packages/omp-plugin/src/acm/prompt.ts");
-  expect(manifest.mappings.map((mapping) => mapping.source).sort()).toEqual([
-    "skills/context-management/CORE.md",
-    "skills/context-management/SKILL.md",
-    "skills/context-management/references/archive-recovery.md",
-    "skills/context-management/references/exceptional-recovery.md",
-    "skills/context-management/references/target-selection.md",
-    "src/generated-guidance.ts",
-    "src/host-bridge.ts",
-    "src/index.ts",
-    "src/lib.ts",
+  expect(manifest.preserve.sort()).toEqual([
+    "packages/omp-plugin/src/acm/prompt.test.ts",
+    "packages/omp-plugin/src/acm/prompt.ts",
+    "packages/omp-plugin/src/index.ts",
   ]);
+  expect(manifest.mappings.map((mapping) => `${mapping.source}=>${mapping.destination}:${mapping.transform}`).sort()).toEqual([
+    "package.json=>package.json:omp-package-metadata",
+    "package.json=>packages/omp-plugin/package.json:omp-package-metadata",
+    "skills/context-management/CORE.md=>packages/omp-plugin/skills/context-management/CORE.md:copy",
+    "skills/context-management/SKILL.md=>packages/omp-plugin/skills/context-management/SKILL.md:copy",
+    "skills/context-management/references/archive-recovery.md=>packages/omp-plugin/skills/context-management/references/archive-recovery.md:copy",
+    "skills/context-management/references/exceptional-recovery.md=>packages/omp-plugin/skills/context-management/references/exceptional-recovery.md:copy",
+    "skills/context-management/references/target-selection.md=>packages/omp-plugin/skills/context-management/references/target-selection.md:copy",
+    "src/checkpoint.test.ts=>packages/omp-plugin/src/acm/checkpoint.test.ts:omp-test-imports",
+    "src/context-restore.test.ts=>packages/omp-plugin/src/acm/context-restore.test.ts:omp-test-imports",
+    "src/generated-guidance.ts=>packages/omp-plugin/src/acm/generated-guidance.ts:copy",
+    "src/guidance.test.ts=>packages/omp-plugin/src/acm/guidance.test.ts:omp-test-imports",
+    "src/host-bridge.test.ts=>packages/omp-plugin/src/acm/host-bridge.test.ts:copy",
+    "src/host-bridge.ts=>packages/omp-plugin/src/acm/host-bridge.ts:copy",
+    "src/index.ts=>packages/omp-plugin/src/acm/tools.ts:copy",
+    "src/lib.test.ts=>packages/omp-plugin/src/acm/lib.test.ts:omp-test-imports",
+    "src/lib.ts=>packages/omp-plugin/src/acm/lib.ts:copy",
+    "src/timeline.test.ts=>packages/omp-plugin/src/acm/timeline.test.ts:omp-test-imports",
+    "src/tool-descriptions.test.ts=>packages/omp-plugin/src/acm/tool-descriptions.test.ts:omp-test-imports",
+    "test/host-fixture/compaction-lifecycle.test.ts=>packages/omp-plugin/src/acm/host-fixture/compaction-lifecycle.test.ts:omp-host-test-imports",
+    "test/host-fixture/context-rebuild.test.ts=>packages/omp-plugin/src/acm/host-fixture/context-rebuild.test.ts:omp-host-test-imports",
+    "test/host-fixture/harness.ts=>packages/omp-plugin/src/acm/host-fixture/harness.ts:omp-host-test-imports",
+    "test/host-fixture/host-bridge.test.ts=>packages/omp-plugin/src/acm/host-fixture/host-bridge.test.ts:omp-host-test-imports",
+    "test/host-fixture/session-manager.test.ts=>packages/omp-plugin/src/acm/host-fixture/session-manager.test.ts:omp-host-test-imports",
+    "test/host-fixture/travel.test.ts=>packages/omp-plugin/src/acm/host-fixture/travel.test.ts:omp-host-test-imports",
+  ].sort());
   expect(new Set(manifest.mappings.map((mapping) => mapping.destination)).size).toBe(
     manifest.mappings.length,
   );
