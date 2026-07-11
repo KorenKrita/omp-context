@@ -12,6 +12,9 @@
     ".omp-plugin"
   ],
   "scripts": {
+    "generate:guidance": "bun scripts/generate-guidance.mjs",
+    "sync:acm": "bun scripts/sync-acm.mjs",
+    "test:host": "bun run --cwd test/host-fixture verify",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

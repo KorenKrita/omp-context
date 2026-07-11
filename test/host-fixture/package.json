@@ -1,0 +1,13 @@
+{
+  "name": "omp-context-host-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "verify": "bun test ./version.test.ts ./session-manager.test.ts"
+  },
+  "dependencies": {
+    "@oh-my-pi/pi-agent-core": "16.4.2",
+    "@oh-my-pi/pi-ai": "16.4.2",
+    "@oh-my-pi/pi-coding-agent": "16.4.2"
+  }
+}

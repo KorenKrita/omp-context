@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "canonicalPackage": "omp-context",
+  "consumerPackage": "magic-acm-context",
+  "requiredConsumerPaths": [
+    "packages/omp-plugin/src/acm"
+  ],
+  "preserve": [
+    "packages/omp-plugin/src/acm/prompt.ts"
+  ],
+  "mappings": [
+    {
+      "source": "src/index.ts",
+      "destination": "packages/omp-plugin/src/acm/tools.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "src/lib.ts",
+      "destination": "packages/omp-plugin/src/acm/lib.ts",
+      "transform": "copy"
+    }
+  ]
+}

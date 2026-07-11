@@ -40,6 +40,7 @@ import {
  HANDOFF_SLOT_HINT,
  type UsageLike,
 } from "./lib.js";
+import { ACM_CORE, ACM_CORE_MARKER, TOOL_DESCRIPTIONS } from "./generated-guidance.js";
 
 /** Content part types that can appear in assistant message arrays. */
 type AssistantContentPart = TextContent | ThinkingContent | RedactedThinkingContent | ToolCall | AnthropicFallbackContent;
@@ -688,6 +689,13 @@ export default function(pi: ExtensionAPI): void {
  const refreshTargetLeafIds = new WeakMap<object, string>();
  const registerTool = (tool: Parameters<ExtensionAPI["registerTool"]>[0] & { strict?: boolean }) => pi.registerTool(tool);
 
+ pi.on("before_agent_start", (event) => {
+  if (event.systemPrompt.some((segment) => segment.includes(ACM_CORE_MARKER))) return undefined;
+  return {
+   systemPrompt: [...event.systemPrompt, `${ACM_CORE_MARKER}\n${ACM_CORE}`],
+  };
+ });
+
  // ── Tool: acm_checkpoint ───────────────────────────────────
  const checkpointSchema = zod.object({
   name: zod.string().min(1).max(64).regex(/^[\w\-\.]+$/).describe(
@@ -701,8 +709,7 @@ export default function(pi: ExtensionAPI): void {
  registerTool({
   name: "acm_checkpoint",
   label: "ACM Checkpoint",
-  description:
-   "Create a recoverability anchor on a conversation node. Structurally lightweight: creates no branch or handoff and does not change the active context. Checkpoint before task chains, phase starts, bursts whose output cannot be bounded, risky steps, and milestones. A checkpoint does not fold context; it makes a future boundary fold possible. Names are unique across the session tree; one node may hold multiple aliases. The result reports context usage and fold candidates — choose by boundary, not proximity.",
+  description: TOOL_DESCRIPTIONS.checkpoint,
   parameters: checkpointSchema as unknown as TSchema,
   strict: false,
   async execute(

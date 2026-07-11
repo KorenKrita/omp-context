@@ -6,3 +6,5 @@ dist/
 coverage/
 .memsearch/
 bun.lock
+!test/host-fixture/bun.lock
+.codegraph/
