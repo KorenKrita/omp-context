@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
-const supportedVersion = "16.4.2";
+const supportedVersion = "16.4.5";
 const ompPackages = [
   "@oh-my-pi/pi-agent-core",
   "@oh-my-pi/pi-ai",

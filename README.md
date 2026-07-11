@@ -40,7 +40,7 @@ omp install github:KorenKrita/omp-context
 
 ## 支持的 OMP 版本
 
-支持的 OMP 版本：`16.4.2`。`@oh-my-pi/pi-coding-agent`、`@oh-my-pi/pi-agent-core` 和 `@oh-my-pi/pi-ai` 的 peer、development、lock 与本地安装版本必须完全一致；项目不声明兼容范围，也不维护多版本 shim。
+支持的 OMP 版本：`16.4.5`。`@oh-my-pi/pi-coding-agent`、`@oh-my-pi/pi-agent-core` 和 `@oh-my-pi/pi-ai` 的 peer、development、lock 与本地安装版本必须完全一致；项目不声明兼容范围，也不维护多版本 shim。
 
 未来升级必须先把候选版本作为 **isolated candidate** 放进 `test/host-fixture`，在不启动模型或使用 API key 的前提下验证 real SessionManager 与 captured extension handlers。候选验证至少审查：
 
@@ -54,6 +54,8 @@ omp install github:KorenKrita/omp-context
 - `changelog review`
 
 运行 `bun run test:host`、相关 focused tests 和 `bun run typecheck` 后，才可在一个原子变更中 **atomically replace every exact OMP version**：同时更新根 peer/development 声明、lock、已安装依赖、支持文档与隔离 fixture。不得扩大版本范围。
+
+`16.4.2 → 16.4.5` 审查结论：`SessionManager`、session entry、token estimation 与 ACM 使用的 tool registration/event contract 未发生破坏性变化；`session-context` 只新增 transcript 专用的 `keepDanglingToolCalls` 选项，默认 provider-context 重建行为不变。OMP 16.4.5 的 task tool wire schema 发生 breaking change，但 ACM extension 不调用或封装该 tool，因此无需兼容代码。
 
 ## 手动同步到 consumer
 
@@ -80,7 +82,7 @@ bun run sync:acm -- \
 
 ## 已知 host 限制
 
-- OMP 16.4.2 未向普通 tool context 暴露原子的 tree-navigation/state-sync API。Typed host mutation ports 因而观察 mutation 前后状态，并返回 `not_applied`、`applied` 或 `indeterminate`；只要 branch mutation 已发生或无法排除，travel coordinator 就保留恢复标签并安排 context refresh。
+- OMP 16.4.5 未向普通 tool context 暴露原子的 tree-navigation/state-sync API。Typed host mutation ports 因而观察 mutation 前后状态，并返回 `not_applied`、`applied` 或 `indeterminate`；只要 branch mutation 已发生或无法排除，travel coordinator 就保留恢复标签并安排 context refresh。
 - `branchWithSummary()` 更新 SessionManager tree，但不会同步 host 私有的 `agent.state.messages`。插件不修改该私有数组，而是在每次公开 `context` event 中从当前 leaf 持续重建 provider context。
 - native pre-prompt compaction 依据 host-owned message state 估算，因此 travel 后可能发生一次不必要的提前 compaction。插件不取消、延迟或替换 OMP compaction。
 - travel 只改变会话树与后续 model context；不会回滚文件、进程、浏览器、commit 或远端副作用。

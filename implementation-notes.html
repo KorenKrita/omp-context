@@ -36,8 +36,8 @@
       </tr>
       <tr>
         <td>user-decided</td>
-        <td>Support exactly OMP <code>16.4.2</code>.</td>
-        <td><code>@oh-my-pi/pi-coding-agent</code>, <code>@oh-my-pi/pi-agent-core</code>, and <code>@oh-my-pi/pi-ai</code> must share the exact version. Future updates replace the exact release only after isolated real-host verification.</td>
+        <td>Support exactly OMP <code>16.4.5</code>.</td>
+        <td><code>@oh-my-pi/pi-coding-agent</code>, <code>@oh-my-pi/pi-agent-core</code>, and <code>@oh-my-pi/pi-ai</code> must share the exact version. This replaces the previous exact <code>16.4.2</code> contract after changelog, imported-surface, type, and isolated real-host verification.</td>
       </tr>
       <tr>
         <td>user-decided</td>
@@ -52,7 +52,12 @@
       <tr>
         <td>user-decided</td>
         <td>Verify runtime behavior with the real SessionManager.</td>
-        <td>Use an isolated OMP <code>16.4.2</code> fixture without a model or API key. Pin resolver roots and prove all OMP imports come from the fixture.</td>
+        <td>Use an isolated OMP <code>16.4.5</code> fixture without a model or API key. Pin resolver roots and prove all OMP imports come from the fixture.</td>
+      </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>OMP <code>16.4.5</code> requires no ACM compatibility shim.</td>
+        <td>The <code>16.4.2 → 16.4.5</code> audit found unchanged SessionManager, session-entry, tokenizer, compaction, and PI AI type surfaces used by ACM. Session-context only added an opt-in transcript option; the breaking task-tool wire schema is outside ACM's extension contract.</td>
       </tr>
       <tr>
         <td>user-decided</td>

@@ -181,14 +181,14 @@ describe("manual ACM sync command", () => {
     writeFileSync(join(fixture.canonical, "package.json"), JSON.stringify({
       name: "omp-context",
       devDependencies: {
-        "@oh-my-pi/pi-agent-core": "16.4.2",
-        "@oh-my-pi/pi-ai": "16.4.2",
-        "@oh-my-pi/pi-coding-agent": "16.4.2",
+        "@oh-my-pi/pi-agent-core": "16.4.5",
+        "@oh-my-pi/pi-ai": "16.4.5",
+        "@oh-my-pi/pi-coding-agent": "16.4.5",
       },
       peerDependencies: {
-        "@oh-my-pi/pi-agent-core": "16.4.2",
-        "@oh-my-pi/pi-ai": "16.4.2",
-        "@oh-my-pi/pi-coding-agent": "16.4.2",
+        "@oh-my-pi/pi-agent-core": "16.4.5",
+        "@oh-my-pi/pi-ai": "16.4.5",
+        "@oh-my-pi/pi-coding-agent": "16.4.5",
       },
     }, null, 2));
     writeFileSync(join(fixture.consumer, "package.json"), JSON.stringify({
@@ -223,11 +223,11 @@ describe("manual ACM sync command", () => {
       "@oh-my-pi/pi-ai",
       "@oh-my-pi/pi-coding-agent",
     ]) {
-      expect(consumer.devDependencies[packageName]).toBe("16.4.2");
-      expect(consumer.peerDependencies[packageName]).toBe("16.4.2");
+      expect(consumer.devDependencies[packageName]).toBe("16.4.5");
+      expect(consumer.peerDependencies[packageName]).toBe("16.4.5");
     }
-    expect(consumer.devDependencies["@oh-my-pi/pi-tui"]).toBe("16.4.2");
-    expect(consumer.peerDependencies["@oh-my-pi/pi-tui"]).toBe("16.4.2");
+    expect(consumer.devDependencies["@oh-my-pi/pi-tui"]).toBe("16.4.5");
+    expect(consumer.peerDependencies["@oh-my-pi/pi-tui"]).toBe("16.4.5");
   });
 
   test("installs reproducible guidance and isolated host commands in the consumer plugin", async () => {
@@ -235,14 +235,14 @@ describe("manual ACM sync command", () => {
     writeFileSync(join(fixture.canonical, "package.json"), JSON.stringify({
       name: "omp-context",
       devDependencies: {
-        "@oh-my-pi/pi-agent-core": "16.4.2",
-        "@oh-my-pi/pi-ai": "16.4.2",
-        "@oh-my-pi/pi-coding-agent": "16.4.2",
+        "@oh-my-pi/pi-agent-core": "16.4.5",
+        "@oh-my-pi/pi-ai": "16.4.5",
+        "@oh-my-pi/pi-coding-agent": "16.4.5",
       },
       peerDependencies: {
-        "@oh-my-pi/pi-agent-core": "16.4.2",
-        "@oh-my-pi/pi-ai": "16.4.2",
-        "@oh-my-pi/pi-coding-agent": "16.4.2",
+        "@oh-my-pi/pi-agent-core": "16.4.5",
+        "@oh-my-pi/pi-ai": "16.4.5",
+        "@oh-my-pi/pi-coding-agent": "16.4.5",
       },
     }, null, 2));
     const pluginPackage = join(fixture.consumer, "packages", "omp-plugin", "package.json");

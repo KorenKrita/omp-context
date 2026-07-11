@@ -18,7 +18,7 @@ describe("maintainer documentation contract", () => {
       "no changes",
       "不会执行任何 Git 操作",
       "分别提交",
-      "支持的 OMP 版本：`16.4.2`",
+      "支持的 OMP 版本：`16.4.5`",
       "Typed host mutation ports",
       "agent.state.messages",
     ]) {

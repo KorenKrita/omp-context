@@ -15,8 +15,8 @@
 ## 技术栈
 
 - TypeScript ESM (`"type": "module"`, `module: Node16`, `target: ES2022`, `strict: true`)
-- `@oh-my-pi/pi-coding-agent` ExtensionAPI 作为 peer dependency（精确版本 `16.4.2`），由 OMP 运行时提供
-- `@oh-my-pi/pi-agent-core`（token estimator）和 `@oh-my-pi/pi-ai` 同为精确版本 `16.4.2` 的 peer/dev dependency
+- `@oh-my-pi/pi-coding-agent` ExtensionAPI 作为 peer dependency（精确版本 `16.4.5`），由 OMP 运行时提供
+- `@oh-my-pi/pi-agent-core`（token estimator）和 `@oh-my-pi/pi-ai` 同为精确版本 `16.4.5` 的 peer/dev dependency
 - 工具参数 schema 使用运行时注入的 `pi.zod`
 - Source-first: OMP 直接加载 `src/*.ts`, 不打包 `dist/`
 
@@ -37,7 +37,7 @@
 
 ### checkpoint 使用 appendLabelChange
 
-不要用 `pi.setLabel(id, name)` 给会话节点打 label。OMP 16.4.2 的类型声明看起来支持两个参数，但实际 `ConcreteExtensionAPI.setLabel(label: string)` 仍只修改扩展显示名，不会写 session label。
+不要用 `pi.setLabel(id, name)` 给会话节点打 label。OMP 16.4.5 的类型声明看起来支持两个参数，但扩展加载时拿到的 `ConcreteExtensionAPI.setLabel(label: string)` 仍只修改扩展显示名，不会写 session label。
 
 当前实现通过 `appendCheckpointLabel()`、`applyBranchWithSummary()` 和 `rollbackCheckpointLabel()` 三个 typed mutation ports 访问完整 `SessionManager`。结果明确区分 `not_applied`、`applied` 与 `indeterminate`；返回值畸形时以 mutation 后可观察的 journal/leaf 状态为准，不能仅依赖 host 返回 ID。
 
@@ -86,7 +86,7 @@ travel 不保证降 token，也不再给出基于 500-token/2-percent 阈值的 
 
 ### 已知限制：native agent state 仍可能滞后
 
-持久覆盖只修复模型出站 context；OMP agent 内部的 `agent.state.messages` 在 extension 直接调用 `branchWithSummary` 后仍可能保留 travel 前数组。OMP 16.4.2 的原生 `AgentSession.navigateTree()` 会在 tree mutation 后调用 `agent.replaceMessages()`，但 `navigateTree` 只暴露给 command context，custom tool 的 `ExtensionContext` 无法调用，因此 ACM tool 仍不能走这条原生同步路径。
+持久覆盖只修复模型出站 context；OMP agent 内部的 `agent.state.messages` 在 extension 直接调用 `branchWithSummary` 后仍可能保留 travel 前数组。OMP 16.4.5 的原生 `AgentSession.navigateTree()` 会在 tree mutation 后调用 `agent.replaceMessages()`，但 `navigateTree` 仍只暴露给 command context，custom tool 的 `ExtensionContext` 无法调用，因此 ACM tool 仍不能走这条原生同步路径。
 
 `#runPrePromptCompactionIfNeeded` 在 `emitContext` 前根据 agent state 估算阈值，所以 travel 后可能发生一次本不必要的 native compaction；compaction 会从当前 SessionManager branch 重建并同步 agent state，但可能比预期更早消耗 handoff。当前扩展层无法直接消除这个触发窗口。彻底修复需要 OMP 上游把 tree navigation/state sync 暴露给 tool context，或让 `branchWithSummary(fromExtension=true)` 自动同步 agent messages。
 
@@ -149,7 +149,7 @@ Node16 moduleResolution 下需要从 OMP 子路径导入类型：
 | `skills/context-management/references/target-selection.md` | 非显然 target、interleaved fronts、missing anchor、raw node fallback、名称冲突 |
 | `skills/context-management/references/archive-recovery.md` | archive detail recovery round trip 与 archive-drift 防护 |
 | `skills/context-management/references/exceptional-recovery.md` | travel/rollback/refresh/restored-history/no-saving 异常恢复 |
-| `test/host-fixture/` | 精确 OMP 16.4.2 的真实 SessionManager/runtime contract fixtures |
+| `test/host-fixture/` | 精确 OMP 16.4.5 的真实 SessionManager/runtime contract fixtures |
 | `scripts/generate-guidance.mjs` | 从 canonical guidance 生成运行时 artifacts |
 | `scripts/sync-acm.mjs` / `scripts/acm-sync-manifest.json` | declarative canonical → consumer 手动同步 |
 | `README.md` | 面向用户的安装、行为与维护说明 |
