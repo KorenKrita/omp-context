@@ -60,9 +60,9 @@
         <td>A canonical CORE supplies the normal path. Generated system-prompt and tool guidance are derived artifacts, not editable behavioral sources.</td>
       </tr>
       <tr>
-        <td>user-decided</td>
-        <td>Inject CORE through the ACM extension.</td>
-        <td>Use public <code>before_agent_start</code>, preserve every existing system-prompt segment in order, add a stable marker, and inject CORE exactly once in both repositories.</td>
+        <td>agent-resolved</td>
+        <td>Use one canonical CORE producer and one prompt owner per deployed extension.</td>
+        <td>Standalone ACM registers its public <code>before_agent_start</code> hook. The integrated consumer disables that hook and calls <code>ensureAcmCoreSegment()</code> from its sole prompt orchestrator, preserving unrelated segment boundaries.</td>
       </tr>
       <tr>
         <td>user-decided</td>
@@ -113,6 +113,31 @@
         <td>user-decided</td>
         <td>Validate guidance through static contracts and real use.</td>
         <td>Do not create a stochastic model benchmark now. Change guidance in response to observed failures or host-contract changes.</td>
+      </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>Model host mutations as an explicit transaction outcome.</td>
+        <td>Mutation ports return <code>not_applied</code>, <code>applied</code>, or <code>indeterminate</code> after observing the real label journal and leaf. Travel compensation uses an operation-scoped token; applied or indeterminate branch changes always create a context-refresh obligation.</td>
+      </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>Publish the synchronized ACM surface transactionally.</td>
+        <td>Transforms assert source match cardinality, staged outputs receive independent structural validation, and a rollback journal restores every replaced destination if publication or final verification fails. Per-file temporary rename alone was insufficient because it allowed a partial consumer state.</td>
+      </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>Keep one OMP synchronization authority in the consumer.</td>
+        <td>The scheduled workflow invokes canonical <code>sync-acm.mjs</code> plus <code>--verify-only</code>. The legacy OMP copier and injector were removed. A checked consumer-owned patch restores only the integration seam after upstream Magic Context sync and fails closed on drift.</td>
+      </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>Bind consumer verification to derived provenance.</td>
+        <td><code>verify:acm</code> is non-mutating. Exact host versions derive from package metadata, and <code>acm-provenance.json</code> records canonical/host versions, manifest hash, and every synchronized artifact hash.</td>
+      </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>Split runtime behavior by ownership rather than file size.</td>
+        <td><code>src/index.ts</code> is a short composition root. Checkpoint, timeline, travel, transaction coordination, lifecycle, message sanitation, entry resolution, and label replay each have one owning module.</td>
       </tr>
     </tbody>
   </table>

@@ -1,0 +1,365 @@
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
+import type { TSchema } from "@oh-my-pi/pi-ai/types";
+import {
+  buildLabelMaps,
+  ContextRefreshRegistry,
+  estimateUsageAfterMessageChange,
+  extractTextFromContent,
+  formatBoundaryTravelCue,
+  formatContextUsage,
+  formatEntryLabels,
+  getEntryLabels,
+  pushTreeChildrenPreOrder,
+  type LabelMaps,
+} from "./lib.js";
+import { buildSessionMessages } from "./host-bridge.js";
+import type { AcmSessionRuntime } from "./runtime.js";
+import { GUIDANCE_CUES, RECOVERY_GUIDANCE, TOOL_DESCRIPTIONS } from "./generated-guidance.js";
+
+interface CheckpointListing {
+  entryId: string;
+  label: string;
+  onActivePath: boolean;
+  isHead: boolean;
+  pathOrder: number;
+  timestamp: string;
+}
+
+interface SearchMatch {
+  entry: SessionEntry;
+  labels: string[];
+}
+
+function entryText(entry: SessionEntry, verbose: boolean): string {
+  if (entry.type === "branch_summary" || entry.type === "compaction") return entry.summary || "[No summary provided]";
+  if (entry.type === "label") return verbose ? `label ${entry.label ?? "cleared"} → ${entry.targetId}` : "";
+  if (entry.type !== "message") return verbose ? entry.type : "";
+  const role = entry.message.role;
+  if (!verbose && (role === "custom" || (role as string) === "system")) return "";
+  return "content" in entry.message ? extractTextFromContent(entry.message.content) : "";
+}
+
+function displayRole(entry: SessionEntry): string {
+  if (entry.type === "branch_summary") return "SUMMARY";
+  if (entry.type === "compaction") return "COMPACTION";
+  if (entry.type === "label") return "LABEL";
+  if (entry.type !== "message") return entry.type.toUpperCase();
+  if (entry.message.role === "assistant") return "AI";
+  if (entry.message.role === "user") return "USER";
+  if (entry.message.role === "toolResult") return `TOOL:${entry.message.toolName}`;
+  if (entry.message.role === "bashExecution") return "BASH";
+  return entry.message.role.toUpperCase();
+}
+
+function visibleOnActivePath(entry: SessionEntry, labelMaps: LabelMaps, leafId: string | null, verbose: boolean): boolean {
+  if (verbose) return true;
+  if (entry.id === leafId || getEntryLabels(labelMaps, entry.id).length > 0) return true;
+  if (entry.type === "branch_summary" || entry.type === "compaction") return true;
+  return entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant");
+}
+
+function collectListings(
+  labelMaps: LabelMaps,
+  activeIds: Set<string>,
+  leafId: string | null,
+  filter: string,
+  entriesById: Map<string, SessionEntry>,
+  pathOrder: Map<string, number>,
+): CheckpointListing[] {
+  const listings: CheckpointListing[] = [];
+  for (const [entryId, labels] of labelMaps.entryToLabels) {
+    const entry = entriesById.get(entryId);
+    if (!entry) continue;
+    for (const label of labels) {
+      if (filter && !label.toLowerCase().includes(filter) && !entryId.toLowerCase().includes(filter)) continue;
+      listings.push({
+        entryId,
+        label,
+        onActivePath: activeIds.has(entryId),
+        isHead: entryId === leafId,
+        pathOrder: pathOrder.get(entryId) ?? Number.MAX_SAFE_INTEGER,
+        timestamp: entry.timestamp,
+      });
+    }
+  }
+  return listings.sort((left, right) => {
+    if (left.onActivePath !== right.onActivePath) return left.onActivePath ? -1 : 1;
+    if (left.onActivePath && left.pathOrder !== right.pathOrder) return left.pathOrder - right.pathOrder;
+    const timestampOrder = left.timestamp.localeCompare(right.timestamp);
+    return timestampOrder || left.entryId.localeCompare(right.entryId) || left.label.localeCompare(right.label);
+  });
+}
+
+function literalPattern(query: string): RegExp {
+  return new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+}
+
+function searchTree(
+  tree: SessionTreeNode[],
+  labelMaps: LabelMaps,
+  query: string,
+  limit: number,
+  signal?: AbortSignal,
+): { matches: SearchMatch[]; truncated: boolean } {
+  const pattern = literalPattern(query);
+  const stack = [...tree].reverse();
+  const matches: SearchMatch[] = [];
+  let truncated = false;
+  while (stack.length > 0) {
+    if (signal?.aborted) {
+      truncated = true;
+      break;
+    }
+    const node = stack.pop()!;
+    const labels = getEntryLabels(labelMaps, node.entry.id);
+    const matched = pattern.test(node.entry.id) || labels.some((label) => pattern.test(label)) || pattern.test(entryText(node.entry, true));
+    if (matched) {
+      if (matches.length < limit) matches.push({ entry: node.entry, labels });
+      else truncated = true;
+    }
+    pushTreeChildrenPreOrder(stack, node.children);
+  }
+  return { matches, truncated };
+}
+
+function renderTree(
+  tree: SessionTreeNode[],
+  labelMaps: LabelMaps,
+  leafId: string | null,
+  activeIds: Set<string>,
+  maxDepth: number,
+  signal?: AbortSignal,
+): { lines: string[]; truncated: boolean } {
+  const lines: string[] = [];
+  let truncated = false;
+  const visit = (node: SessionTreeNode, depth: number, prefix: string, last: boolean): void => {
+    if (signal?.aborted || lines.length >= 200) {
+      truncated = true;
+      return;
+    }
+    const role = displayRole(node.entry);
+    const labels = formatEntryLabels(labelMaps, node.entry.id);
+    const tags = [
+      node.entry.id === leafId ? "HEAD" : null,
+      activeIds.has(node.entry.id) ? "active" : "off-path",
+      labels ? `checkpoint: ${labels}` : null,
+    ].filter((tag): tag is string => tag !== null);
+    const body = entryText(node.entry, true).replace(/\s+/g, " ").slice(0, 100);
+    lines.push(`${prefix}${last ? "└─" : "├─"} ${node.entry.id} (${tags.join(", ")}) [${role}] ${body}`);
+    if (depth >= maxDepth && node.children.length > 0) {
+      truncated = true;
+      return;
+    }
+    const childPrefix = `${prefix}${last ? "  " : "│ "}`;
+    node.children.forEach((child, index) => visit(child, depth + 1, childPrefix, index === node.children.length - 1));
+  };
+  tree.forEach((root, index) => visit(root, 1, "", index === tree.length - 1));
+  return { lines, truncated };
+}
+
+function countOffPathSummaries(branch: SessionEntry[], tree: SessionTreeNode[], activeIds: Set<string>): number {
+  const branchIds = new Set(branch.map((entry) => entry.id));
+  let count = 0;
+  const stack = [...tree];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (branchIds.has(node.entry.id) && node.children.some((child) => !activeIds.has(child.entry.id) && child.entry.type === "branch_summary")) count++;
+    stack.push(...node.children);
+  }
+  return count;
+}
+
+export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntime): void {
+  const registerTool = (tool: Parameters<ExtensionAPI["registerTool"]>[0] & { strict?: boolean }) => pi.registerTool(tool);
+  const limitSchema = pi.zod.number().int().min(1).max(50).default(50).describe(
+    "Maximum recent visible entries (active), sorted aliases (checkpoints), matches (search), or traversal depth per root (tree). Range 1..50; default 50.",
+  );
+  const viewSchema = pi.zod.discriminatedUnion("view", [
+    pi.zod.object({
+      view: pi.zod.literal("active"),
+      limit: limitSchema,
+      verbose: pi.zod.boolean().optional().describe("Show all active-path messages, including internal tool traffic and system/custom metadata."),
+    }).strict(),
+    pi.zod.object({
+      view: pi.zod.literal("checkpoints"),
+      limit: limitSchema,
+      filter: pi.zod.string().trim().min(1).max(500).optional().describe("Optional non-blank checkpoint label or entry-ID filter, matched case-insensitively."),
+    }).strict(),
+    pi.zod.object({
+      view: pi.zod.literal("search"),
+      limit: limitSchema,
+      query: pi.zod.string().trim().min(1).max(500).describe("Required non-blank full-tree query matching labels, node IDs, or rendered content case-insensitively."),
+    }).strict(),
+    pi.zod.object({ view: pi.zod.literal("tree"), limit: limitSchema }).strict(),
+  ]);
+  const schema = pi.zod.preprocess((rawParams) => {
+    if (typeof rawParams !== "object" || rawParams === null || Array.isArray(rawParams) || "view" in rawParams) return rawParams;
+    return { ...rawParams, view: "active" };
+  }, viewSchema);
+
+  registerTool({
+    name: "acm_timeline",
+    label: "ACM Timeline",
+    description: TOOL_DESCRIPTIONS.timeline,
+    parameters: schema as unknown as TSchema,
+    strict: true,
+    async execute(
+      _id: string,
+      rawParams: unknown,
+      signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext,
+    ) {
+      const params = schema.parse(rawParams);
+      const sessionManager = ctx.sessionManager;
+      const tree = sessionManager.getTree();
+      const branch = sessionManager.getBranch();
+      const entries = sessionManager.getEntries();
+      const leafId = sessionManager.getLeafId();
+      const labelMaps = buildLabelMaps(entries);
+      const activeIds = new Set(branch.map((entry) => entry.id));
+      const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
+      const pathOrder = new Map(branch.map((entry, index) => [entry.id, index]));
+      const lines: string[] = [];
+      let treeTruncated = false;
+      let activeVisibleEntries = 0;
+      let activeDisplayedEntries = 0;
+      let activeOmittedEntries = 0;
+      let checkpointsMatchingAliases = 0;
+      let checkpointsDisplayedAliases = 0;
+      let searchDisplayedMatches = 0;
+      let searchTruncated = false;
+
+      if (params.view === "checkpoints") {
+        const filter = params.filter?.toLowerCase() ?? "";
+        const listings = collectListings(labelMaps, activeIds, leafId, filter, entriesById, pathOrder);
+        checkpointsMatchingAliases = listings.length;
+        checkpointsDisplayedAliases = Math.min(listings.length, params.limit);
+        const usage = ctx.getContextUsage();
+        const currentResult = buildSessionMessages(sessionManager, leafId);
+        if (!currentResult.ok) {
+          return {
+            content: [{ type: "text" as const, text: `Checkpoints (${listings.length} matching aliases, 0 displayed). Current messages could not be built: ${currentResult.message}` }],
+            details: { error: currentResult.error, message: currentResult.message },
+          };
+        }
+        lines.push(`Checkpoints (${listings.length} matching aliases, ${checkpointsDisplayedAliases} displayed${filter ? ` for '${params.filter}'` : ""}; cap 50). Current: ${currentResult.value.length} msgs, ${formatContextUsage(usage, true)}:`);
+        const cache = new Map<string, AgentMessage[]>();
+        for (const checkpoint of listings.slice(0, params.limit)) {
+          let targetMessages = cache.get(checkpoint.entryId);
+          if (!targetMessages) {
+            const targetResult = buildSessionMessages(sessionManager, checkpoint.entryId);
+            targetMessages = targetResult.ok ? targetResult.value : [];
+            cache.set(checkpoint.entryId, targetMessages);
+          }
+          const estimated = estimateUsageAfterMessageChange(usage, currentResult.value, targetMessages);
+          const estimateText = estimated
+            ? `~${targetMessages.length} msgs, ~${formatContextUsage(estimated, true)} est. (+summary)`
+            : `~${targetMessages.length} msgs`;
+          lines.push(`  ${checkpoint.label} → ${checkpoint.entryId} (${checkpoint.onActivePath ? "on-path" : "off-path"}${checkpoint.isHead ? ", *HEAD*" : ""}) ${estimateText}`);
+        }
+        if (listings.length > params.limit) lines.push(`  ... +${listings.length - params.limit} more — use a narrower filter`);
+      } else if (params.view === "search") {
+        const search = searchTree(tree, labelMaps, params.query, params.limit, signal);
+        searchDisplayedMatches = search.matches.length;
+        searchTruncated = search.truncated;
+        lines.push(`Search '${params.query}': ${search.matches.length} displayed of ${search.matches.length + (search.truncated ? 1 : 0)} matching node(s).`);
+        for (const match of search.matches) {
+          const body = entryText(match.entry, true).replace(/\s+/g, " ").slice(0, 100);
+          lines.push(`  ${match.entry.id}${match.labels.length ? ` (checkpoint: ${match.labels.join(", ")})` : ""} [${displayRole(match.entry)}] ${body}`);
+        }
+        if (search.truncated) lines.push("  ... additional matches truncated");
+      } else if (params.view === "tree") {
+        const rendered = renderTree(tree, labelMaps, leafId, activeIds, params.limit, signal);
+        lines.push(...rendered.lines);
+        treeTruncated = rendered.truncated || lines.length >= 200;
+        if (treeTruncated) lines.unshift("⚠ tree truncated by depth/line limit — use view checkpoints or view search to see hidden nodes");
+      } else {
+        const verbose = params.verbose ?? false;
+        const visible = branch.filter((entry) => visibleOnActivePath(entry, labelMaps, leafId, verbose));
+        activeVisibleEntries = visible.length;
+        activeDisplayedEntries = Math.min(visible.length, params.limit);
+        activeOmittedEntries = Math.max(0, visible.length - params.limit);
+        if (activeOmittedEntries > 0) lines.push(`  :  ... (${activeOmittedEntries} earlier visible entries omitted by limit) ...`);
+        for (const entry of visible.slice(-params.limit)) {
+          const labels = formatEntryLabels(labelMaps, entry.id);
+          const tags = [entry === branch[0] ? "ROOT" : null, entry.id === leafId ? "HEAD" : null, labels ? `checkpoint: ${labels}` : null]
+            .filter((tag): tag is string => tag !== null);
+          const body = entryText(entry, verbose).replace(/\s+/g, " ").slice(0, 100);
+          lines.push(`${entry.id === leafId ? "*" : displayRole(entry) === "USER" ? "•" : "|"} ${entry.id}${tags.length ? ` (${tags.join(", ")})` : ""} [${displayRole(entry)}] ${body}`);
+        }
+      }
+
+      const officialUsage = ctx.getContextUsage();
+      const lastUsage = runtime.getUsage(sessionManager);
+      let stepsSinceCheckpoint = 0;
+      let nearestCheckpoint: string | null = null;
+      for (let index = branch.length - 1; index >= 0; index--) {
+        const labels = getEntryLabels(labelMaps, branch[index].id);
+        if (labels.length > 0) {
+          nearestCheckpoint = labels.at(-1) ?? null;
+          break;
+        }
+        stepsSinceCheckpoint++;
+      }
+      const refreshFailure = runtime.contextRefresh.getFailure(sessionManager);
+      const refreshPending = runtime.contextRefresh.isPending(sessionManager);
+      const hudParts = [
+        "[Context Dashboard]",
+        `• Context Usage:    ${formatContextUsage(officialUsage, true)} (official)`,
+        `• Last LLM Prompt:  ${lastUsage ? formatContextUsage(lastUsage, true) : "N/A"} (turn_end)`,
+        `• Active Path:      ${branch.length} node(s) — LLM context follows this spine`,
+        `• Off-path Summaries: ${countOffPathSummaries(branch, tree, activeIds)} branch point(s) with abandoned summaries`,
+        `• Segment Size:     ${stepsSinceCheckpoint} steps since last checkpoint '${nearestCheckpoint ?? "None"}'`,
+        `• Travel Cue:       ${formatBoundaryTravelCue(nearestCheckpoint)}`,
+      ];
+      if (refreshFailure) {
+        const attempts = runtime.contextRefresh.getAttemptCount(sessionManager);
+        const exhausted = attempts >= ContextRefreshRegistry.MAX_ATTEMPTS && !refreshPending;
+        hudParts.push(`• Context Sync:     last travel refresh failed — ${refreshFailure}${exhausted ? ` ${RECOVERY_GUIDANCE.refreshExhausted}` : ""}`);
+      } else if (refreshPending) {
+        const attempt = runtime.contextRefresh.getAttemptCount(sessionManager);
+        hudParts.push(`• Context Sync:     persistent rebuild active${runtime.contextRefresh.hasRebuilt(sessionManager) ? "" : " (travel pending)"}${attempt > 0 ? ` (retry ${attempt}/${ContextRefreshRegistry.MAX_ATTEMPTS})` : ""}`);
+      }
+      const cue = params.view === "active"
+        ? GUIDANCE_CUES.timelineActive
+        : params.view === "checkpoints"
+          ? GUIDANCE_CUES.timelineCheckpoints
+          : params.view === "search"
+            ? GUIDANCE_CUES.timelineSearch
+            : GUIDANCE_CUES.timelineTree;
+      hudParts.push(`• Guidance:        ${cue}`, "---------------------------------------------------");
+
+      return {
+        content: [{ type: "text" as const, text: `${hudParts.join("\n")}\n${lines.join("\n") || "(Root Path Only)"}` }],
+        details: {
+          contextUsage: officialUsage ? { percent: officialUsage.percent, tokens: officialUsage.tokens, contextWindow: officialUsage.contextWindow } : null,
+          leafId,
+          nearestCheckpoint,
+          stepsSinceCheckpoint,
+          activePathNodes: branch.length,
+          offPathSummaries: countOffPathSummaries(branch, tree, activeIds),
+          view: params.view,
+          limit: params.limit,
+          verbose: params.view === "active" ? params.verbose ?? false : false,
+          treeTruncated,
+          activeVisibleEntries: params.view === "active" ? activeVisibleEntries : null,
+          activeDisplayedEntries: params.view === "active" ? activeDisplayedEntries : null,
+          activeOmittedEntries: params.view === "active" ? activeOmittedEntries : null,
+          checkpointsMatchingAliases: params.view === "checkpoints" ? checkpointsMatchingAliases : null,
+          checkpointsDisplayedAliases: params.view === "checkpoints" ? checkpointsDisplayedAliases : null,
+          searchDisplayedMatches: params.view === "search" ? searchDisplayedMatches : null,
+          searchTruncated: params.view === "search" ? searchTruncated : false,
+          outputLines: lines.length,
+          contextRefreshPending: refreshPending,
+          contextRefreshFailure: refreshFailure ?? null,
+        },
+      };
+    },
+  });
+}

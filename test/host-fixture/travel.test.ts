@@ -267,7 +267,7 @@ describe("acm_travel with real OMP SessionManager", () => {
     expect(after.entries.some((entry) => entry.type === "branch_summary")).toBe(false);
   });
 
-  test("preserves the backup when branch mutation happened but returned an invalid identifier", async () => {
+  test("commits an observed branch mutation when the host returns an invalid identifier", async () => {
     const harness = createHarness();
     const { userId, assistantId } = appendUserAssistantPair(harness.session);
     const view = sessionView(harness.session, {
@@ -284,12 +284,33 @@ describe("acm_travel with real OMP SessionManager", () => {
     });
     const details = resultDetails(run);
 
-    expect(details.error).toBe("branch_failed");
-    expect(resultText(run)).toContain(RECOVERY_GUIDANCE.rollbackSkipped);
-    expect(details.backupRolledBack).toBe(false);
-    expect(details.backupRollbackSkipped).toBe(true);
+    expect(details.error).toBeUndefined();
+    expect(details.contextRefreshPending).toBe(true);
+    expect(details.resultingLeafId).toBe(details.summaryEntryId);
     expect(harness.snapshot().aliases[assistantId]).toContain("partial-mutation-done");
-    expect(harness.snapshot().leafId).not.toBe(assistantId);
+  });
+
+  test("marks context refresh pending when branch mutation is indeterminate", async () => {
+    const harness = createHarness();
+    const { userId, assistantId } = appendUserAssistantPair(harness.session);
+    const view = sessionView(harness.session, {
+      branchWithSummary(branchFromId, _summary, details, fromExtension) {
+        return harness.session.branchWithSummary(branchFromId, "unexpected summary", details, fromExtension);
+      },
+    });
+
+    const run = await runTravel(view, {
+      target: userId,
+      summary: VALID_HANDOFF,
+      backupCurrentHeadAs: "indeterminate-branch-done",
+    });
+    const details = resultDetails(run);
+
+    expect(details.error).toBe("branch_failed");
+    expect(details.branchState).toBe("indeterminate");
+    expect(details.contextRefreshPending).toBe(true);
+    expect(details.backupRollbackSkipped).toBe(true);
+    expect(harness.snapshot().aliases[assistantId]).toContain("indeterminate-branch-done");
   });
 
   test("reports rollback failure with the remaining label, entry, and recovery action", async () => {
@@ -413,7 +434,7 @@ describe("acm_travel with real OMP SessionManager", () => {
     expect(structuralSnapshot(duplicateHarness.snapshot())).toEqual(duplicateBefore);
   });
 
-  test("skips rollback when the backup target had an existing alias", async () => {
+  test("rolls back a new backup while preserving prior aliases", async () => {
     const harness = createHarness();
     const { userId, assistantId } = appendUserAssistantPair(harness.session);
     harness.session.appendLabelChange(assistantId, "existing-alias");
@@ -426,17 +447,16 @@ describe("acm_travel with real OMP SessionManager", () => {
     const run = await runTravel(view, {
       target: userId,
       summary: VALID_HANDOFF,
-      backupCurrentHeadAs: "skip-rollback-done",
+      backupCurrentHeadAs: "rollback-with-alias-done",
     });
     const details = resultDetails(run);
     const aliases = harness.snapshot().aliases[assistantId];
 
     expect(details.error).toBe("branch_failed");
-    expect(resultText(run)).toContain(RECOVERY_GUIDANCE.rollbackSkipped);
-    expect(details.backupRollbackSkipped).toBe(true);
-    expect(details.backupRollbackSkipReason).toBe("prior_aliases");
-    expect(aliases).toContain("existing-alias");
-    expect(aliases).toContain("skip-rollback-done");
+    expect(resultText(run)).toContain(RECOVERY_GUIDANCE.branchRolledBack);
+    expect(details.backupRolledBack).toBe(true);
+    expect(details.backupRollbackSkipped).toBe(false);
+    expect(aliases).toEqual(["existing-alias"]);
   });
 
   test("places backup labels on the nearest meaningful USER or AI entry", async () => {

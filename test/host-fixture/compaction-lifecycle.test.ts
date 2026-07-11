@@ -8,8 +8,7 @@ import type {
 import type { ReadonlySessionManager, SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as zod from "zod/v4";
 import registerACMExtension from "./.acm-build/index.js";
-import { HostBridge } from "./.acm-build/host-bridge.js";
-import { resolveTargetId } from "./.acm-build/lib.js";
+import { buildLabelMaps, resolveTargetId } from "./.acm-build/lib.js";
 import { useHostSessionHarnesses } from "./harness.js";
 const VALID_HANDOFF = [
   "Goal: verify lifecycle cleanup",
@@ -166,12 +165,13 @@ describe("native compaction lifecycle with real OMP SessionManager", () => {
     );
     expect(harness.session.getLeafId()).toBe(compactionId);
 
-    const bridge = new HostBridge(harness.session);
-    const maps = bridge.buildLabelMaps();
+    const maps = buildLabelMaps(harness.session.getEntries());
+    const tree = harness.session.getTree();
+    const branchIds = new Set(harness.session.getBranch().map((entry) => entry.id));
     for (const entry of labelsBefore) {
       expect(entry.type).toBe("label");
       if (entry.type !== "label" || !entry.label) continue;
-      expect(resolveTargetId(harness.session, bridge.getTree(), entry.label, bridge.getBranchIds(), maps)).toEqual({
+      expect(resolveTargetId(harness.session, tree, entry.label, branchIds, maps)).toEqual({
         id: assistantId,
         fromOffPath: false,
       });

@@ -36,6 +36,26 @@ describe("canonical guidance generation", () => {
     expect(first).toBe(readFileSync(outputPath, "utf8"));
   });
 
+  test("check mode reports stale output without writing", async () => {
+    const tempOutput = `${outputPath}.stale-test`;
+    await Bun.write(tempOutput, "stale\n");
+    try {
+      const process = Bun.spawn(["bun", new URL("./generate-guidance.mjs", import.meta.url).pathname, "--source", sourcePath, "--output", tempOutput, "--check"], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stderr] = await Promise.all([
+        process.exited,
+        new Response(process.stderr).text(),
+      ]);
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("Generated guidance is stale");
+      expect(readFileSync(tempOutput, "utf8")).toBe("stale\n");
+    } finally {
+      await Bun.file(tempOutput).delete();
+    }
+  });
+
   test("fails when a required marker is missing or duplicated", () => {
     const marker = "<!-- ACM:TOOL_TIMELINE:START -->";
 

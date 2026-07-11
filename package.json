@@ -15,6 +15,7 @@
     "generate:guidance": "bun scripts/generate-guidance.mjs",
     "sync:acm": "bun scripts/sync-acm.mjs",
     "test:host": "bun run --cwd test/host-fixture verify",
+    "verify:acm": "bun scripts/verify-acm.mjs && bun test scripts/generate-guidance.test.mjs src/version-contract.test.ts && bun run test:host",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

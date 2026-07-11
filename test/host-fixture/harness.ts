@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import { buildLabelMaps } from "../../src/label-journal.js";
 
 export interface HostSessionSnapshot {
   entries: SessionEntry[];
@@ -38,28 +39,6 @@ export function useHostSessionHarnesses(options: {
 }
 
 
-function collectAliases(entries: SessionEntry[]): Record<string, string[]> {
-  const labelOwner = new Map<string, string>();
-  const aliases = new Map<string, string[]>();
-  for (const entry of entries) {
-    if (entry.type !== "label") continue;
-    const current = aliases.get(entry.targetId) ?? [];
-    if (entry.label === undefined) {
-      for (const label of current) labelOwner.delete(label);
-      aliases.delete(entry.targetId);
-      continue;
-    }
-    const previousOwner = labelOwner.get(entry.label);
-    if (previousOwner && previousOwner !== entry.targetId) {
-      const remaining = (aliases.get(previousOwner) ?? []).filter((label) => label !== entry.label);
-      if (remaining.length === 0) aliases.delete(previousOwner);
-      else aliases.set(previousOwner, remaining);
-    }
-    labelOwner.set(entry.label, entry.targetId);
-    if (!current.includes(entry.label)) aliases.set(entry.targetId, [...current, entry.label]);
-  }
-  return Object.fromEntries([...aliases.entries()].map(([id, labels]) => [id, [...labels]]));
-}
 
 function summarizeTree(nodes: SessionTreeNode[]): HostSessionSnapshot["tree"] {
   return nodes.map((node) => ({
@@ -97,7 +76,7 @@ export function createHostSessionHarness(): HostSessionHarness {
       const entries = session.getEntries();
       return {
         entries,
-        aliases: collectAliases(entries),
+        aliases: Object.fromEntries(buildLabelMaps(entries).entryToLabels),
         leafId: session.getLeafId(),
         tree: summarizeTree(session.getTree()),
         messages: session.buildSessionContext().messages,

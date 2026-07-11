@@ -12,14 +12,14 @@ describe("maintainer documentation contract", () => {
       "bun run sync:acm",
       "--canonical-root",
       "--consumer-root",
-      "preflight",
-      "changed-file",
-      "post-copy verification",
+      "transform match cardinality",
+      "rollback journal",
+      "acm-provenance.json",
       "no changes",
       "不会执行任何 Git 操作",
       "分别提交",
       "支持的 OMP 版本：`16.4.2`",
-      "guarded SessionManager",
+      "Typed host mutation ports",
       "agent.state.messages",
     ]) {
       expect(readme).toContain(fact);
@@ -27,8 +27,8 @@ describe("maintainer documentation contract", () => {
 
     expect(readme).toContain("skills/context-management/CORE.md");
     expect(readme).toContain("skills/context-management/SKILL.md");
-    expect(readme).toContain("ACM extension 负责注入 CORE");
-    expect(readme).toContain("Magic Context 只负责外围组合材料");
+    expect(readme).toContain("standalone extension 直接注册 CORE prompt hook");
+    expect(readme).toContain("唯一的 consumer prompt orchestrator");
   });
 
   test("states guidance maintenance facts without duplicating the normal agent contract", async () => {
@@ -80,6 +80,9 @@ describe("repository agent guidance contract", () => {
       '`{ view: "search", limit?, query }`',
       '`{ view: "tree", limit? }`',
       "src/host-bridge.ts",
+      "src/travel-coordinator.ts",
+      "src/runtime-lifecycle.ts",
+      "src/label-journal.ts",
       "src/generated-guidance.ts",
       "skills/context-management/CORE.md",
       "references/target-selection.md",

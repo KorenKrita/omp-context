@@ -6,15 +6,18 @@
 
 - `omp-context` 是唯一 canonical ACM；实现、Host Bridge、CORE、advanced Skill 与生成产物都从这里维护。
 - `magic-acm-context` 是 consumer，只能通过本仓库的 `bun run sync:acm` 手动接收已声明的 ACM surface；同步方向不可逆。
-- standalone 与 integrated wrapper 的差异是有意的组合边界，不是 functional fork：ACM extension 负责注入 CORE，Magic Context 只负责外围组合材料。
+- standalone extension 直接注册 CORE prompt hook；integrated consumer 禁用该 hook，并由唯一的 consumer prompt orchestrator 调用 canonical `ensureAcmCoreSegment` 后组合 Magic Context-owned segments。两者共享同一 CORE producer，不形成 functional fork。
 
 ## 架构与 guidance 所有权
 
 | 区域 | 责任 |
 |---|---|
-| `src/index.ts` | 注册工具与公开事件 handler，组合 runtime 结果 |
-| `src/host-bridge.ts` | 隔离所有 guarded SessionManager host capability |
-| `src/lib.ts` | 纯领域逻辑与可单测的结构判断 |
+| `src/index.ts` | 短 composition root；只组装 runtime、工具和 lifecycle |
+| `src/checkpoint-tool.ts` / `src/timeline-tool.ts` / `src/travel-tool.ts` | 各工具独立的 schema、执行流与结果契约 |
+| `src/travel-coordinator.ts` | 单次 travel mutation transaction、compensation 与 refresh obligation |
+| `src/host-bridge.ts` | typed guarded mutation ports；区分 `not_applied`、`applied`、`indeterminate` |
+| `src/runtime-lifecycle.ts` / `src/runtime.ts` | context rebuild、compaction、usage 与 session-scoped state |
+| `src/label-journal.ts` / `src/lib.ts` | dependency-free label replay 与纯领域逻辑 |
 | [`skills/context-management/CORE.md`](skills/context-management/CORE.md) | normal-path agent contract 的唯一来源 |
 | [`skills/context-management/SKILL.md`](skills/context-management/SKILL.md) | 只路由 non-obvious target、archive round trip 与 exceptional recovery |
 | `src/generated-guidance.ts` | 由 CORE marker 生成；禁止手改 |
@@ -62,9 +65,9 @@ bun run sync:acm -- \
   --consumer-root /path/to/magic-acm-context
 ```
 
-同步命令读取 `scripts/acm-sync-manifest.json`，先执行完整 **preflight**：校验两个 package identity、consumer layout、所有 source、destination、transform 和 preserved wrapper；任何 preflight 失败都发生在第一次写入前。写入后执行 **post-copy verification**，确认所有 mapped artifact 与 preserved wrapper。
+同步命令读取 `scripts/acm-sync-manifest.json`。它先校验 package identity、consumer layout、source、destination、transform match cardinality 与 preserved wrapper；随后在 consumer 内的 staging tree 生成并独立验证全部产物。发布阶段为所有目标建立 rollback journal，任一 rename 或最终验证失败都会恢复本次已替换的全部文件，不留下 partial consumer state。
 
-输出逐行 `changed <path>` 作为 **changed-file report**；重复运行时输出 `no changes`，因此可验证 idempotent no-op。只验证不写入：
+Manifest 当前声明 42 个 canonical mappings，并额外生成带 canonical version、exact host version、manifest hash 与每个产物 SHA-256 的 `acm-provenance.json`。输出逐行 `changed <path>`；重复运行输出 `no changes`。
 
 ```bash
 bun run sync:acm -- \
@@ -77,8 +80,8 @@ bun run sync:acm -- \
 
 ## 已知 host 限制
 
-- OMP 16.4.2 未向普通 tool context 暴露原子的 tree-navigation/state-sync API。Host Bridge 因而使用 guarded SessionManager access 调用已验证的 host capabilities；缺失或畸形 capability 会在 mutation 前失败。
-- `branchWithSummary()` 会先更新 SessionManager tree，但不会同步 host 私有的 `agent.state.messages`。插件不修改该私有数组，而是在每次公开 `context` event 中从当前 leaf 持续重建 provider context。
+- OMP 16.4.2 未向普通 tool context 暴露原子的 tree-navigation/state-sync API。Typed host mutation ports 因而观察 mutation 前后状态，并返回 `not_applied`、`applied` 或 `indeterminate`；只要 branch mutation 已发生或无法排除，travel coordinator 就保留恢复标签并安排 context refresh。
+- `branchWithSummary()` 更新 SessionManager tree，但不会同步 host 私有的 `agent.state.messages`。插件不修改该私有数组，而是在每次公开 `context` event 中从当前 leaf 持续重建 provider context。
 - native pre-prompt compaction 依据 host-owned message state 估算，因此 travel 后可能发生一次不必要的提前 compaction。插件不取消、延迟或替换 OMP compaction。
 - travel 只改变会话树与后续 model context；不会回滚文件、进程、浏览器、commit 或远端副作用。
 
@@ -91,10 +94,12 @@ bun run sync:acm -- \
 ## 验证
 
 ```bash
-bun run generate:guidance
+# 非写入式 canonical gate：generated guidance、exact version、fixture 和 provenance contracts
+bun run verify:acm
+
 bun run typecheck
+bun test
 bun run test:host
-bun test src/guidance.test.ts src/tool-descriptions.test.ts src/sync-command.test.ts
 ```
 
 ## 参考

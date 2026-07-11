@@ -6,35 +6,41 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 const fixtureRoot = dirname(fileURLToPath(import.meta.url));
 const outputRoot = join(fixtureRoot, ".acm-build");
-const supportedVersion = "16.4.2";
+const hostPackages = [
+  "@oh-my-pi/pi-agent-core",
+  "@oh-my-pi/pi-ai",
+  "@oh-my-pi/pi-coding-agent",
+];
+const fixturePackage = JSON.parse(readFileSync(join(fixtureRoot, "package.json"), "utf8"));
+const declaredVersions = hostPackages.map((packageName) => fixturePackage.dependencies?.[packageName]);
+if (declaredVersions.some((version) => typeof version !== "string" || version.length === 0)) {
+  throw new Error("Fixture package must declare every supported host package as an exact dependency");
+}
+const supportedVersion = declaredVersions[0];
+if (!declaredVersions.every((version) => version === supportedVersion)) {
+  throw new Error(`Fixture host package versions disagree: ${declaredVersions.join(", ")}`);
+}
 const entrypoints = [
   { source: "../../src/index.ts", output: "index.js" },
   { source: "../../src/host-bridge.ts", output: "host-bridge.js" },
   { source: "../../src/lib.ts", output: "lib.js" },
   { source: "../../src/generated-guidance.ts", output: "generated-guidance.js" },
 ];
-const hostPackages = [
-  "@oh-my-pi/pi-agent-core",
-  "@oh-my-pi/pi-ai",
-  "@oh-my-pi/pi-coding-agent",
-];
 
 rmSync(outputRoot, { recursive: true, force: true });
 mkdirSync(outputRoot, { recursive: true });
 
-for (const entrypoint of entrypoints) {
-  const result = await Bun.build({
-    entrypoints: [join(fixtureRoot, entrypoint.source)],
-    outdir: outputRoot,
-    naming: { entry: entrypoint.output },
-    target: "bun",
-    format: "esm",
-    packages: "external",
-    sourcemap: "none",
-  });
-  if (!result.success) {
-    throw new Error(result.logs.map((log) => log.message).join("\n") || `Failed to build ${entrypoint.source}`);
-  }
+const build = await Bun.build({
+  entrypoints: entrypoints.map((entrypoint) => join(fixtureRoot, entrypoint.source)),
+  outdir: outputRoot,
+  naming: { entry: "[name].js" },
+  target: "bun",
+  format: "esm",
+  packages: "external",
+  sourcemap: "none",
+});
+if (!build.success) {
+  throw new Error(build.logs.map((log) => log.message).join("\n") || "Failed to build isolated ACM source");
 }
 
 const requireFromBuild = createRequire(join(outputRoot, "index.js"));

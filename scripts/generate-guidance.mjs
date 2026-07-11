@@ -67,6 +67,12 @@ if (import.meta.main) {
   const sourcePath = argumentPath("--source", defaultSourcePath);
   const outputPath = argumentPath("--output", defaultOutputPath);
   const generated = renderGuidance(readFileSync(sourcePath, "utf8"));
-  writeFileSync(outputPath, generated);
-  process.stdout.write(`Generated ${outputPath}\n`);
+  if (process.argv.includes("--check")) {
+    const current = readFileSync(outputPath, "utf8");
+    if (current !== generated) throw new Error(`Generated guidance is stale: ${outputPath}`);
+    process.stdout.write(`Verified ${outputPath}\n`);
+  } else {
+    writeFileSync(outputPath, generated);
+    process.stdout.write(`Generated ${outputPath}\n`);
+  }
 }

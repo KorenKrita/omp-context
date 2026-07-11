@@ -2,6 +2,7 @@
   "version": 1,
   "canonicalPackage": "omp-context",
   "consumerPackage": "magic-acm-context",
+  "provenanceDestination": "packages/omp-plugin/src/acm/acm-provenance.json",
   "requiredConsumerPaths": [
     "packages/omp-plugin/src/acm"
   ],
@@ -32,8 +33,48 @@
       "transform": "omp-guidance-generator-test"
     },
     {
+      "source": "scripts/verify-acm.mjs",
+      "destination": "packages/omp-plugin/scripts/verify-acm.mjs",
+      "transform": "copy"
+    },
+    {
       "source": "src/index.ts",
       "destination": "packages/omp-plugin/src/acm/tools.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "src/checkpoint-tool.ts",
+      "destination": "packages/omp-plugin/src/acm/checkpoint-tool.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "src/entry-resolution.ts",
+      "destination": "packages/omp-plugin/src/acm/entry-resolution.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "src/message-sanitizer.ts",
+      "destination": "packages/omp-plugin/src/acm/message-sanitizer.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "src/prompt-registration.ts",
+      "destination": "packages/omp-plugin/src/acm/prompt-registration.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "src/runtime-lifecycle.ts",
+      "destination": "packages/omp-plugin/src/acm/runtime-lifecycle.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "src/timeline-tool.ts",
+      "destination": "packages/omp-plugin/src/acm/timeline-tool.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "src/travel-tool.ts",
+      "destination": "packages/omp-plugin/src/acm/travel-tool.ts",
       "transform": "copy"
     },
     {
@@ -42,8 +83,23 @@
       "transform": "copy"
     },
     {
+      "source": "src/label-journal.ts",
+      "destination": "packages/omp-plugin/src/acm/label-journal.ts",
+      "transform": "copy"
+    },
+    {
       "source": "src/host-bridge.ts",
       "destination": "packages/omp-plugin/src/acm/host-bridge.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "src/runtime.ts",
+      "destination": "packages/omp-plugin/src/acm/runtime.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "src/travel-coordinator.ts",
+      "destination": "packages/omp-plugin/src/acm/travel-coordinator.ts",
       "transform": "copy"
     },
     {
@@ -119,12 +175,12 @@
     {
       "source": "test/host-fixture/session-manager.test.ts",
       "destination": "packages/omp-plugin/src/acm/host-fixture/session-manager.test.ts",
-      "transform": "omp-host-test-imports"
+      "transform": "copy"
     },
     {
       "source": "test/host-fixture/host-bridge.test.ts",
       "destination": "packages/omp-plugin/src/acm/host-fixture/host-bridge.test.ts",
-      "transform": "omp-host-test-imports"
+      "transform": "copy"
     },
     {
       "source": "test/host-fixture/travel.test.ts",

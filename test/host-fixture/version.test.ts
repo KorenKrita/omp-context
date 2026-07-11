@@ -10,6 +10,11 @@ const packages = [
   "@oh-my-pi/pi-ai",
   "@oh-my-pi/pi-coding-agent",
 ] as const;
+const fixturePackage = JSON.parse(readFileSync(join(fixtureRoot, "package.json"), "utf8")) as {
+  dependencies: Record<string, string>;
+};
+const supportedVersion = fixturePackage.dependencies[packages[0]];
+
 
 interface HostPackageEvidence {
   supportedVersion: string;
@@ -22,13 +27,13 @@ interface HostPackageEvidence {
   }>;
 }
 
-describe("OMP 16.4.2 host fixture", () => {
+describe("exact OMP host fixture", () => {
   test("records the isolated source build and exact host package graph", () => {
     const evidence = JSON.parse(
       readFileSync(join(buildRoot, "host-packages.json"), "utf8"),
     ) as HostPackageEvidence;
 
-    expect(evidence.supportedVersion).toBe("16.4.2");
+    expect(evidence.supportedVersion).toBe(supportedVersion);
     expect(evidence.entrypoints.map(({ output }) => output).sort()).toEqual([
       "generated-guidance.js",
       "host-bridge.js",
@@ -39,7 +44,7 @@ describe("OMP 16.4.2 host fixture", () => {
     for (const entry of evidence.resolvedPackages) {
       expect(entry.packageJsonPath.startsWith(join(fixtureRoot, "node_modules"))).toBe(true);
       expect(entry.relativePackageJsonPath.startsWith("node_modules")).toBe(true);
-      expect(entry.version).toBe("16.4.2");
+      expect(entry.version).toBe(supportedVersion);
     }
   });
 
@@ -70,7 +75,7 @@ console.log(JSON.stringify(packages.map((packageName) => {
     expect(resolved).toHaveLength(packages.length);
     for (const entry of resolved) {
       expect(entry.packageJsonPath.startsWith(join(fixtureRoot, "node_modules"))).toBe(true);
-      expect(entry.version).toBe("16.4.2");
+      expect(entry.version).toBe(supportedVersion);
     }
   });
 });

@@ -24,7 +24,7 @@
 
 ### 扩展入口
 
-`src/index.ts` 默认导出 `function(pi: ExtensionAPI): void`，在加载时注册三个工具和七个事件 handler（`before_agent_start`、`context`、`turn_end`、`session_before_compact`、`session_compact`、`session_start`、`session_shutdown`）。
+`src/index.ts` 是短 composition root，默认导出 `registerAcmExtension(pi, options?)`。standalone 默认注册三个工具和七个事件 handler；integrated consumer 传 `{ promptInjection: false }`，由 consumer 的唯一 prompt orchestrator 调用 canonical `ensureAcmCoreSegment`。
 
 `package.json` 的 `omp` 字段是 OMP 发现入口：
 
@@ -39,7 +39,7 @@
 
 不要用 `pi.setLabel(id, name)` 给会话节点打 label。OMP 16.4.2 的类型声明看起来支持两个参数，但实际 `ConcreteExtensionAPI.setLabel(label: string)` 仍只修改扩展显示名，不会写 session label。
 
-当前实现通过 `HostBridge.appendCheckpointLabel(entryId, label)` 集中访问完整 `SessionManager.appendLabelChange`。Host Bridge 在 mutation 前验证 capability 和名称冲突，调用后验证返回非空 label entry ID，并返回结构化 success/failure；失败必须带明确 host capability 或 conflict evidence，不能静默继续。
+当前实现通过 `appendCheckpointLabel()`、`applyBranchWithSummary()` 和 `rollbackCheckpointLabel()` 三个 typed mutation ports 访问完整 `SessionManager`。结果明确区分 `not_applied`、`applied` 与 `indeterminate`；返回值畸形时以 mutation 后可观察的 journal/leaf 状态为准，不能仅依赖 host 返回 ID。
 
 `acm_checkpoint` 的默认 target 是 active branch 上最近的有意义 **USER/AI 消息**，跳过 tool result、bash/custom/system 消息、无可见文字的 internal-tool-only AI turn、空消息等。显式 `target` 可用任意节点 ID（含 tool result），但会 warning；**auto-resolve 仍只选 USER/AI**。
 
@@ -53,7 +53,7 @@ checkpoint / `backupCurrentHeadAs` **名称**在整棵树内必须唯一且**大
 
 `skills/context-management/CORE.md` 是 normal-path agent guidance 的唯一可编辑来源，`SKILL.md` 只负责 advanced branch routing。本知识文档只记录实现所有权、生成链路与可观察 host contract，不重复 agent 的决策流程、handoff 模板或 fold policy。
 
-`acm_travel` 的 `backupCurrentHeadAs` 同样落在最近有意义的 USER/AI 消息上，而不是 raw HEAD（避免 backup 打在 `acm_timeline` 等 tool result 上）。若从 HEAD 回退，tool result 会写明 `backup@entryId (resolved from HEAD …)`。若 backup 已写入但 `branchWithSummary` 失败，extension 会 **best-effort 回滚** backup label；回滚失败时 error/details 会注明 label 仍留在树上。
+`acm_travel` 的 `backupCurrentHeadAs` 落在最近有意义的 USER/AI 消息上。`travel-coordinator.ts` 拥有单次 mutation transaction：branch 明确未应用时通过 operation-scoped token 恢复之前的完整 alias 集；branch 已应用或状态不确定时保留 backup，并强制安排 context refresh，避免在未知 branch 上继续旧 provider context。
 
 ### timeline 是严格的单视图会话树接口
 
@@ -70,25 +70,13 @@ checkpoint 列表上限 50；大树或 tree 截断时优先改用 `{ view: "chec
 
 ### travel 使用 branchWithSummary + context event
 
-当前 travel 方案是同步执行：
+当前 travel 方案由 `travel-tool.ts` 与 `travel-coordinator.ts` 分工：
 
-1. 解析 `target`，支持 checkpoint 名、节点 ID、`root`。
-2. 如传入 `backupCurrentHeadAs`，先给当前 HEAD 打恢复 label（不是 travel 目标）。
-3. 构造 handoff summary（用户提供的 `summary` 正文）。
-4. guarded cast 到完整 `SessionManager`，调用：
-
-```ts
-sm.branchWithSummary(targetId, summary, {
-  originId,
-  originLabel,
-  target,
-  targetId,
-  backupCurrentHeadAs,
-}, true)
-```
-
-5. 设置 `contextRefresh.markPending(sessionManager)`（按 session 实例隔离），并用 `WeakMap` 记录 branch-summary leaf 作为稳定 fallback。
-6. `pi.on("context", ...)` 在**每次** LLM 调用前通过公开的 compaction-aware `buildSessionContext()` 重建 messages 并覆盖发给模型的上下文。`branchWithSummary` 只切 session-manager 的 leaf，不同步 OMP agent 持有的 `agent.state.messages`（扩展无 `agent.replaceMessages` 能力）。因此采用持久覆盖：travel 后**每个** LLM turn 都 rebuild；若当前 leaf 暂时无法重建，则回退到记录的 summary leaf。rebuild 会修复 orphan tool call/result；失败最多重试 3 次，HUD 显示原因和进度，成功后清除旧 failure/attempt 但保持 persistent pending。`session_start`/`session_shutdown`/`session_compact` 会清当前 session 的 refresh、fallback leaf 和 cached usage。
+1. Tool 解析 target、校验七槽 handoff、建立 usage/message evidence，并完成 branch 与 backup prevalidation。
+2. Coordinator append backup label，获得包含 prior aliases 的 operation-scoped rollback token。
+3. Typed branch port 调用 `branchWithSummary(..., true)`，随后验证实际 leaf、entry type、parent 与 summary，而不是信任返回 ID。
+4. 精确观察到期望 summary 时提交 transaction；明确未应用时补偿 backup；mutation 已发生或无法排除时返回 `indeterminate`，保留恢复标签并设置 refresh obligation。
+5. `runtime-lifecycle.ts` 在每次 LLM 调用前通过公开的 compaction-aware `buildSessionContext()` 重建 messages；失败最多重试 3 次，HUD 显示原因与进度。`session_start`、`session_shutdown`、`session_compact` 清当前 session state。
 
 travel tool result `details` 保留 resolved target、origin、`summaryEntryId`、backup outcome、`messagesBefore`/`messagesAfter`、`contextRefreshPending` 等结构标识，并新增 raw `tokenDelta`、`percentagePointDelta`、`structuralMessageDelta` 与 factual `structuralMessageDirection`。**无** legacy `summaryEntry` 别名字段。
 
@@ -108,14 +96,14 @@ travel 不保证降 token，也不再给出基于 500-token/2-percent 阈值的 
 
 ## 关键设计决策
 
-### 使用 guarded runtime cast
+### Typed guarded mutation ports
 
-`ctx.sessionManager` 类型是 `ReadonlySessionManager`，但运行时是完整 `SessionManager`。当前实现为了获得必要能力，使用 guarded cast 调用内部方法：
+`ctx.sessionManager` 的公开 read methods 直接作为 `SessionStructuralView` 使用。只有 OMP 未公开给 tool context 的 mutation capability 被隔离在 `src/host-bridge.ts`：
 
 - `appendLabelChange`
 - `branchWithSummary`
 
-调用前必须检查方法存在并验证返回的 entry ID；缺失或异常时返回清晰错误。消息重建使用 `session-context` 公开导出的 `buildSessionContext()`，不再依赖 runtime cast。
+每个 port 都在调用前检查 capability，在调用后观察 journal/leaf，并返回穷尽 mutation state。Host Bridge 不保存跨操作的全局 rollback registry；rollback ownership 只存在于一次 travel transaction 的 token 中。消息重建使用公开的 `buildSessionContext()`。
 
 ### BranchSummaryEntry.fromId 是 branch point，不是 origin
 
@@ -148,11 +136,14 @@ Node16 moduleResolution 下需要从 OMP 子路径导入类型：
 
 | 路径 | 作用 |
 |---|---|
-| `src/index.ts` | 三个工具注册、timeline 渲染、travel orchestration、context refresh 与 session lifecycle |
-| `src/host-bridge.ts` | ACM 域逻辑与 OMP runtime internals 的唯一边界；集中 guarded SessionManager access 与恢复语义 |
+| `src/index.ts` | 短 composition root；组装 prompt、三个工具和 lifecycle |
+| `src/checkpoint-tool.ts` / `src/timeline-tool.ts` / `src/travel-tool.ts` | behavior-owned tool modules |
+| `src/travel-coordinator.ts` | travel transaction、compensation 与 refresh obligation |
+| `src/host-bridge.ts` | typed guarded mutation ports，不保存跨操作状态 |
+| `src/runtime.ts` / `src/runtime-lifecycle.ts` | session-scoped refresh、usage、compaction 与 context rebuild |
+| `src/entry-resolution.ts` / `src/message-sanitizer.ts` | meaningful entry resolution 与 orphan tool sanitation |
+| `src/label-journal.ts` / `src/lib.ts` | dependency-free alias replay 与纯领域逻辑 |
 | `src/generated-guidance.ts` | 从 canonical CORE / advanced guidance 派生的工具描述、正常 cue 与异常恢复片段 |
-| `src/lib.ts` | 可单测的纯逻辑（label maps、target resolve、usage 估算、meaningful entry、travel evidence） |
-| `src/lib.test.ts` | `lib.ts` 单元测试 |
 | `skills/context-management/CORE.md` | always-on 正常路径：领域词汇、fold gate、checkpoint/fold discipline、handoff contract |
 | `skills/context-management/SKILL.md` | model-invoked advanced-only router |
 | `skills/context-management/references/target-selection.md` | 非显然 target、interleaved fronts、missing anchor、raw node fallback、名称冲突 |
@@ -166,10 +157,10 @@ Node16 moduleResolution 下需要从 OMP 子路径导入类型：
 
 ## 开发注意事项
 
-- 改实现前先读 `src/index.ts` 中对应工具的完整 execute flow。
+- 改工具实现时直接读对应的 `*-tool.ts`；改 mutation/compensation 读 `travel-coordinator.ts` 与 `host-bridge.ts`；`src/index.ts` 只负责组合。
 - 不要在代码中用 `console.log`；需要日志时优先使用 OMP 提供的 logger 能力。
 - 不要把 travel 解释成文件系统回滚。它只影响会话上下文。
-- 验证类型用 `bun run typecheck`。
+- 先运行对应 focused test；canonical 非写入式总 gate 使用 `bun run verify:acm`，类型检查使用 `bun run typecheck`。
 
 ## Agent skills
 

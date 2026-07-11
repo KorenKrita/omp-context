@@ -3,6 +3,8 @@ import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction/compaction";
 import { countTokens } from "@oh-my-pi/pi-agent-core/tokenizer";
 import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import type { TextContent, ToolCall, ThinkingContent, RedactedThinkingContent, AnthropicFallbackContent } from "@oh-my-pi/pi-ai/types";
+import { buildLabelMaps, type LabelMaps } from "./label-journal.js";
+export { buildLabelMaps, type LabelMaps } from "./label-journal.js";
 
 export const ACM_INTERNAL_TOOLS = new Set(["acm_checkpoint", "acm_timeline", "acm_travel"]);
 
@@ -81,10 +83,6 @@ export interface UsageLike {
  percent: number;
 }
 
-export interface LabelMaps {
- labelToEntryId: Map<string, string>;
- entryToLabels: Map<string, string[]>;
-}
 
 export interface ResolvedTarget {
  id: string;
@@ -229,41 +227,6 @@ export function findInTree(
  return undefined;
 }
 
-/** OMP getLabel() keeps only the latest label per entry; scan all label journal entries for aliases. */
-export function buildLabelMaps(entries: SessionEntry[]): LabelMaps {
- const labelToEntryId = new Map<string, string>();
- const entryToLabels = new Map<string, string[]>();
-
- for (const entry of entries) {
-  if (entry.type !== "label") continue;
-  const { targetId, label } = entry;
-  if (label === null || label === undefined) {
-   const existingLabels = entryToLabels.get(targetId);
-   if (existingLabels) {
-    for (const l of existingLabels) {
-     labelToEntryId.delete(l);
-    }
-   }
-   entryToLabels.delete(targetId);
-   continue;
-  }
-  const previousOwner = labelToEntryId.get(label);
-  if (previousOwner && previousOwner !== targetId) {
-   const prevLabels = entryToLabels.get(previousOwner);
-   if (prevLabels) {
-    const filtered = prevLabels.filter((l) => l !== label);
-    if (filtered.length === 0) entryToLabels.delete(previousOwner);
-    else entryToLabels.set(previousOwner, filtered);
-   }
-  }
-  labelToEntryId.set(label, targetId);
-  const existing = entryToLabels.get(targetId) ?? [];
-  if (!existing.includes(label)) {
-   entryToLabels.set(targetId, [...existing, label]);
-  }
- }
- return { labelToEntryId, entryToLabels };
-}
 
 export function getEntryLabels(labelMaps: LabelMaps, entryId: string): string[] {
  return labelMaps.entryToLabels.get(entryId) ?? [];
