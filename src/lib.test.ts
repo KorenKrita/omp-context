@@ -18,6 +18,7 @@ import {
  resolveTimelineMode,
  isValidEntryId,
  HANDOFF_SLOT_HINT,
+ validateHandoffStructure,
  type UsageLike,
 } from "./lib.js";
 import { fixOrphanedToolUse } from "./index.js";
@@ -281,11 +282,42 @@ describe("runtime guidance text", () => {
   expect(cue).toContain("attempt start");
   expect(cue).toContain("method anchor");
   expect(cue).toContain("semantic chain start");
-  expect(cue).toContain("Boundary Playbook");
+  expect(cue).toContain("Advanced Target Selection");
  });
 
  test("handoff slot hint uses executable-state vocabulary", () => {
   expect(HANDOFF_SLOT_HINT).toBe("Goal/State/Evidence/External/Exclusions/Recover/NEXT");
+ });
+
+ test("validates seven non-empty handoff slots exactly once and in order", () => {
+  const valid = [
+   "Goal: ship",
+   "State: ready",
+   "Evidence: test",
+   "External: none",
+   "Exclusions: none",
+   "Recover: checkpoint",
+   "NEXT: continue",
+  ].join("\n");
+  expect(validateHandoffStructure(valid)).toEqual({ ok: true });
+
+  const invalid = [
+   "State: ready",
+   "Goal: ship",
+   "Evidence:",
+   "External: none",
+   "Exclusions: none",
+   "Recover: checkpoint",
+   "NEXT: continue",
+   "NEXT: duplicate",
+  ].join("\n");
+  expect(validateHandoffStructure(invalid)).toEqual({
+   ok: false,
+   missing: [],
+   empty: ["Evidence"],
+   duplicate: ["NEXT"],
+   outOfOrder: true,
+  });
  });
 });
 

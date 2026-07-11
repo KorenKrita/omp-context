@@ -8,6 +8,8 @@ import { buildLabelMaps, type LabelMaps } from "./lib.js";
 export type HostBridgeErrorCode =
   | "missing_capability"
   | "malformed_capability"
+  | "host_operation_failed"
+  | "branch_verification_failed"
   | "entry_not_found"
   | "label_conflict"
   | "label_not_created_here"
@@ -22,6 +24,15 @@ export type HostBridgeResult<T> =
 export interface HostBridgeCapabilities {
   appendLabelChange: boolean;
   branchWithSummary: boolean;
+}
+
+/** Mutation-free checkpoint label plan. */
+export interface CheckpointLabelPrevalidation {
+  targetId: string;
+  name: string;
+  status: "would_create" | "already_present";
+  aliases: string[];
+  existingLabelEntryId?: string;
 }
 
 /** Information returned when a checkpoint label is appended. */
@@ -46,11 +57,29 @@ export interface ClearCreatedLabelResult {
   label: string;
 }
 
+/** Mutation-free branch plan. */
+export interface BranchWithSummaryPrevalidation {
+  branchFromId: string;
+  leafBefore: string | null;
+}
+
+/** Structural facts captured when branch creation cannot be reported as successful. */
+export interface BranchWithSummaryFailureDetails {
+  branchFromId: string;
+  leafBefore: string | null;
+  leafAfter: string | null;
+  mutationApplied: boolean;
+  returnedSummaryEntryId?: unknown;
+  actualSummaryEntryId?: string;
+}
+
 /** Information returned by branchWithSummary. */
 export interface BranchWithSummaryResult {
   summaryEntryId: string;
   branchFromId: string;
   summary: string;
+  leafBefore: string | null;
+  leafAfter: string;
 }
 
 interface CreatedLabel {
@@ -157,16 +186,8 @@ export class HostBridge {
     }
   }
 
-  /**
-   * Append a checkpoint label to a session entry.
-   *
-   * Enforces:
-   * - method presence and returned identifier validation
-   * - tree-wide, case-sensitive name uniqueness
-   * - same-node same-name idempotence
-   * - same-node second alias preserves the first alias
-   */
-  appendCheckpointLabel(targetId: string, name: string): HostBridgeResult<AppendCheckpointLabelResult> {
+  /** Inspect checkpoint-label capability, target, and uniqueness without mutation. */
+  prevalidateCheckpointLabel(targetId: string, name: string): HostBridgeResult<CheckpointLabelPrevalidation> {
     if (!this.capabilities.appendLabelChange) {
       return err(
         "missing_capability",
@@ -179,13 +200,11 @@ export class HostBridge {
     }
 
     const labelMaps = this.buildLabelMaps();
-    const branchIds = this.getBranchIds();
-
     const existingOwner = labelMaps.labelToEntryId.get(name);
     if (existingOwner && existingOwner !== targetId) {
       const conflict: CheckpointLabelConflict = {
         entryId: existingOwner,
-        onActivePath: branchIds.has(existingOwner),
+        onActivePath: this.getBranchIds().has(existingOwner),
       };
       return err(
         "label_conflict",
@@ -194,28 +213,73 @@ export class HostBridge {
       );
     }
 
-    const priorAliases = labelMaps.entryToLabels.get(targetId) ?? [];
-    if (priorAliases.includes(name)) {
+    const aliases = labelMaps.entryToLabels.get(targetId) ?? [];
+    if (aliases.includes(name)) {
       const existingLabelEntry = this.sm.getEntries().find(
         (entry) => isLabelEntry(entry) && entry.targetId === targetId && entry.label === name,
       );
       return ok({
-        labelEntryId: existingLabelEntry?.id ?? "",
         targetId,
         name,
         status: "already_present",
-        aliases: priorAliases,
+        aliases,
+        existingLabelEntryId: existingLabelEntry?.id,
       });
     }
 
-    const appendLabelChange = getHostMethod<(id: string, label: string | undefined) => string>(this.sm, "appendLabelChange");
-    const labelEntryId = appendLabelChange!(targetId, name);
+    return ok({ targetId, name, status: "would_create", aliases });
+  }
 
-    if (typeof labelEntryId !== "string" || labelEntryId.length === 0) {
+  /** Append a checkpoint label after repeating mutation-free structural validation. */
+  appendCheckpointLabel(targetId: string, name: string): HostBridgeResult<AppendCheckpointLabelResult> {
+    const prevalidation = this.prevalidateCheckpointLabel(targetId, name);
+    if (!prevalidation.ok) return prevalidation;
+
+    if (prevalidation.value.status === "already_present") {
+      if (!prevalidation.value.existingLabelEntryId) {
+        return err(
+          "malformed_capability",
+          `Checkpoint '${name}' is present in the alias map but has no label journal entry`,
+          { targetId, name },
+        );
+      }
+      return ok({
+        labelEntryId: prevalidation.value.existingLabelEntryId,
+        targetId,
+        name,
+        status: "already_present",
+        aliases: prevalidation.value.aliases,
+      });
+    }
+
+    const appendLabelChange = getHostMethod<(id: string, label: string | undefined) => unknown>(this.sm, "appendLabelChange");
+    let returned: unknown;
+    try {
+      returned = appendLabelChange!(targetId, name);
+    } catch (error) {
+      return err(
+        "host_operation_failed",
+        `appendLabelChange failed: ${error instanceof Error ? error.message : String(error)}`,
+        { targetId, name },
+      );
+    }
+
+    if (typeof returned !== "string" || returned.length === 0) {
       return err(
         "malformed_capability",
-        `appendLabelChange returned an invalid entry id: ${typeof labelEntryId}`,
-        { returned: labelEntryId },
+        `appendLabelChange returned an invalid entry id: ${typeof returned}`,
+        { returned, targetId, name },
+      );
+    }
+    const labelEntryId = returned;
+
+    const labelEntry = this.sm.getEntry(labelEntryId);
+    const labelOwner = this.buildLabelMaps().labelToEntryId.get(name);
+    if (!labelEntry || !isLabelEntry(labelEntry) || labelEntry.targetId !== targetId || labelEntry.label !== name || labelOwner !== targetId) {
+      return err(
+        "malformed_capability",
+        "appendLabelChange did not create the expected label journal entry",
+        { labelEntryId, targetId, name, labelOwner },
       );
     }
 
@@ -226,19 +290,15 @@ export class HostBridge {
       targetId,
       name,
       status: "created",
-      aliases: [...priorAliases, name],
+      aliases: [...prevalidation.value.aliases, name],
     });
   }
 
   /**
    * Safely clear a label created by this bridge instance.
    *
-   * Allowed only when:
-   * - the label entry was created by this bridge
-   * - the target entry currently has exactly this one alias
-   *
-   * This guarantees the clear removes only the bridge-created label and no
-   * prior aliases belonging to other operations.
+   * Allowed only when the target currently has exactly the bridge-created
+   * label, so rollback cannot remove aliases owned by another operation.
    */
   clearCreatedLabel(labelEntryId: string): HostBridgeResult<ClearCreatedLabelResult> {
     const created = this.createdLabels.get(labelEntryId);
@@ -261,60 +321,134 @@ export class HostBridge {
       return err(
         "unsafe_clear",
         "Target entry has prior aliases or additional labels; cannot safely clear this label",
-        { targetId: created.targetId, currentAliases },
+        { targetId: created.targetId, currentAliases, labelStillPresent: currentAliases.includes(created.label) },
       );
     }
 
-    const appendLabelChange = getHostMethod<(id: string, label: string | undefined) => string>(this.sm, "appendLabelChange");
-    const clearEntryId = appendLabelChange!(created.targetId, undefined);
+    const appendLabelChange = getHostMethod<(id: string, label: string | undefined) => unknown>(this.sm, "appendLabelChange");
+    let returned: unknown;
+    try {
+      returned = appendLabelChange!(created.targetId, undefined);
+    } catch (error) {
+      const aliasesAfterFailure = this.buildLabelMaps().entryToLabels.get(created.targetId) ?? [];
+      return err(
+        "host_operation_failed",
+        `appendLabelChange rollback failed: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          targetId: created.targetId,
+          label: created.label,
+          labelStillPresent: aliasesAfterFailure.includes(created.label),
+        },
+      );
+    }
 
-    if (typeof clearEntryId !== "string" || clearEntryId.length === 0) {
+    const aliasesAfterClear = this.buildLabelMaps().entryToLabels.get(created.targetId) ?? [];
+    if (typeof returned !== "string" || returned.length === 0 || aliasesAfterClear.includes(created.label)) {
       return err(
         "malformed_capability",
-        `appendLabelChange returned an invalid entry id: ${typeof clearEntryId}`,
-        { returned: clearEntryId },
+        "appendLabelChange did not produce a verifiable label clear",
+        {
+          returned,
+          targetId: created.targetId,
+          label: created.label,
+          labelStillPresent: aliasesAfterClear.includes(created.label),
+        },
       );
     }
 
     this.createdLabels.delete(labelEntryId);
-
-    return ok({
-      clearEntryId,
-      targetId: created.targetId,
-      label: created.label,
-    });
+    return ok({ clearEntryId: returned, targetId: created.targetId, label: created.label });
   }
 
-  /**
-   * Branch from an entry and append a branch_summary entry.
-   *
-   * Validates method presence, target existence, and returned summary entry id.
-   */
-  branchWithSummary(branchFromId: string, summary: string, details?: unknown): HostBridgeResult<BranchWithSummaryResult> {
+  /** Inspect branch capability and target existence without mutation. */
+  prevalidateBranchWithSummary(branchFromId: string): HostBridgeResult<BranchWithSummaryPrevalidation> {
     if (!this.capabilities.branchWithSummary) {
       return err(
         "missing_capability",
         "SessionManager does not support branchWithSummary — cannot travel",
       );
     }
-
     if (!this.sm.getEntry(branchFromId)) {
       return err("entry_not_found", `Entry ${branchFromId} not found`, { branchFromId });
     }
+    return ok({ branchFromId, leafBefore: this.sm.getLeafId() });
+  }
 
-    const branchWithSummary = getHostMethod<(id: string | null, summary: string, details?: unknown, fromExtension?: boolean) => string>(this.sm, "branchWithSummary");
-    // Capability was already checked via this.capabilities; getHostMethod is a narrow accessor.
-    const summaryEntryId = branchWithSummary!(branchFromId, summary, details, true);
+  /** Branch and verify the returned summary entry and resulting leaf. */
+  branchWithSummary(branchFromId: string, summary: string, details?: unknown): HostBridgeResult<BranchWithSummaryResult> {
+    const prevalidation = this.prevalidateBranchWithSummary(branchFromId);
+    if (!prevalidation.ok) return prevalidation;
+    const { leafBefore } = prevalidation.value;
+    const branchWithSummary = getHostMethod<(
+      id: string | null,
+      summary: string,
+      details?: unknown,
+      fromExtension?: boolean,
+    ) => unknown>(this.sm, "branchWithSummary");
 
-    if (typeof summaryEntryId !== "string" || summaryEntryId.length === 0) {
+    let returned: unknown;
+    try {
+      returned = branchWithSummary!(branchFromId, summary, details, true);
+    } catch (error) {
+      const leafAfter = this.sm.getLeafId();
+      const leafEntry = leafAfter ? this.sm.getEntry(leafAfter) : undefined;
+      const failure: BranchWithSummaryFailureDetails = {
+        branchFromId,
+        leafBefore,
+        leafAfter,
+        mutationApplied: leafAfter !== leafBefore,
+        actualSummaryEntryId: leafEntry?.type === "branch_summary" ? leafAfter ?? undefined : undefined,
+      };
       return err(
-        "malformed_capability",
-        `branchWithSummary returned an invalid entry id: ${typeof summaryEntryId}`,
-        { returned: summaryEntryId },
+        "host_operation_failed",
+        `branchWithSummary failed: ${error instanceof Error ? error.message : String(error)}`,
+        failure,
       );
     }
 
-    return ok({ summaryEntryId, branchFromId, summary });
+    const leafAfter = this.sm.getLeafId();
+    const leafEntry = leafAfter ? this.sm.getEntry(leafAfter) : undefined;
+    const actualSummaryEntryId = leafEntry?.type === "branch_summary" ? leafAfter ?? undefined : undefined;
+    const failure: BranchWithSummaryFailureDetails = {
+      branchFromId,
+      leafBefore,
+      leafAfter,
+      mutationApplied: leafAfter !== leafBefore,
+      returnedSummaryEntryId: returned,
+      actualSummaryEntryId,
+    };
+
+    if (typeof returned !== "string" || returned.length === 0) {
+      return err(
+        "branch_verification_failed",
+        `branchWithSummary returned an invalid entry id: ${typeof returned}`,
+        failure,
+      );
+    }
+
+    const summaryEntry = this.sm.getEntry(returned);
+    if (
+      !summaryEntry ||
+      summaryEntry.type !== "branch_summary" ||
+      summaryEntry.parentId !== branchFromId ||
+      summaryEntry.summary !== summary
+    ) {
+      return err(
+        "branch_verification_failed",
+        "branchWithSummary did not create the expected summary entry",
+        failure,
+      );
+    }
+
+    if (leafAfter !== returned) {
+      return err(
+        "branch_verification_failed",
+        `branchWithSummary returned ${returned}, but the resulting leaf is ${leafAfter ?? "null"}`,
+        failure,
+      );
+    }
+
+    return ok({ summaryEntryId: returned, branchFromId, summary, leafBefore, leafAfter: returned });
   }
 }
 

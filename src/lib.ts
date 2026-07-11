@@ -15,6 +15,53 @@ const BRANCH_SUMMARY_ENTRY_OVERHEAD_TOKENS = 100;
 
 export const HANDOFF_SLOT_HINT = "Goal/State/Evidence/External/Exclusions/Recover/NEXT";
 
+export const HANDOFF_SLOTS = ["Goal", "State", "Evidence", "External", "Exclusions", "Recover", "NEXT"] as const;
+
+export type HandoffSlot = typeof HANDOFF_SLOTS[number];
+
+export type HandoffValidationResult =
+ | { ok: true }
+ | {
+   ok: false;
+   missing: HandoffSlot[];
+   empty: HandoffSlot[];
+   duplicate: HandoffSlot[];
+   outOfOrder: boolean;
+  };
+
+/** Validate only the observable seven-slot handoff shape, never semantic sufficiency. */
+export function validateHandoffStructure(summary: string): HandoffValidationResult {
+ const occurrences: Record<HandoffSlot, Array<{ index: number; value: string }>> = {
+  Goal: [],
+  State: [],
+  Evidence: [],
+  External: [],
+  Exclusions: [],
+  Recover: [],
+  NEXT: [],
+ };
+
+ const lines = summary.split(/\r?\n/);
+ for (const [index, line] of lines.entries()) {
+  for (const slot of HANDOFF_SLOTS) {
+   const prefix = `${slot}:`;
+   if (!line.startsWith(prefix)) continue;
+   occurrences[slot].push({ index, value: line.slice(prefix.length).trim() });
+  }
+ }
+
+ const missing = HANDOFF_SLOTS.filter((slot) => occurrences[slot].length === 0);
+ const empty = HANDOFF_SLOTS.filter((slot) => occurrences[slot].some(({ value }) => value.length === 0));
+ const duplicate = HANDOFF_SLOTS.filter((slot) => occurrences[slot].length > 1);
+ const firstIndexes = HANDOFF_SLOTS
+  .map((slot) => occurrences[slot][0]?.index)
+  .filter((index): index is number => index !== undefined);
+ const outOfOrder = firstIndexes.some((index, position) => position > 0 && index <= firstIndexes[position - 1]!);
+
+ if (missing.length === 0 && empty.length === 0 && duplicate.length === 0 && !outOfOrder) return { ok: true };
+ return { ok: false, missing, empty, duplicate, outOfOrder };
+}
+
 export const BOUNDARY_SELECTION_GUIDANCE = "Choose by boundary, not proximity. A candidate is correct only when it sits before the boundary being compressed; use an earliest on-path -start only when it begins the semantic chain being compressed.";
 
 export function formatFoldCandidatePreview(previewParts: string[]): string {
@@ -25,7 +72,7 @@ export function formatBoundaryTravelCue(nearestCheckpointName: string | null): s
  if (nearestCheckpointName === null) {
   return "name the boundary first; no anchor is on this path, so checkpoint now or fold directly to the last clean node ID before the boundary";
  }
- return `name the boundary first. '${nearestCheckpointName}' is only a candidate target. Choose the target that sits before the boundary: phase start, pre-burst node, attempt start, method anchor, or semantic chain start. See the Boundary Playbook if unclear`;
+ return `name the boundary first. '${nearestCheckpointName}' is only a candidate target. Choose the target that sits before the boundary: phase start, pre-burst node, attempt start, method anchor, or semantic chain start. Load Advanced Target Selection if the target remains ambiguous`;
 }
 
 type AssistantContentPart = TextContent | ThinkingContent | RedactedThinkingContent | ToolCall | AnthropicFallbackContent;

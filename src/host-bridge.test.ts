@@ -35,11 +35,31 @@ interface MinimalSMOptions {
 
 function makeMinimalSM(overrides?: MinimalSMOptions): ReadonlySessionManager {
   const entries = overrides?.entries ?? [fakeMessage("e1", "user")];
-  const leafId = overrides?.leafId ?? "e1";
+  let leafId = overrides?.leafId ?? "e1";
 
   const appendLabelChange = overrides?.appendLabelChange
     ? (id: string, label: string | undefined) => overrides.appendLabelChange!(entries, id, label)
     : undefined;
+  const branchWithSummary = overrides?.branchWithSummary
+    ? (id: string | null, summary: string, details?: unknown, fromExtension?: boolean) => {
+      const returned = overrides.branchWithSummary!(id, summary, details, fromExtension);
+      if (returned.length > 0) {
+        entries.push({
+          id: returned,
+          type: "branch_summary",
+          parentId: id,
+          timestamp: "2026-01-01T00:00:00.000Z",
+          fromId: id ?? "root",
+          summary,
+          details,
+          fromExtension,
+        } as unknown as SessionEntry);
+        leafId = returned;
+      }
+      return returned;
+    }
+    : undefined;
+
 
   return {
     getEntries: () => entries,
@@ -49,7 +69,7 @@ function makeMinimalSM(overrides?: MinimalSMOptions): ReadonlySessionManager {
     getEntry: (id: string) => entries.find((e) => e.id === id),
     getLabel: () => undefined,
     ...(appendLabelChange ? { appendLabelChange } : {}),
-    ...(overrides?.branchWithSummary ? { branchWithSummary: overrides.branchWithSummary } : {}),
+    ...(branchWithSummary ? { branchWithSummary } : {}),
     ...(overrides?.buildSessionContext ? { buildSessionContext: overrides.buildSessionContext } : {}),
   } as unknown as ReadonlySessionManager;
 }
@@ -290,13 +310,13 @@ describe("HostBridge branchWithSummary", () => {
     expect(result.error).toBe("entry_not_found");
   });
 
-  test("returns malformed_capability when branchWithSummary returns invalid id", () => {
+  test("returns branch_verification_failed when branchWithSummary returns invalid id", () => {
     const sm = makeMinimalSM({ branchWithSummary: () => "" });
     const bridge = new HostBridge(sm);
     const result = bridge.branchWithSummary("e1", "summary");
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error).toBe("malformed_capability");
+    expect(result.error).toBe("branch_verification_failed");
   });
 
   test("branches with summary and returns summary entry id", () => {

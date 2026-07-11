@@ -30,12 +30,18 @@ import {
  pushTreeChildrenPreOrder,
  resolveTargetId,
  resolveTimelineMode,
+ validateHandoffStructure,
  type MeaningfulResolveResult,
  type LabelMaps,
  HANDOFF_SLOT_HINT,
  type UsageLike,
 } from "./lib.js";
-import { getHostBridge, type CheckpointLabelConflict } from "./host-bridge.js";
+import {
+ getHostBridge,
+ type BranchWithSummaryFailureDetails,
+ type CheckpointLabelConflict,
+ type CheckpointLabelPrevalidation,
+} from "./host-bridge.js";
 import { ACM_CORE, ACM_CORE_MARKER, TOOL_DESCRIPTIONS } from "./generated-guidance.js";
 
 /** Content part types that can appear in assistant message arrays. */
@@ -139,6 +145,24 @@ function isTravelSummaryDetails(details: unknown): details is TravelSummaryDetai
   typeof d.backupCurrentHeadAs !== "string"
  ) return false;
  return true;
+}
+
+function parseBranchFailureDetails(details: unknown): BranchWithSummaryFailureDetails | undefined {
+ if (typeof details !== "object" || details === null) return undefined;
+ const record = details as Record<string, unknown>;
+ if (typeof record.branchFromId !== "string") return undefined;
+ if (record.leafBefore !== null && typeof record.leafBefore !== "string") return undefined;
+ if (record.leafAfter !== null && typeof record.leafAfter !== "string") return undefined;
+ if (typeof record.mutationApplied !== "boolean") return undefined;
+ if (record.actualSummaryEntryId !== undefined && typeof record.actualSummaryEntryId !== "string") return undefined;
+ return {
+  branchFromId: record.branchFromId,
+  leafBefore: record.leafBefore,
+  leafAfter: record.leafAfter,
+  mutationApplied: record.mutationApplied,
+  returnedSummaryEntryId: record.returnedSummaryEntryId,
+  actualSummaryEntryId: record.actualSummaryEntryId,
+ };
 }
 
 function getBranchSummaryMetaParts(entry: SessionEntry): string[] {
@@ -1154,21 +1178,31 @@ export default function(pi: ExtensionAPI): void {
    ctx: ExtensionContext,
   ) {
    const params = travelSchema.parse(rawParams);
+   const handoffValidation = validateHandoffStructure(params.summary);
+   if (!handoffValidation.ok) {
+    return {
+     content: [{ type: "text" as const, text: `Error: handoff must contain each non-empty slot once and in order: ${HANDOFF_SLOT_HINT}. Travel aborted before mutation.` }],
+     details: { error: "invalid_handoff", validation: handoffValidation },
+    };
+   }
+
    const sm = ctx.sessionManager;
    const bridge = getHostBridge(sm);
    const tree = bridge.getTree();
    const branch = bridge.getBranch();
    const labelMaps = bridge.buildLabelMaps();
    const branchIds: Set<string> = new Set(branch.map((e: SessionEntry) => e.id));
+   const requestedRoot = params.target.toLowerCase() === "root";
+   const resolvedBy = requestedRoot ? "root" : labelMaps.labelToEntryId.has(params.target) ? "checkpoint" : "entry_id";
    const resolved = resolveTargetId(bridge, tree, params.target, branchIds, labelMaps);
    const tid = resolved.id;
-   if (params.target.toLowerCase() === "root" && !isValidEntryId(tid)) {
+   if (requestedRoot && !isValidEntryId(tid)) {
     return {
      content: [{ type: "text" as const, text: "Error: Cannot travel to root — session tree is empty." }],
      details: { error: "empty_session", requestedTarget: params.target },
     };
    }
-   if (params.target.toLowerCase() === "root" && tree.length > 1) {
+   if (requestedRoot && tree.length > 1) {
     ctx.ui.notify(
      `Note: 'root' resolved to the first top-level node (${tid}); this session has ${tree.length} top-level roots.`,
      "info",
@@ -1236,9 +1270,7 @@ export default function(pi: ExtensionAPI): void {
 
    let backupEntryId: string | undefined;
    let backupResolvedFromHead: string | undefined;
-   let backupLabelWrittenThisCall = false;
-   let backupHadNoPriorLabels = false;
-   let backupLabelEntryId: string | undefined;
+   let backupPrevalidation: CheckpointLabelPrevalidation | undefined;
    if (params.backupCurrentHeadAs) {
     const headResolve = findLastMeaningfulEntry(branch, signal);
     if (headResolve.aborted) {
@@ -1261,10 +1293,27 @@ export default function(pi: ExtensionAPI): void {
       "info",
      );
     }
-    const backupAppend = bridge.appendCheckpointLabel(backupEntryId, params.backupCurrentHeadAs);
-    if (!backupAppend.ok) {
-     if (backupAppend.error === "label_conflict") {
-      const conflict = backupAppend.details as CheckpointLabelConflict | undefined;
+   }
+
+   const branchPrevalidation = bridge.prevalidateBranchWithSummary(tid);
+   if (!branchPrevalidation.ok) {
+    return {
+     content: [{ type: "text" as const, text: `Error: travel host prevalidation failed: ${branchPrevalidation.message}. No mutation was attempted.` }],
+     details: {
+      error: "branch_prevalidation_failed",
+      hostError: branchPrevalidation.error,
+      message: branchPrevalidation.message,
+      target: params.target,
+      targetId: tid,
+     },
+    };
+   }
+
+   if (params.backupCurrentHeadAs && backupEntryId) {
+    const backupCheck = bridge.prevalidateCheckpointLabel(backupEntryId, params.backupCurrentHeadAs);
+    if (!backupCheck.ok) {
+     if (backupCheck.error === "label_conflict") {
+      const conflict = backupCheck.details as CheckpointLabelConflict | undefined;
       const existing = `${conflict?.entryId ?? "unknown"}${conflict?.onActivePath ? " (on-path)" : " (off-path)"}`;
       return {
        content: [{ type: "text" as const, text: `Error: archive bookmark name '${params.backupCurrentHeadAs}' already exists at ${existing}. Use a different backupCurrentHeadAs name; the handoff must still carry the executable state.` }],
@@ -1272,15 +1321,42 @@ export default function(pi: ExtensionAPI): void {
       };
      }
      return {
-      content: [{ type: "text" as const, text: `Error: archive bookmark '${params.backupCurrentHeadAs}' could not be set: ${backupAppend.message}. Travel aborted.` }],
-      details: { error: "backup_label_failed", name: params.backupCurrentHeadAs, message: backupAppend.message },
+      content: [{ type: "text" as const, text: `Error: archive bookmark '${params.backupCurrentHeadAs}' failed prevalidation: ${backupCheck.message}. No mutation was attempted.` }],
+      details: { error: "backup_prevalidation_failed", name: params.backupCurrentHeadAs, message: backupCheck.message },
      };
     }
-    if (backupAppend.value.status === "created") {
-     backupHadNoPriorLabels = backupAppend.value.aliases.length === 1;
-     backupLabelEntryId = backupAppend.value.labelEntryId;
-     backupLabelWrittenThisCall = true;
+    backupPrevalidation = backupCheck.value;
+   }
+
+   if (signal?.aborted) {
+    return {
+     content: [{ type: "text" as const, text: "acm_travel aborted after prevalidation and before mutation." }],
+     details: { error: "aborted", target: params.target, targetId: tid },
+    };
+   }
+
+   let backupLabelWrittenThisCall = false;
+   let backupHadNoPriorLabels = false;
+   let backupLabelEntryId: string | undefined;
+   if (params.backupCurrentHeadAs && backupEntryId && backupPrevalidation?.status === "would_create") {
+    const backupAppend = bridge.appendCheckpointLabel(backupEntryId, params.backupCurrentHeadAs);
+    if (!backupAppend.ok) {
+     const labelOwner = bridge.buildLabelMaps().labelToEntryId.get(params.backupCurrentHeadAs);
+     const labelRemaining = labelOwner === backupEntryId;
+     return {
+      content: [{ type: "text" as const, text: `Error: archive bookmark '${params.backupCurrentHeadAs}' could not be set: ${backupAppend.message}. Travel aborted.${labelRemaining ? " The label may remain; inspect acm_timeline before retrying." : ""}` }],
+      details: {
+       error: "backup_label_failed",
+       name: params.backupCurrentHeadAs,
+       message: backupAppend.message,
+       backupEntryId,
+       labelRemaining,
+      },
+     };
     }
+    backupHadNoPriorLabels = backupPrevalidation.aliases.length === 0;
+    backupLabelEntryId = backupAppend.value.labelEntryId;
+    backupLabelWrittenThisCall = true;
    }
 
    const travelDetails: TravelSummaryDetails = {
@@ -1290,51 +1366,79 @@ export default function(pi: ExtensionAPI): void {
     targetId: tid,
     backupCurrentHeadAs: params.backupCurrentHeadAs ?? null,
    };
-   let summaryEntryId: string | undefined;
    const branchResult = bridge.branchWithSummary(tid, params.summary, travelDetails);
    if (!branchResult.ok) {
-    const errText = branchResult.message;
+    const branchFailure = parseBranchFailureDetails(branchResult.details);
+    const mutationApplied = branchFailure?.mutationApplied ?? bridge.getLeafId() !== originId;
     let backupRolledBack = false;
     let backupRollbackFailed = false;
     let backupRollbackSkipped = false;
+    let backupRollbackSkipReason: "branch_mutation_observed" | "prior_aliases" | null = null;
+
     if (backupLabelWrittenThisCall && backupLabelEntryId) {
-     if (backupHadNoPriorLabels) {
-      const clear = bridge.clearCreatedLabel(backupLabelEntryId);
-      if (clear.ok) {
-       backupRolledBack = true;
-      } else {
-       backupRollbackFailed = true;
-      }
-     } else {
+     if (mutationApplied) {
       backupRollbackSkipped = true;
+      backupRollbackSkipReason = "branch_mutation_observed";
+     } else if (!backupHadNoPriorLabels) {
+      backupRollbackSkipped = true;
+      backupRollbackSkipReason = "prior_aliases";
+     } else {
+      const clear = bridge.clearCreatedLabel(backupLabelEntryId);
+      const aliasesAfterRollback = backupEntryId
+       ? bridge.buildLabelMaps().entryToLabels.get(backupEntryId) ?? []
+       : [];
+      const labelStillPresent = params.backupCurrentHeadAs
+       ? aliasesAfterRollback.includes(params.backupCurrentHeadAs)
+       : false;
+      backupRolledBack = clear.ok || !labelStillPresent;
+      backupRollbackFailed = !backupRolledBack;
      }
     }
+
+    const aliasesAfterFailure = backupEntryId
+     ? bridge.buildLabelMaps().entryToLabels.get(backupEntryId) ?? []
+     : [];
+    const backupLabelRemaining = params.backupCurrentHeadAs
+     ? aliasesAfterFailure.includes(params.backupCurrentHeadAs)
+     : false;
+    const recoveryAction = backupLabelRemaining && params.backupCurrentHeadAs && backupEntryId
+     ? `Checkpoint '${params.backupCurrentHeadAs}' remains at ${backupEntryId}. Use acm_timeline to verify the active leaf and recover the abandoned branch before retrying.`
+     : mutationApplied
+      ? `Inspect acm_timeline to verify the actual leaf${branchFailure?.actualSummaryEntryId ? ` ${branchFailure.actualSummaryEntryId}` : ""} before continuing.`
+      : "Correct the reported host failure and retry; no new backup label remains.";
+
     let backupNote = "";
-    if (params.backupCurrentHeadAs) {
-     if (backupRollbackSkipped) {
-      backupNote = ` Backup label '${params.backupCurrentHeadAs}' remains on the tree (rollback skipped — entry had other checkpoint aliases).`;
-     } else if (backupRollbackFailed) {
-      backupNote = ` Backup label '${params.backupCurrentHeadAs}' was written but could not be rolled back.`;
-     } else if (backupRolledBack) {
-      backupNote = ` Backup label '${params.backupCurrentHeadAs}' was rolled back.`;
-     } else if (backupLabelWrittenThisCall) {
-      backupNote = ` Backup label '${params.backupCurrentHeadAs}' remains on the tree.`;
-     }
+    if (backupRollbackSkipped && backupRollbackSkipReason === "branch_mutation_observed") {
+     backupNote = ` Backup label '${params.backupCurrentHeadAs}' remains because branch mutation was observed and the abandoned branch must stay recoverable.`;
+    } else if (backupRollbackSkipped) {
+     backupNote = ` Backup label '${params.backupCurrentHeadAs}' remains because rollback cannot clear an entry with prior aliases.`;
+    } else if (backupRollbackFailed) {
+     backupNote = ` Backup label '${params.backupCurrentHeadAs}' remains at ${backupEntryId}; rollback failed.`;
+    } else if (backupRolledBack) {
+     backupNote = ` Backup label '${params.backupCurrentHeadAs}' was rolled back.`;
+    } else if (backupLabelWrittenThisCall) {
+     backupNote = ` Backup label '${params.backupCurrentHeadAs}' remains on the tree.`;
     }
+
     return {
-     content: [{ type: "text" as const, text: `Error: branchWithSummary failed: ${errText}.${backupNote}` }],
+     content: [{ type: "text" as const, text: `Error: branchWithSummary failed: ${branchResult.message}.${backupNote} Recovery: ${recoveryAction}` }],
      details: {
       error: "branch_failed",
+      hostError: branchResult.error,
+      branchFailure: branchFailure ?? null,
       backupCurrentHeadAs: params.backupCurrentHeadAs ?? null,
       backupEntryId,
       backupLabelWritten: backupLabelWrittenThisCall,
       backupRolledBack,
       backupRollbackFailed,
       backupRollbackSkipped,
+      backupRollbackSkipReason,
+      remainingBackupLabel: backupLabelRemaining ? params.backupCurrentHeadAs ?? null : null,
+      recoveryAction,
      },
     };
    }
-   summaryEntryId = branchResult.value.summaryEntryId;
+   const summaryEntryId = branchResult.value.summaryEntryId;
 
    contextRefresh.markPending(sm);
    refreshTargetLeafIds.set(sm, summaryEntryId);
@@ -1373,6 +1477,9 @@ export default function(pi: ExtensionAPI): void {
     details: {
      target: params.target,
      targetId: tid,
+     resolvedBy,
+     resolvedEntryId: tid,
+     rootCount: requestedRoot ? tree.length : null,
      originId,
      originLabel,
      hasBackup: !!params.backupCurrentHeadAs,
@@ -1391,6 +1498,7 @@ export default function(pi: ExtensionAPI): void {
      messagesBefore,
      messagesAfter,
      summaryEntryId,
+     resultingLeafId: branchResult.value.leafAfter,
      contextRefreshPending: true,
      fromOffPath: resolved.fromOffPath,
     },
