@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ACM Implementation Notes</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.5; }
+    body { max-width: 72rem; margin: 0 auto; padding: 2rem; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #8888; padding: .6rem; text-align: left; vertical-align: top; }
+    th { background: #8882; }
+    code { background: #8882; padding: .1rem .25rem; border-radius: .2rem; }
+    .meta { color: #666; }
+  </style>
+</head>
+<body>
+  <h1>ACM Implementation Notes</h1>
+  <p class="meta">Created 2026-07-11 before implementation. These decisions were resolved during the ACM improvement grilling and specification sessions.</p>
+
+  <h2>Decision Record</h2>
+  <table>
+    <thead>
+      <tr><th>Provenance</th><th>Decision</th><th>Rationale and constraint</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>user-decided</td>
+        <td><code>omp-context</code> is the canonical ACM repository.</td>
+        <td><code>magic-acm-context</code> consumes ACM through a one-way manual sync. The integrated repository is not an independent implementation authority.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Synchronization remains manual.</td>
+        <td>Expand the local sync command to cover implementation, guidance, generated artifacts, and tests. Do not add CI parity, webhooks, scheduled synchronization, or automatic pull requests.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Support exactly OMP <code>16.4.2</code>.</td>
+        <td><code>@oh-my-pi/pi-coding-agent</code>, <code>@oh-my-pi/pi-agent-core</code>, and <code>@oh-my-pi/pi-ai</code> must share the exact version. Future updates replace the exact release only after isolated real-host verification.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Remain plugin-only.</td>
+        <td>Do not require an OMP upstream API change and do not mutate the private agent message array. Preserve the known host limitation explicitly.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Isolate OMP internals behind one narrow Host Bridge.</td>
+        <td>All guarded SessionManager capabilities live at this seam. Domain logic and agent-facing tools consume typed structural results rather than casting host internals directly.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Verify runtime behavior with the real SessionManager.</td>
+        <td>Use an isolated OMP <code>16.4.2</code> fixture without a model or API key. Pin resolver roots and prove all OMP imports come from the fixture.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>The ACM Skill package is the sole guidance authority.</td>
+        <td>A canonical CORE supplies the normal path. Generated system-prompt and tool guidance are derived artifacts, not editable behavioral sources.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Inject CORE through the ACM extension.</td>
+        <td>Use public <code>before_agent_start</code>, preserve every existing system-prompt segment in order, add a stable marker, and inject CORE exactly once in both repositories.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Use one model-invoked advanced Skill.</td>
+        <td>CORE owns the normal path. The Skill triggers only non-obvious target selection, interleaved fronts, missing anchors, archive round trips, and exceptional recovery.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Keep three representative examples always on.</td>
+        <td>Burst, failed direction, and finished task chain provide transferable usage patterns. Advanced reference is split by cognitive task rather than by one Skill per scenario.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Retain the fixed seven-slot handoff.</td>
+        <td><code>Goal</code>, <code>State</code>, <code>Evidence</code>, <code>External</code>, <code>Exclusions</code>, <code>Recover</code>, and <code>NEXT</code> always appear; empty categories use <code>none</code>. This is an agent completion criterion, not runtime proof of semantic correctness.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Use hard structural invariants and soft semantic heuristics.</td>
+        <td>The plugin validates observable structure only. Boundary quality, fold value, raw recoverability sufficiency, and whether NEXT is genuinely executable remain agent judgments.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Context pressure triggers boundary inspection.</td>
+        <td>Pressure does not independently authorize travel. Native token compaction remains OMP's responsibility; travel remains a semantic-boundary operation.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Simplify timeline to one strict view discriminator.</td>
+        <td>Use <code>active</code>, <code>checkpoints</code>, <code>search</code>, or <code>tree</code>. Reject legacy booleans, unknown keys, whitespace-only search/filter values, and fields invalid for the selected view.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Do not add a travel preview/apply protocol.</td>
+        <td>Timeline provides candidate evidence. Travel performs side-effect-free prevalidation and then applies one recoverable transition.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Tool results use progressive disclosure and raw evidence.</td>
+        <td>Success returns concise facts and one next cue; exceptional paths return relevant recovery guidance. Remove threshold-based effect labels and report raw before/after/delta and structural message facts.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>README is maintainer-facing.</td>
+        <td>Document installation, architecture, exact version, sync direction, verification, and known limits. Link to canonical agent guidance instead of duplicating it.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Validate guidance through static contracts and real use.</td>
+        <td>Do not create a stochastic model benchmark now. Change guidance in response to observed failures or host-contract changes.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Specifications</h2>
+  <ul>
+    <li><code>.scratch/acm-agent-guidance-delivery/spec.md</code></li>
+    <li><code>.scratch/acm-host-bridge-runtime/spec.md</code></li>
+    <li><code>.scratch/acm-agent-tool-contract/spec.md</code></li>
+    <li><code>.scratch/acm-sync-version-contract/spec.md</code></li>
+  </ul>
+
+  <h2>Open Decisions</h2>
+  <p>None. Implementation details that preserve the decisions above may be resolved by the implementing agent using repository conventions.</p>
+</body>
+</html>
