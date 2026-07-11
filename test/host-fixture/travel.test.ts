@@ -7,6 +7,8 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import * as zod from "zod/v4";
 import registerACMExtension from "../../src/index.js";
+import type { UsageLike } from "../../src/lib.js";
+import { GUIDANCE_CUES, RECOVERY_GUIDANCE } from "../../src/generated-guidance.js";
 import { createHostSessionHarness, type HostSessionHarness, type HostSessionSnapshot } from "./harness.js";
 
 const active: HostSessionHarness[] = [];
@@ -75,10 +77,14 @@ function captureTravelTool(): ToolDefinition {
   return travelTool;
 }
 
-function createContext(sessionManager: ReadonlySessionManager, notifications: string[]): ExtensionContext {
+function createContext(
+  sessionManager: ReadonlySessionManager,
+  notifications: string[],
+  usage: UsageLike | undefined,
+): ExtensionContext {
   const context = {
     sessionManager,
-    getContextUsage: () => ({ tokens: 1200, contextWindow: 100_000, percent: 1.2 }),
+    getContextUsage: () => usage,
     ui: {
       notify(message: string) {
         notifications.push(message);
@@ -93,6 +99,7 @@ async function runTravel(
   sessionManager: ReadonlySessionManager,
   params: TravelParams,
   signal?: AbortSignal,
+  usage: UsageLike | null = { tokens: 1200, contextWindow: 100_000, percent: 1.2 },
 ): Promise<TravelRun> {
   const notifications: string[] = [];
   const result = await captureTravelTool().execute(
@@ -100,7 +107,7 @@ async function runTravel(
     params,
     signal,
     undefined,
-    createContext(sessionManager, notifications),
+    createContext(sessionManager, notifications, usage ?? undefined),
   );
   return { result, notifications };
 }
@@ -109,6 +116,10 @@ function resultDetails(run: TravelRun): Record<string, unknown> {
   const details = run.result.details;
   if (typeof details !== "object" || details === null) throw new Error("travel result did not include details");
   return details as Record<string, unknown>;
+}
+
+function resultText(run: TravelRun): string {
+  return run.result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
 }
 
 function structuralSnapshot(snapshot: HostSessionSnapshot) {
@@ -161,6 +172,61 @@ describe("acm_travel with real OMP SessionManager", () => {
     expect(structuralSnapshot(harness.snapshot())).toEqual(before);
   });
 
+  test("leaves structure unchanged for empty, inactive, current, and non-meaningful targets", async () => {
+    const emptyHarness = createHarness();
+    const emptyBefore = structuralSnapshot(emptyHarness.snapshot());
+    const emptyRun = await runTravel(emptyHarness.session, { target: "root", summary: VALID_HANDOFF });
+    expect(resultDetails(emptyRun).error).toBe("empty_session");
+    expect(structuralSnapshot(emptyHarness.snapshot())).toEqual(emptyBefore);
+
+    const inactiveHarness = createHarness();
+    const inactivePair = appendUserAssistantPair(inactiveHarness.session);
+    inactiveHarness.session.resetLeaf();
+    const inactiveBefore = structuralSnapshot(inactiveHarness.snapshot());
+    const inactiveRun = await runTravel(inactiveHarness.session, {
+      target: inactivePair.userId,
+      summary: VALID_HANDOFF,
+    });
+    expect(resultDetails(inactiveRun).error).toBe("no_active_leaf");
+    expect(structuralSnapshot(inactiveHarness.snapshot())).toEqual(inactiveBefore);
+
+    const currentHarness = createHarness();
+    const currentPair = appendUserAssistantPair(currentHarness.session);
+    const currentBefore = structuralSnapshot(currentHarness.snapshot());
+    const currentRun = await runTravel(currentHarness.session, {
+      target: currentPair.assistantId,
+      summary: VALID_HANDOFF,
+    });
+    expect(resultDetails(currentRun).error).toBe("already_at_target");
+    expect(structuralSnapshot(currentHarness.snapshot())).toEqual(currentBefore);
+
+    const nonMeaningfulHarness = createHarness();
+    const firstCustomId = nonMeaningfulHarness.session.appendMessage({
+      role: "custom",
+      customType: "fixture",
+      content: [{ type: "text", text: "first internal message" }],
+      display: false,
+      details: {},
+      timestamp: Date.now(),
+    });
+    nonMeaningfulHarness.session.appendMessage({
+      role: "custom",
+      customType: "fixture",
+      content: [{ type: "text", text: "second internal message" }],
+      display: false,
+      details: {},
+      timestamp: Date.now(),
+    });
+    const nonMeaningfulBefore = structuralSnapshot(nonMeaningfulHarness.snapshot());
+    const nonMeaningfulRun = await runTravel(nonMeaningfulHarness.session, {
+      target: firstCustomId,
+      summary: VALID_HANDOFF,
+      backupCurrentHeadAs: "no-meaningful-backup-done",
+    });
+    expect(resultDetails(nonMeaningfulRun).error).toBe("no_meaningful_backup_target");
+    expect(structuralSnapshot(nonMeaningfulHarness.snapshot())).toEqual(nonMeaningfulBefore);
+  });
+
   test("prevalidates branch capability before creating a backup label", async () => {
     const harness = createHarness();
     const { userId } = appendUserAssistantPair(harness.session);
@@ -204,6 +270,7 @@ describe("acm_travel with real OMP SessionManager", () => {
 
     expect(details.error).toBe("branch_failed");
     expect(details.backupRolledBack).toBe(true);
+    expect(resultText(run)).toContain(RECOVERY_GUIDANCE.branchRolledBack);
     const after = harness.snapshot();
     expect(after.aliases[assistantId]).toBeUndefined();
     expect(after.messages).toEqual(messagesBefore);
@@ -228,9 +295,9 @@ describe("acm_travel with real OMP SessionManager", () => {
     const details = resultDetails(run);
 
     expect(details.error).toBe("branch_failed");
+    expect(resultText(run)).toContain(RECOVERY_GUIDANCE.rollbackSkipped);
     expect(details.backupRolledBack).toBe(false);
     expect(details.backupRollbackSkipped).toBe(true);
-    expect(details.recoveryAction).toContain("partial-mutation-done");
     expect(harness.snapshot().aliases[assistantId]).toContain("partial-mutation-done");
     expect(harness.snapshot().leafId).not.toBe(assistantId);
   });
@@ -256,10 +323,10 @@ describe("acm_travel with real OMP SessionManager", () => {
     const details = resultDetails(run);
 
     expect(details.error).toBe("branch_failed");
+    expect(resultText(run)).toContain(RECOVERY_GUIDANCE.rollbackFailed);
     expect(details.backupRollbackFailed).toBe(true);
     expect(details.remainingBackupLabel).toBe("rollback-failed-done");
     expect(details.backupEntryId).toBe(assistantId);
-    expect(details.recoveryAction).toContain("rollback-failed-done");
     expect(harness.snapshot().aliases[assistantId]).toContain("rollback-failed-done");
   });
 
@@ -375,6 +442,7 @@ describe("acm_travel with real OMP SessionManager", () => {
     const aliases = harness.snapshot().aliases[assistantId];
 
     expect(details.error).toBe("branch_failed");
+    expect(resultText(run)).toContain(RECOVERY_GUIDANCE.rollbackSkipped);
     expect(details.backupRollbackSkipped).toBe(true);
     expect(details.backupRollbackSkipReason).toBe("prior_aliases");
     expect(aliases).toContain("existing-alias");
@@ -418,5 +486,185 @@ describe("acm_travel with real OMP SessionManager", () => {
     expect(details.backupResolvedFromHead).toBe(toolResultId);
     expect(harness.snapshot().aliases[userId]).toContain("meaningful-backup-done");
     expect(run.notifications.some((message) => message.includes("tool/internal traffic"))).toBe(true);
+  });
+
+  test("reports raw usage and structural deltas without threshold verdicts", async () => {
+    const harness = createHarness();
+    const { userId } = appendUserAssistantPair(harness.session);
+    const run = await runTravel(harness.session, { target: userId, summary: VALID_HANDOFF });
+    const details = resultDetails(run);
+    const text = run.result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
+
+    expect(details.usageBeforeTokens).toBe(1200);
+    expect(typeof details.estimatedUsageAfterTokens).toBe("number");
+    expect(details.tokenDelta).toBe(
+      (details.estimatedUsageAfterTokens as number) - (details.usageBeforeTokens as number),
+    );
+    expect(details.percentagePointDelta).toBeCloseTo(
+      (details.estimatedUsageAfterPercent as number) - (details.usageBeforePercent as number),
+    );
+    expect(details.structuralMessageDelta).toBe(
+      (details.messagesAfter as number) - (details.messagesBefore as number),
+    );
+    expect(details.backupCurrentHeadAs).toBeNull();
+    expect(details.backupEntryId).toBeUndefined();
+    expect(details.usageAfter).toBe("pending_next_context_event");
+    expect(["decreased", "increased", "equal"]).toContain(details.structuralMessageDirection);
+    expect(details).not.toHaveProperty("estimatedEffect");
+    expect(details).not.toHaveProperty("structuralEffect");
+    expect(text).toContain(GUIDANCE_CUES.travelPhase);
+    expect(text).not.toContain("estimatedEffect");
+    expect(text).not.toMatch(/\b(shrunk|restored|unchanged)\b/);
+  });
+
+  test("uses null raw usage fields when context usage is unavailable", async () => {
+    const harness = createHarness();
+    const { userId } = appendUserAssistantPair(harness.session);
+    const run = await runTravel(harness.session, { target: userId, summary: VALID_HANDOFF }, undefined, null);
+    const details = resultDetails(run);
+    const text = run.result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
+
+    expect(details.usageBeforeTokens).toBeNull();
+    expect(details.usageBeforePercent).toBeNull();
+    expect(details.estimatedUsageAfterTokens).toBeNull();
+    expect(details.estimatedUsageAfterPercent).toBeNull();
+    expect(details.tokenDelta).toBeNull();
+    expect(details.percentagePointDelta).toBeNull();
+    expect(text).toContain("unknown");
+    expect(text).not.toMatch(/no saving|unchanged/i);
+  });
+
+  test("selects one canonical suffix-sensitive next cue", async () => {
+    const phaseHarness = createHarness();
+    const phasePair = appendUserAssistantPair(phaseHarness.session);
+    const phaseRun = await runTravel(phaseHarness.session, { target: phasePair.userId, summary: VALID_HANDOFF });
+    const phaseText = phaseRun.result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
+    expect(phaseText).toContain(GUIDANCE_CUES.travelPhase);
+    expect(phaseText).not.toContain(GUIDANCE_CUES.travelTask);
+
+    const taskHarness = createHarness();
+    const taskPair = appendUserAssistantPair(taskHarness.session);
+    const taskRun = await runTravel(taskHarness.session, {
+      target: taskPair.userId,
+      summary: VALID_HANDOFF,
+      backupCurrentHeadAs: "travel-contract-done",
+    });
+    const taskText = taskRun.result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
+    expect(taskText).toContain(GUIDANCE_CUES.travelTask);
+    expect(taskText).not.toContain(GUIDANCE_CUES.travelPhase);
+  });
+
+  test("uses canonical progressive recovery for collisions and host failures", async () => {
+    const collisionHarness = createHarness();
+    const collisionPair = appendUserAssistantPair(collisionHarness.session);
+    collisionHarness.session.appendLabelChange(collisionPair.userId, "taken-backup");
+    const collisionRun = await runTravel(collisionHarness.session, {
+      target: collisionPair.userId,
+      summary: VALID_HANDOFF,
+      backupCurrentHeadAs: "taken-backup",
+    });
+    const collisionText = collisionRun.result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
+    expect(collisionText).toContain(RECOVERY_GUIDANCE.nameCollision);
+
+    const capabilityHarness = createHarness();
+    const capabilityPair = appendUserAssistantPair(capabilityHarness.session);
+    const view = sessionView(capabilityHarness.session);
+    const withoutAppend = {
+      getEntries: view.getEntries.bind(view),
+      getTree: view.getTree.bind(view),
+      getBranch: view.getBranch.bind(view),
+      getLeafId: view.getLeafId.bind(view),
+      getEntry: view.getEntry.bind(view),
+      branchWithSummary: view.branchWithSummary?.bind(view),
+    };
+    const before = structuralSnapshot(capabilityHarness.snapshot());
+    const capabilityRun = await runTravel(withoutAppend as unknown as ReadonlySessionManager, {
+      target: capabilityPair.userId,
+      summary: VALID_HANDOFF,
+      backupCurrentHeadAs: "missing-label-capability-done",
+
+    });
+    const capabilityText = capabilityRun.result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
+    expect(resultDetails(capabilityRun).error).toBe("backup_prevalidation_failed");
+    expect(capabilityText).toContain(RECOVERY_GUIDANCE.hostCapability);
+    expect(structuralSnapshot(capabilityHarness.snapshot())).toEqual(before);
+  });
+
+
+  test("reports canonical pending recovery when post-mutation message evidence fails", async () => {
+    const harness = createHarness();
+    const { userId } = appendUserAssistantPair(harness.session);
+    let entryReads = 0;
+    const view = sessionView(harness.session);
+    const failAfterMutation = {
+      getEntries() {
+        entryReads += 1;
+        if (entryReads >= 4) throw new Error("post-mutation build failed");
+        return harness.session.getEntries();
+      },
+      getTree: view.getTree.bind(view),
+      getBranch: view.getBranch.bind(view),
+      getLeafId: view.getLeafId.bind(view),
+      getEntry: view.getEntry.bind(view),
+      appendLabelChange: view.appendLabelChange?.bind(view),
+      branchWithSummary: view.branchWithSummary?.bind(view),
+    };
+
+    const run = await runTravel(failAfterMutation as unknown as ReadonlySessionManager, {
+      target: userId,
+      summary: VALID_HANDOFF,
+    });
+    const details = resultDetails(run);
+
+    expect(details.error).toBe("build_messages_failed");
+    expect(details.contextRefreshPending).toBe(true);
+    expect(details.summaryEntryId).toBe(harness.snapshot().leafId);
+    expect(resultText(run)).toContain(RECOVERY_GUIDANCE.refreshPending);
+  });
+  test("reports decreased, equal, and increased message-count directions factually", async () => {
+    const decreasedHarness = createHarness();
+    const decreasedFirst = appendUserAssistantPair(decreasedHarness.session);
+    appendUserAssistantPair(decreasedHarness.session);
+    const decreased = resultDetails(await runTravel(decreasedHarness.session, {
+      target: decreasedFirst.userId,
+      summary: VALID_HANDOFF,
+    }));
+    expect(decreased.structuralMessageDirection).toBe("decreased");
+    expect(decreased.structuralMessageDelta).toBeLessThan(0);
+
+    const equalHarness = createHarness();
+    const equalPair = appendUserAssistantPair(equalHarness.session);
+    const equal = resultDetails(await runTravel(equalHarness.session, {
+      target: equalPair.userId,
+      summary: VALID_HANDOFF,
+    }));
+    expect(equal.structuralMessageDirection).toBe("equal");
+    expect(equal.structuralMessageDelta).toBe(0);
+
+    const increasedHarness = createHarness();
+    const increasedPair = appendUserAssistantPair(increasedHarness.session);
+    increasedHarness.session.branchWithSummary(
+      increasedPair.userId,
+      "first branch",
+      { originId: increasedPair.assistantId },
+      true,
+    );
+    const increased = resultDetails(await runTravel(increasedHarness.session, {
+      target: increasedPair.assistantId,
+      summary: VALID_HANDOFF,
+    }));
+    expect(increased.structuralMessageDirection).toBe("increased");
+    expect(increased.structuralMessageDelta).toBeGreaterThan(0);
+  });
+
+  test("reports restored off-path travel through its canonical recovery branch", async () => {
+    const harness = createHarness();
+    const { userId, assistantId } = appendUserAssistantPair(harness.session);
+    harness.session.branchWithSummary(userId, "first branch", { originId: assistantId }, true);
+    const run = await runTravel(harness.session, { target: assistantId, summary: VALID_HANDOFF });
+    const text = run.result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
+
+    expect(resultDetails(run).fromOffPath).toBe(true);
+    expect(text).toContain(RECOVERY_GUIDANCE.restoredHistory);
   });
 });

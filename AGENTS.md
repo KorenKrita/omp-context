@@ -98,11 +98,11 @@ sm.branchWithSummary(targetId, summary, {
 5. 设置 `contextRefresh.markPending(sessionManager)`（按 session 实例隔离），并用 `WeakMap` 记录 branch-summary leaf 作为稳定 fallback。
 6. `pi.on("context", ...)` 在**每次** LLM 调用前通过公开的 compaction-aware `buildSessionContext()` 重建 messages 并覆盖发给模型的上下文。`branchWithSummary` 只切 session-manager 的 leaf，不同步 OMP agent 持有的 `agent.state.messages`（扩展无 `agent.replaceMessages` 能力）。因此采用持久覆盖：travel 后**每个** LLM turn 都 rebuild；若当前 leaf 暂时无法重建，则回退到记录的 summary leaf。rebuild 会修复 orphan tool call/result；失败最多重试 3 次，HUD 显示原因和进度，成功后清除旧 failure/attempt 但保持 persistent pending。`session_start`/`session_shutdown`/`session_compact` 会清当前 session 的 refresh、fallback leaf 和 cached usage。
 
-travel tool result `details` 含 `sessionMessages`（字符串 delta）、`messagesBefore`/`messagesAfter`、`summaryEntryId`、`contextRefreshPending`。**无** legacy `summaryEntry` 别名字段。
+travel tool result `details` 保留 resolved target、origin、`summaryEntryId`、backup outcome、`messagesBefore`/`messagesAfter`、`contextRefreshPending` 等结构标识，并新增 raw `tokenDelta`、`percentagePointDelta`、`structuralMessageDelta` 与 factual `structuralMessageDirection`。**无** legacy `summaryEntry` 别名字段。
 
 travel 改的是 OMP 会话历史树和发给模型的上下文，不会回滚磁盘文件、进程、浏览器状态、远端服务或任何外部副作用。
 
-travel 不保证降 token：目标在噪音之前通常 structural `shrunk`，目标在大量 raw history 之后通常 structural `restored`。tool result 报告可靠的 `usageBefore` 与同步 **估算** `estimatedUsageAfter` / `estimatedEffect`（`buildSessionContext` + token estimator）；官方 `usageAfter` 仍为 `pending_next_context_event`，下一步 `acm_timeline` HUD 可确认。details **无** legacy `effect` 字段。`list_checkpoints` 的 `~% est.` 仅估算 target path（不含 travel summary）。`sessionMessages` / `structuralEffect` 立即可信。
+travel 不保证降 token，也不再给出基于 500-token/2-percent 阈值的 `estimatedEffect` / `structuralEffect` 语义 verdict。tool result 直接报告 `usageBefore`、同步估算的 `estimatedUsageAfter`、token delta、percentage-point delta、message counts 与精确 message-count direction；不可用 usage 用 `null` / `unknown`，不能归类为 no saving。官方 `usageAfter` 仍为 `pending_next_context_event`，下一步 `acm_timeline` HUD 可确认。
 
 ### 已知限制：native agent state 仍可能滞后
 

@@ -8,6 +8,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import * as zod from "zod/v4";
 import registerACMExtension from "../../src/index.js";
+import { RECOVERY_GUIDANCE } from "../../src/generated-guidance.js";
 import { createHostSessionHarness, type HostSessionHarness } from "./harness.js";
 
 const active: HostSessionHarness[] = [];
@@ -355,12 +356,14 @@ describe("public context reconstruction with real OMP SessionManager", () => {
       expect(await contextHandler(runtime)({ messages: hostMessages }, ctx)).toEqual({ messages: hostMessages });
     }
     expect(notifications).toHaveLength(3);
-    expect(notifications.at(-1)).toContain("Reload the session to sync messages");
+    expect(notifications.at(-1)).toContain(RECOVERY_GUIDANCE.refreshExhausted);
 
     controlled.failBuild(false);
     const timeline = await runTimeline(runtime, controlled.view);
     expect((timeline.details as Record<string, unknown>).contextRefreshPending).toBe(false);
     expect((timeline.details as Record<string, unknown>).contextRefreshFailure).toContain("fixture context build failed");
+    expect(timeline.content.map((part) => part.type === "text" ? part.text : "").join("\n"))
+      .toContain(RECOVERY_GUIDANCE.refreshExhausted);
 
     expect(await contextHandler(runtime)({ messages: hostMessages }, ctx)).toBeUndefined();
   });

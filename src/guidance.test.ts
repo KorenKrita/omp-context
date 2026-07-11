@@ -5,6 +5,7 @@ import registerACMExtension from "./index.js";
 import {
   ACM_CORE,
   ACM_CORE_MARKER,
+  RECOVERY_GUIDANCE,
   TOOL_DESCRIPTIONS,
 } from "./generated-guidance.js";
 
@@ -103,6 +104,32 @@ describe("canonical ACM CORE", () => {
     for (const description of Object.values(TOOL_DESCRIPTIONS)) {
       expect(description.length).toBeLessThan(900);
       expect(description).not.toContain("Goal:");
+    }
+  });
+});
+
+describe("generated travel recovery guidance", () => {
+  test("matches every canonical CORE recovery marker", async () => {
+    const core = await Bun.file(new URL("../skills/context-management/CORE.md", import.meta.url)).text();
+    const markers = {
+      nameCollision: "RECOVERY_NAME_COLLISION",
+      hostCapability: "RECOVERY_HOST_CAPABILITY",
+      rollbackFailed: "RECOVERY_ROLLBACK_FAILED",
+      branchRolledBack: "RECOVERY_BRANCH_ROLLED_BACK",
+      rollbackSkipped: "RECOVERY_ROLLBACK_SKIPPED",
+      refreshPending: "RECOVERY_REFRESH_PENDING",
+      restoredHistory: "RECOVERY_RESTORED_HISTORY",
+      refreshExhausted: "RECOVERY_REFRESH_EXHAUSTED",
+    } as const;
+
+    expect(Object.keys(RECOVERY_GUIDANCE).sort()).toEqual(Object.keys(markers).sort());
+    for (const [key, marker] of Object.entries(markers)) {
+      const start = `<!-- ACM:${marker}:START -->`;
+      const end = `<!-- ACM:${marker}:END -->`;
+      expect(core.split(start)).toHaveLength(2);
+      expect(core.split(end)).toHaveLength(2);
+      const canonical = core.slice(core.indexOf(start) + start.length, core.indexOf(end)).trim();
+      expect(String(RECOVERY_GUIDANCE[key as keyof typeof RECOVERY_GUIDANCE])).toBe(canonical);
     }
   });
 });

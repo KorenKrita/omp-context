@@ -4,8 +4,8 @@ import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-ent
 import {
  ContextRefreshRegistry,
  buildLabelMaps,
- classifyStructuralMessageEffect,
- classifyTravelEffect,
+ calculateUsageDelta,
+ classifyStructuralMessageDirection,
  compareEntriesByTimestamp,
  estimateUsageAfterMessageChange,
  estimateUsageAtTravelTarget,
@@ -207,19 +207,27 @@ describe("fixOrphanedToolUse", () => {
  });
 });
 
-describe("classify effects", () => {
- test("classifyTravelEffect respects threshold", () => {
+describe("raw travel deltas", () => {
+ test("reports exact token and percentage-point deltas without thresholds", () => {
   const before: UsageLike = { tokens: 10_000, contextWindow: 100_000, percent: 10 };
-  const afterSmall: UsageLike = { tokens: 9_600, contextWindow: 100_000, percent: 9.6 };
-  const afterLarge: UsageLike = { tokens: 5_000, contextWindow: 100_000, percent: 5 };
-  expect(classifyTravelEffect(before, afterSmall)).toBe("unchanged");
-  expect(classifyTravelEffect(before, afterLarge)).toBe("shrunk");
+  const after: UsageLike = { tokens: 9_600, contextWindow: 100_000, percent: 9.6 };
+  const delta = calculateUsageDelta(before, after);
+  expect(delta.tokenDelta).toBe(-400);
+  expect(delta.percentagePointDelta).toBeCloseTo(-0.4);
  });
 
- test("classifyStructuralMessageEffect", () => {
-  expect(classifyStructuralMessageEffect(80, 12)).toBe("shrunk");
-  expect(classifyStructuralMessageEffect(12, 80)).toBe("restored");
-  expect(classifyStructuralMessageEffect(10, 11)).toBe("unchanged");
+ test("uses null when usage is unavailable", () => {
+  expect(calculateUsageDelta(undefined, undefined)).toEqual({
+   tokenDelta: null,
+   percentagePointDelta: null,
+  });
+ });
+
+ test("reports factual message-count direction", () => {
+  expect(classifyStructuralMessageDirection(80, 12)).toBe("decreased");
+  expect(classifyStructuralMessageDirection(12, 80)).toBe("increased");
+  expect(classifyStructuralMessageDirection(10, 10)).toBe("equal");
+  expect(classifyStructuralMessageDirection(undefined, 10)).toBe("unknown");
  });
 });
 

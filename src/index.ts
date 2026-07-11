@@ -10,8 +10,8 @@ import type { TextContent, ImageContent, ToolCall, TSchema, ThinkingContent, Red
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import {
  ACM_INTERNAL_TOOLS as INTERNAL_TOOLS,
- classifyStructuralMessageEffect,
- classifyTravelEffect,
+ calculateUsageDelta,
+ classifyStructuralMessageDirection,
  compareEntriesByTimestamp,
  entryMatchesLabelSearch,
  estimateUsageAfterMessageChange,
@@ -55,6 +55,17 @@ function formatBackupText(
   return `${name}@${entryId} (resolved from HEAD ${resolvedFromHead})`;
  }
  return `${name}@${entryId}`;
+}
+
+function formatNumericValue(value: number | null, fractionDigits = 0): string {
+ if (value === null || !Number.isFinite(value)) return "unknown";
+ return value.toFixed(fractionDigits);
+}
+
+function formatSignedDelta(value: number | null, fractionDigits = 0, suffix = ""): string {
+ if (value === null || !Number.isFinite(value)) return "unknown";
+ const sign = value > 0 ? "+" : "";
+ return `${sign}${value.toFixed(fractionDigits)}${suffix}`;
 }
 
 function getMessageRoleLabel(entry: SessionEntry): string | undefined {
@@ -1063,7 +1074,9 @@ export default function(pi: ExtensionAPI): void {
     `• Travel Cue:       ${travelCue}`,
    ];
    if (refreshFailure) {
-    hudParts.push(`• Context Sync:     last travel refresh failed — ${refreshFailure}`);
+    const attempts = contextRefresh.getAttemptCount(sm);
+    const exhausted = attempts >= ContextRefreshRegistry.MAX_ATTEMPTS && !refreshPending;
+    hudParts.push(`• Context Sync:     last travel refresh failed — ${refreshFailure}${exhausted ? ` ${RECOVERY_GUIDANCE.refreshExhausted}` : ""}`);
    } else if (refreshPending) {
     const attempt = contextRefresh.getAttemptCount(sm);
     const retrySuffix = attempt > 0
@@ -1254,7 +1267,7 @@ export default function(pi: ExtensionAPI): void {
    const branchPrevalidation = bridge.prevalidateBranchWithSummary(tid);
    if (!branchPrevalidation.ok) {
     return {
-     content: [{ type: "text" as const, text: `Error: travel host prevalidation failed: ${branchPrevalidation.message}. No mutation was attempted.` }],
+     content: [{ type: "text" as const, text: `Error: travel host prevalidation failed: ${branchPrevalidation.message}. No mutation was attempted. ${RECOVERY_GUIDANCE.hostCapability}` }],
      details: {
       error: "branch_prevalidation_failed",
       hostError: branchPrevalidation.error,
@@ -1272,13 +1285,13 @@ export default function(pi: ExtensionAPI): void {
       const conflict = backupCheck.details as CheckpointLabelConflict | undefined;
       const existing = `${conflict?.entryId ?? "unknown"}${conflict?.onActivePath ? " (on-path)" : " (off-path)"}`;
       return {
-       content: [{ type: "text" as const, text: `Error: archive bookmark name '${params.backupCurrentHeadAs}' already exists at ${existing}. Use a different backupCurrentHeadAs name; the handoff must still carry the executable state.` }],
+       content: [{ type: "text" as const, text: `Error: archive bookmark name '${params.backupCurrentHeadAs}' already exists at ${existing}. ${RECOVERY_GUIDANCE.nameCollision}` }],
        details: { error: "duplicate_backup_name", name: params.backupCurrentHeadAs, owner: conflict },
       };
      }
      return {
-      content: [{ type: "text" as const, text: `Error: archive bookmark '${params.backupCurrentHeadAs}' failed prevalidation: ${backupCheck.message}. No mutation was attempted.` }],
-      details: { error: "backup_prevalidation_failed", name: params.backupCurrentHeadAs, message: backupCheck.message },
+      content: [{ type: "text" as const, text: `Error: archive bookmark '${params.backupCurrentHeadAs}' failed prevalidation: ${backupCheck.message}. No mutation was attempted. ${RECOVERY_GUIDANCE.hostCapability}` }],
+      details: { error: "backup_prevalidation_failed", name: params.backupCurrentHeadAs, message: backupCheck.message, recoveryAction: RECOVERY_GUIDANCE.hostCapability },
      };
     }
     backupPrevalidation = backupCheck.value;
@@ -1300,7 +1313,7 @@ export default function(pi: ExtensionAPI): void {
      const labelOwner = bridge.buildLabelMaps().labelToEntryId.get(params.backupCurrentHeadAs);
      const labelRemaining = labelOwner === backupEntryId;
      return {
-      content: [{ type: "text" as const, text: `Error: archive bookmark '${params.backupCurrentHeadAs}' could not be set: ${backupAppend.message}. Travel aborted.${labelRemaining ? " The label may remain; inspect acm_timeline before retrying." : ""}` }],
+      content: [{ type: "text" as const, text: `Error: archive bookmark '${params.backupCurrentHeadAs}' could not be set: ${backupAppend.message}. Travel aborted. ${RECOVERY_GUIDANCE.hostCapability}${labelRemaining ? ` ${RECOVERY_GUIDANCE.rollbackFailed}` : ""}` }],
       details: {
        error: "backup_label_failed",
        name: params.backupCurrentHeadAs,
@@ -1357,17 +1370,19 @@ export default function(pi: ExtensionAPI): void {
     const backupLabelRemaining = params.backupCurrentHeadAs
      ? aliasesAfterFailure.includes(params.backupCurrentHeadAs)
      : false;
-    const recoveryAction = backupLabelRemaining && params.backupCurrentHeadAs && backupEntryId
-     ? `Checkpoint '${params.backupCurrentHeadAs}' remains at ${backupEntryId}. Use acm_timeline to verify the active leaf and recover the abandoned branch before retrying.`
-     : mutationApplied
-      ? `Inspect acm_timeline to verify the actual leaf${branchFailure?.actualSummaryEntryId ? ` ${branchFailure.actualSummaryEntryId}` : ""} before continuing.`
-      : "Correct the reported host failure and retry; no new backup label remains.";
+    const recoveryAction = backupRollbackFailed
+     ? RECOVERY_GUIDANCE.rollbackFailed
+     : backupRollbackSkipped || mutationApplied
+      ? RECOVERY_GUIDANCE.rollbackSkipped
+      : backupRolledBack
+       ? RECOVERY_GUIDANCE.branchRolledBack
+       : RECOVERY_GUIDANCE.hostCapability;
 
     let backupNote = "";
     if (backupRollbackSkipped && backupRollbackSkipReason === "branch_mutation_observed") {
-     backupNote = ` Backup label '${params.backupCurrentHeadAs}' remains because branch mutation was observed and the abandoned branch must stay recoverable.`;
+     backupNote = ` Backup label '${params.backupCurrentHeadAs}' remains because branch mutation was observed.`;
     } else if (backupRollbackSkipped) {
-     backupNote = ` Backup label '${params.backupCurrentHeadAs}' remains because rollback cannot clear an entry with prior aliases.`;
+     backupNote = ` Backup label '${params.backupCurrentHeadAs}' remains because the target had prior aliases.`;
     } else if (backupRollbackFailed) {
      backupNote = ` Backup label '${params.backupCurrentHeadAs}' remains at ${backupEntryId}; rollback failed.`;
     } else if (backupRolledBack) {
@@ -1377,7 +1392,7 @@ export default function(pi: ExtensionAPI): void {
     }
 
     return {
-     content: [{ type: "text" as const, text: `Error: branchWithSummary failed: ${branchResult.message}.${backupNote} Recovery: ${recoveryAction}` }],
+     content: [{ type: "text" as const, text: `Error: branchWithSummary failed: ${branchResult.message}.${backupNote} ${recoveryAction}` }],
      details: {
       error: "branch_failed",
       hostError: branchResult.error,
@@ -1402,32 +1417,54 @@ export default function(pi: ExtensionAPI): void {
    const afterMessagesResult = bridge.buildSessionMessages();
    if (!afterMessagesResult.ok) {
     return {
-     content: [{ type: "text" as const, text: `Travel completed but could not rebuild session messages: ${afterMessagesResult.message}.` }],
-     details: { error: "build_messages_failed", message: afterMessagesResult.message, summaryEntryId },
+     content: [{ type: "text" as const, text: `Travel mutation completed, but session-message evidence is unavailable: ${afterMessagesResult.message}. ${RECOVERY_GUIDANCE.refreshPending}` }],
+     details: {
+      error: "build_messages_failed",
+      message: afterMessagesResult.message,
+      target: params.target,
+      targetId: tid,
+      originId,
+      summaryEntryId,
+      resultingLeafId: branchResult.value.leafAfter,
+      contextRefreshPending: true,
+      recoveryAction: RECOVERY_GUIDANCE.refreshPending,
+     },
     };
    }
    const afterMessages = afterMessagesResult.value;
    const messagesAfter = afterMessages.length;
    const estimatedUsageAfter = estimateUsageAfterMessageChange(usageBefore, currentMessages, afterMessages);
    const estimatedUsageAfterText = formatContextUsage(estimatedUsageAfter, true);
-   const estimatedEffect = classifyTravelEffect(usageBefore, estimatedUsageAfter);
-   const structuralEffect = classifyStructuralMessageEffect(messagesBefore, messagesAfter);
+   const usageDelta = calculateUsageDelta(usageBefore, estimatedUsageAfter);
+   const structuralMessageDelta = messagesAfter - messagesBefore;
+   const structuralMessageDirection = classifyStructuralMessageDirection(messagesBefore, messagesAfter);
    const backupText = formatBackupText(params.backupCurrentHeadAs, backupEntryId, backupResolvedFromHead);
-   const messageDelta = `${messagesBefore} → ${messagesAfter} (${structuralEffect})`;
+   const backupOutcome = !params.backupCurrentHeadAs
+    ? "none"
+    : backupPrevalidation?.status === "already_present"
+     ? "already_present"
+     : backupLabelWrittenThisCall
+      ? "created"
+      : "unknown";
+   const messageDelta = `${messagesBefore} → ${messagesAfter} (${formatSignedDelta(structuralMessageDelta)}, ${structuralMessageDirection})`;
+   const usageBeforeTokens = usageBefore?.tokens ?? null;
+   const usageBeforePercent = usageBefore?.percent ?? null;
+   const usageContextWindow = usageBefore?.contextWindow ?? estimatedUsageAfter?.contextWindow ?? null;
+   const estimatedUsageAfterTokens = estimatedUsageAfter?.tokens ?? null;
+   const estimatedUsageAfterPercent = estimatedUsageAfter?.percent ?? null;
+   const usageBeforePercentText = usageBeforePercent === null ? "unknown" : `${usageBeforePercent.toFixed(1)}%`;
+   const estimatedUsageAfterPercentText = estimatedUsageAfterPercent === null ? "unknown" : `${estimatedUsageAfterPercent.toFixed(1)}%`;
+   const nextCue = params.backupCurrentHeadAs?.endsWith("-done")
+    ? GUIDANCE_CUES.travelTask
+    : GUIDANCE_CUES.travelPhase;
 
    return {
     content: [{
      type: "text" as const,
      text: [
-      `Travel complete. You are now on the handoff branch. target=${params.target} (${tid}); archive=${backupText}; context ${usageBeforeText} → ${estimatedUsageAfterText} est. (estimatedEffect=${estimatedEffect}, structuralEffect=${structuralEffect}); sessionMessages=${messageDelta}; summaryEntryId=${summaryEntryId}.`,
-      "Treat the handoff as the working state: execute its NEXT. Raw trail is archived off-path; recover it via the archive pointer or timeline search.",
-      "Context rebuild is now persistent: every subsequent LLM turn is rebuilt from the handoff branch until the next travel or session reload. Run acm_timeline if official token % or sync status is unclear.",
-      estimatedUsagePreview
-       ? `Pre-travel preview was ${estimatedPreviewText} est. — compare with post-travel estimate above.`
-       : null,
-      "Estimates use buildSessionContext + token model; official % confirms on the next LLM context event or acm_timeline.",
-      "Note: the branch summary entry is appended synchronously and may appear before this tool call in the session log.",
-      "If this was a task-end fold, give the final answer from the handoff. Otherwise checkpoint the next phase ('<phase>-start') before its first action.",
+      `Travel complete. target=${params.target} (${tid}); origin=${originLabel ? `${originLabel}@${originId}` : originId}; summaryEntryId=${summaryEntryId}; resultingLeafId=${branchResult.value.leafAfter}; backup=${backupText} (${backupOutcome}); contextTokens=${formatNumericValue(usageBeforeTokens)} → ${formatNumericValue(estimatedUsageAfterTokens)} est. (delta=${formatSignedDelta(usageDelta.tokenDelta)}); contextPercent=${usageBeforePercentText} → ${estimatedUsageAfterPercentText} est. (delta=${formatSignedDelta(usageDelta.percentagePointDelta, 1, " pp")}); sessionMessages=${messageDelta}; contextRefresh=pending.`,
+      resolved.fromOffPath ? RECOVERY_GUIDANCE.restoredHistory : null,
+      nextCue,
      ].filter((line): line is string => line !== null).join("\n"),
     }],
     details: {
@@ -1442,20 +1479,29 @@ export default function(pi: ExtensionAPI): void {
      backupCurrentHeadAs: params.backupCurrentHeadAs ?? null,
      backupEntryId,
      backupResolvedFromHead,
+     backupOutcome,
      usageBefore: usageBeforeText,
      usageAfter: "pending_next_context_event",
      estimatedUsagePreview: estimatedPreviewText,
      estimatedUsageAfter: estimatedUsageAfterText,
-     estimatedEffect,
+     usageBeforeTokens,
+     usageBeforePercent,
+     usageContextWindow,
+     estimatedUsageAfterTokens,
+     estimatedUsageAfterPercent,
+     tokenDelta: usageDelta.tokenDelta,
+     percentagePointDelta: usageDelta.percentagePointDelta,
      structuralMessagesBefore: messagesBefore,
      structuralMessagesAfter: messagesAfter,
-     structuralEffect,
+     structuralMessageDelta,
+     structuralMessageDirection,
      sessionMessages: messageDelta,
      messagesBefore,
      messagesAfter,
      summaryEntryId,
      resultingLeafId: branchResult.value.leafAfter,
      contextRefreshPending: true,
+     contextRefreshState: "pending",
      fromOffPath: resolved.fromOffPath,
     },
    };
@@ -1489,7 +1535,7 @@ export default function(pi: ExtensionAPI): void {
    ctx.ui.notify(
     willRetry
      ? `Context refresh after travel failed (${attempt}/${ContextRefreshRegistry.MAX_ATTEMPTS}): ${message}. Will retry on the next LLM turn.`
-     : `Context refresh after travel failed after ${attempt} attempts: ${message}. Reload the session to sync messages.`,
+     : `Context refresh after travel failed after ${attempt} attempts: ${message}. ${RECOVERY_GUIDANCE.refreshExhausted}`,
     "warning",
    );
    return { messages: event.messages };

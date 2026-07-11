@@ -154,6 +154,22 @@ The supported Host Bridge capability is unavailable or malformed. Stop mutation 
 The backup label remains in the tree. Record its label and entry ID as a recovery pointer before any retry.
 <!-- ACM:RECOVERY_ROLLBACK_FAILED:END -->
 
+<!-- ACM:RECOVERY_BRANCH_ROLLED_BACK:START -->
+Branch creation failed before mutation; the new backup label was rolled back. Correct the reported host failure before retrying.
+<!-- ACM:RECOVERY_BRANCH_ROLLED_BACK:END -->
+
+<!-- ACM:RECOVERY_ROLLBACK_SKIPPED:START -->
+Branch mutation or prior aliases make automatic backup rollback unsafe. Keep the reported backup pointer and inspect the active leaf before retrying.
+<!-- ACM:RECOVERY_ROLLBACK_SKIPPED:END -->
+
+<!-- ACM:RECOVERY_REFRESH_PENDING:START -->
+Travel mutation landed, but rebuilt message evidence is pending. Use the reported summary entry as the fallback and inspect context sync state if the next rebuild fails.
+<!-- ACM:RECOVERY_REFRESH_PENDING:END -->
+
+<!-- ACM:RECOVERY_RESTORED_HISTORY:START -->
+Off-path travel restored raw history. Use the required detail, then return to the summary checkpoint unless this branch intentionally replaces it.
+<!-- ACM:RECOVERY_RESTORED_HISTORY:END -->
+
 <!-- ACM:RECOVERY_REFRESH_EXHAUSTED:START -->
 Context reconstruction exhausted bounded retries. Reload the session, inspect timeline sync state, and resume only after the selected branch is authoritative.
 <!-- ACM:RECOVERY_REFRESH_EXHAUSTED:END -->

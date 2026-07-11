@@ -26,5 +26,9 @@ export const RECOVERY_GUIDANCE = {
   "nameCollision": "Search existing checkpoints, preserve the semantic base, and add the smallest useful scope, ordinal, or date. Do not overwrite the existing recovery target.",
   "hostCapability": "The supported Host Bridge capability is unavailable or malformed. Stop mutation and report the named capability error; verify the exact supported OMP version before retrying.",
   "rollbackFailed": "The backup label remains in the tree. Record its label and entry ID as a recovery pointer before any retry.",
+  "branchRolledBack": "Branch creation failed before mutation; the new backup label was rolled back. Correct the reported host failure before retrying.",
+  "rollbackSkipped": "Branch mutation or prior aliases make automatic backup rollback unsafe. Keep the reported backup pointer and inspect the active leaf before retrying.",
+  "refreshPending": "Travel mutation landed, but rebuilt message evidence is pending. Use the reported summary entry as the fallback and inspect context sync state if the next rebuild fails.",
+  "restoredHistory": "Off-path travel restored raw history. Use the required detail, then return to the summary checkpoint unless this branch intentionally replaces it.",
   "refreshExhausted": "Context reconstruction exhausted bounded retries. Reload the session, inspect timeline sync state, and resume only after the selected branch is authoritative."
 } as const;
