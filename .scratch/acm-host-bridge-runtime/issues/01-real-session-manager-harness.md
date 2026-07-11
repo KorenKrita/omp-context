@@ -1,12 +1,12 @@
 # 01 — Establish real SessionManager contract harness
 
-**What to build:** Create a deterministic no-model test seam around the exact supported OMP SessionManager so ACM can verify real entry journals, aliases, branches, leaves, and reconstructed messages instead of relying on hand-written host stubs.
+**What to build:** Create a deterministic no-model test seam around the isolated OMP `16.4.2` candidate so ACM can verify real entry journals, aliases, branches, leaves, and reconstructed messages before that host release is promoted to the public support contract.
 
-**Blocked by:** acm-sync-version-contract/02 — Pin and verify the exact OMP 16.4.2 host contract
+**Blocked by:** acm-sync-version-contract/02 — Stage OMP 16.4.2 as the host-test candidate
 
 **Status:** ready-for-agent
 
-- [ ] Tests create isolated temporary session storage and instantiate the real OMP `16.4.2` SessionManager without an API key or model provider.
+- [ ] Tests create isolated temporary session storage and instantiate the real OMP `16.4.2` candidate SessionManager from the pinned fixture without an API key or model provider.
 - [ ] The harness can append representative USER, AI, tool-call, tool-result, label, branch-summary, and compaction entries through real host behavior.
 - [ ] The harness can reload persisted sessions and prove label-journal replay, current leaf, tree topology, and built session messages survive restoration.
 - [ ] The harness exposes observable snapshots of entries, aliases, leaf, tree, and built messages without asserting private field layouts.
