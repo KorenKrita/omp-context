@@ -22,7 +22,6 @@ import {
  formatBoundaryTravelCue,
  formatContextUsage,
  formatEntryLabels,
- formatFoldCandidatePreview,
  getEntryLabels,
  getMeaningfulSkipReason,
  ContextRefreshRegistry,
@@ -41,7 +40,7 @@ import {
  type CheckpointLabelConflict,
  type CheckpointLabelPrevalidation,
 } from "./host-bridge.js";
-import { ACM_CORE, ACM_CORE_MARKER, TOOL_DESCRIPTIONS } from "./generated-guidance.js";
+import { ACM_CORE, ACM_CORE_MARKER, GUIDANCE_CUES, RECOVERY_GUIDANCE, TOOL_DESCRIPTIONS } from "./generated-guidance.js";
 
 /** Content part types that can appear in assistant message arrays. */
 type AssistantContentPart = TextContent | ThinkingContent | RedactedThinkingContent | ToolCall | AnthropicFallbackContent;
@@ -82,19 +81,6 @@ function describeEntrySnippet(entry: SessionEntry, maxLen = 60): string {
  return content.length > maxLen ? `${content.slice(0, maxLen)}...` : content;
 }
 
-function describeSkipReason(reason: ReturnType<typeof getMeaningfulSkipReason>, role?: string): string {
- switch (reason) {
-  case "non_message": return "non-message node";
-  case "tool_result": return role ?? "tool result";
-  case "bash_execution": return "bash execution";
-  case "custom_message": return "custom message";
-  case "system_message": return "system message";
-  case "internal_tool_only_assistant": return "internal-tool-only AI turn";
-  case "empty_assistant": return "empty AI turn";
-  case "empty_user": return "empty user turn";
-  default: return "skipped";
- }
-}
 
 function findLastMeaningfulEntry(
  branch: SessionEntry[],
@@ -109,15 +95,6 @@ function findLastMeaningfulEntry(
  );
 }
 
-function formatMeaningfulResolveSummary(result: MeaningfulResolveResult): string {
- if (!result.entryId) return "";
- const role = result.role ?? "NODE";
- const anchor = result.snippet ? `${role}: "${result.snippet}"` : role;
- if (result.skipped.length === 0) return anchor;
- const skipParts = result.skipped.slice(0, 3).map((s) => describeSkipReason(s.reason, s.role));
- const more = result.skipped.length > 3 ? ` +${result.skipped.length - 3} more` : "";
- return `${anchor}; skipped ${result.skipped.length} nearer HEAD (${skipParts.join(", ")}${more})`;
-}
 
 function findEntryInTree(tree: SessionTreeNode[], id: string): SessionEntry | undefined {
  return findInTree(tree, (n) => n.entry.id === id)?.entry;
@@ -775,122 +752,65 @@ export default function(pi: ExtensionAPI): void {
      const conflict = appendResult.details as CheckpointLabelConflict | undefined;
      const onPath = conflict?.onActivePath ? "on-path" : "off-path";
      return {
-      content: [{ type: "text" as const, text: `Error: Checkpoint '${params.name}' already exists at ${conflict?.entryId ?? "unknown"} (${onPath}). Use a different name.` }],
-      details: { error: "duplicate_name", name: params.name, entryId: conflict?.entryId ?? "" },
+      content: [{
+       type: "text" as const,
+       text: `Checkpoint '${params.name}' already belongs to ${conflict?.entryId ?? "unknown"} (${onPath}). ${RECOVERY_GUIDANCE.nameCollision}`,
+      }],
+      details: {
+       error: "duplicate_name",
+       label: params.name,
+       name: params.name,
+       entryId: conflict?.entryId ?? "",
+       existingEntryId: conflict?.entryId ?? null,
+       existingEntryOnActivePath: conflict?.onActivePath ?? null,
+      },
      };
     }
     return {
-     content: [{ type: "text" as const, text: `Error: checkpoint label '${params.name}' could not be set: ${appendResult.message}.` }],
-     details: { error: appendResult.error, name: params.name, entryId: id, message: appendResult.message },
+     content: [{ type: "text" as const, text: `${appendResult.message}. ${RECOVERY_GUIDANCE.hostCapability}` }],
+     details: {
+      error: appendResult.error,
+      label: params.name,
+      name: params.name,
+      entryId: id,
+      message: appendResult.message,
+      resolvedEntryId: id,
+      hostBridgeMessage: appendResult.message,
+     },
     };
    }
 
-   const { status, aliases } = appendResult.value;
-   if (status === "already_present") {
-    const priorLabels = aliases;
-    const aliasText = priorLabels.length > 1 ? ` Aliases on this node: ${priorLabels.join(", ")}.` : "";
-    return {
-     content: [{ type: "text" as const, text: `Checkpoint '${params.name}' already exists at ${id}.${aliasText}` }],
-     details: { entryId: id, label: params.name, aliases: priorLabels, alreadyPresent: true },
-    };
-   }
-
-   const priorLabels = aliases.slice(0, -1);
-   const aliasSuffix = priorLabels.length > 0 ? ` Added alias alongside: ${priorLabels.join(", ")}.` : "";
-   const explicitRole = targetEntry ? getMessageRoleLabel(targetEntry) : "NODE";
-   // Push context usage plus a fold preview into every checkpoint result,
-   // so the agent sees its fill level and the concrete benefit of folding
-   // to the previous anchor during normal work, without calling acm_timeline.
+   const { status, aliases, labelEntryId } = appendResult.value;
+   const resolvedEntry = targetEntry ?? findEntryInTree(tree, id);
+   const role = autoResolved?.role ?? (resolvedEntry ? getMessageRoleLabel(resolvedEntry) : undefined) ?? resolvedEntry?.type.toUpperCase() ?? "NODE";
    const usage = ctx.getContextUsage();
-   const usageText = formatContextUsage(usage, true);
-   // Nearest previous anchor behind HEAD — the phase-fold target.
-   let prevAnchorLabel: string | null = null;
-   let prevAnchorEntryId: string | null = null;
-   for (let i = branch.length - 1; i >= 0; i--) {
-    const eid = branch[i].id;
-    if (eid === id) continue;
-    const labels = getEntryLabels(labelMaps, eid);
-    if (labels.length > 0) {
-     prevAnchorLabel = labels[labels.length - 1];
-     prevAnchorEntryId = eid;
-     break;
-    }
-   }
-   // Earliest on-path '-start' anchor — the task-chain fold target.
-   let earliestStartLabel: string | null = null;
-   let earliestStartEntryId: string | null = null;
-   for (let i = 0; i < branch.length; i++) {
-    const eid = branch[i].id;
-    if (eid === id) continue;
-    const startLabel = getEntryLabels(labelMaps, eid).find((l) => l.endsWith("-start"));
-    if (startLabel) {
-     earliestStartLabel = startLabel;
-     earliestStartEntryId = eid;
-     break;
-    }
-   }
-   let foldPreview = "";
-   let estimatedAtPrevAnchor: UsageLike | undefined;
-   let estimatedAtEarliestStart: UsageLike | undefined;
-   if (usage && (prevAnchorEntryId || earliestStartEntryId)) {
-    const currentMessagesResult = bridge.buildSessionMessages();
-    if (!currentMessagesResult.ok) {
-     return {
-      content: [{ type: "text" as const, text: `Created checkpoint '${params.name}' at ${id}.${aliasSuffix} Context usage: ${usageText}. (Could not build fold preview: ${currentMessagesResult.message})` }],
-      details: { entryId: id, label: params.name, aliases, previewError: currentMessagesResult.error },
-     };
-    }
-    const currentMessages = currentMessagesResult.value;
-    const previewParts: string[] = [];
-    if (prevAnchorEntryId && prevAnchorLabel) {
-     const targetMessagesResult = bridge.buildSessionMessages(prevAnchorEntryId);
-     if (targetMessagesResult.ok) {
-      estimatedAtPrevAnchor = estimateUsageAfterMessageChange(usage, currentMessages, targetMessagesResult.value);
-      if (estimatedAtPrevAnchor) {
-       previewParts.push(`nearest anchor '${prevAnchorLabel}' → phase/burst candidate ~${formatContextUsage(estimatedAtPrevAnchor, true)} est.`);
-      }
-     }
-    }
-    if (earliestStartEntryId && earliestStartLabel && earliestStartEntryId !== prevAnchorEntryId) {
-     const targetMessagesResult = bridge.buildSessionMessages(earliestStartEntryId);
-     if (targetMessagesResult.ok) {
-      estimatedAtEarliestStart = estimateUsageAfterMessageChange(usage, currentMessages, targetMessagesResult.value);
-      if (estimatedAtEarliestStart) {
-       previewParts.push(`earliest on-path -start '${earliestStartLabel}' → possible task-chain candidate ~${formatContextUsage(estimatedAtEarliestStart, true)} est.`);
-      }
-     }
-    }
-    if (previewParts.length > 0) {
-     foldPreview = formatFoldCandidatePreview(previewParts);
-    }
-   }
-   // Name-triggered guidance: a '-done' checkpoint marks finished work and
-   // task-end handling follows the preview rather than forcing a no-op fold.
-   let doneDirective = "";
-   if (params.name.endsWith("-done")) {
-    const base = params.name.slice(0, -"-done".length);
-    const siblingStart = `${base}-start`;
-    const startRef = labelMaps.labelToEntryId.has(siblingStart) ? siblingStart : "<task>-start";
-    doneDirective = ` '${params.name}' is a milestone/archive pointer. If later work moves past it, this is a recovery target. If this closes the task, use the preview to choose the close: when travel would produce meaningful structural saving, fold before the final answer and answer from the handoff with acm_travel({ target: "${startRef}", summary: <${HANDOFF_SLOT_HINT} handoff> }); when the preview shows almost no saving, keep this unique '-done' checkpoint and answer directly. Boundary decides whether folding is semantically appropriate; preview only measures savings.`;
-   }
-   const usageSuffix = ` Context usage: ${usageText}.${foldPreview}${doneDirective}`;
+   const usageText = usage ? formatContextUsage(usage, true) : "unknown";
+   const cue = params.name.endsWith("-done") ? GUIDANCE_CUES.checkpointDone : GUIDANCE_CUES.checkpointStart;
+   const skippedCount = autoResolved?.skipped.length;
+   const placement = autoResolved
+    ? `${role}${skippedCount ? `; skipped ${skippedCount} nearer transient/non-meaningful entr${skippedCount === 1 ? "y" : "ies"}` : ""}`
+    : `${role}; explicit target '${params.target}'`;
+   const action = status === "already_present" ? "Reused" : "Created";
+   const aliasesText = aliases.join(", ");
    return {
     content: [{
      type: "text" as const,
-     text: autoResolved
-      ? `Created checkpoint '${params.name}' at ${id} (${formatMeaningfulResolveSummary(autoResolved)}).${aliasSuffix}${usageSuffix}`
-      : `Created checkpoint '${params.name}' at ${id} (${explicitRole}${params.target ? `, target='${params.target}'` : ""}).${aliasSuffix}${usageSuffix}`,
+     text: `${action} checkpoint '${params.name}' at ${id} via label entry ${labelEntryId} (${placement}). Aliases: ${aliasesText}. Context usage: ${usageText}. ${cue}`,
     }],
     details: {
-     entryId: id,
+     status,
+     alreadyPresent: status === "already_present",
      label: params.name,
-     aliases: [...priorLabels, params.name],
+     labelEntryId,
+     entryId: id,
+     resolvedEntryId: id,
+     role,
+     aliases,
      target: params.target ?? "auto",
+     targetResolution: params.target ? "explicit" : "automatic",
      contextUsage: usage ? { percent: usage.percent, tokens: usage.tokens, contextWindow: usage.contextWindow } : null,
-     previousAnchor: prevAnchorLabel,
-     estimatedUsageAtPreviousAnchor: estimatedAtPrevAnchor ? formatContextUsage(estimatedAtPrevAnchor, true) : null,
-     earliestStartAnchor: earliestStartLabel,
-     estimatedUsageAtEarliestStart: estimatedAtEarliestStart ? formatContextUsage(estimatedAtEarliestStart, true) : null,
+     contextUsageAvailable: usage !== undefined,
+     skippedTransientCount: skippedCount ?? null,
      autoResolved: autoResolved
       ? {
          role: autoResolved.role,
@@ -899,6 +819,7 @@ export default function(pi: ExtensionAPI): void {
          skipped: autoResolved.skipped,
         }
       : undefined,
+     cue,
     },
    };
   },
