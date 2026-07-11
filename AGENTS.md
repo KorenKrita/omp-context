@@ -39,17 +39,17 @@
 
 不要用 `pi.setLabel(id, name)` 给会话节点打 label。OMP 16.4.2 的类型声明看起来支持两个参数，但实际 `ConcreteExtensionAPI.setLabel(label: string)` 仍只修改扩展显示名，不会写 session label。
 
-当前实现用 `setEntryLabel(sm, entryId, label)` guarded cast 到完整 `SessionManager`，调用 `appendLabelChange` 前检查方法存在，调用后验证返回的是非空 entry ID；失败必须返回明确错误，不能静默继续。
+当前实现通过 `HostBridge.appendCheckpointLabel(entryId, label)` 集中访问完整 `SessionManager.appendLabelChange`。Host Bridge 在 mutation 前验证 capability 和名称冲突，调用后验证返回非空 label entry ID，并返回结构化 success/failure；失败必须带明确 host capability 或 conflict evidence，不能静默继续。
 
 `acm_checkpoint` 的默认 target 是 active branch 上最近的有意义 **USER/AI 消息**，跳过 tool result、bash/custom/system 消息、无可见文字的 internal-tool-only AI turn、空消息等。显式 `target` 可用任意节点 ID（含 tool result），但会 warning；**auto-resolve 仍只选 USER/AI**。
 
-checkpoint / `backupCurrentHeadAs` **名称**在整棵树内必须唯一且**大小写敏感**（`Foo` ≠ `foo`），但**同一节点可挂多个别名**（多次 `acm_checkpoint` 或 `backupCurrentHeadAs` 追加 label journal entry，不覆盖旧名）。omp-context 通过扫描全部 `label` 条目重建别名索引；OMP 原生 `getLabel()` 只反映最新一个。label 重放时若同名指向新 entry，会从旧 entry 的 alias list 移除该名。`acm_timeline` 的 `search` 对 label/内容**大小写不敏感**。
+checkpoint / `backupCurrentHeadAs` **名称**在整棵树内必须唯一且**大小写敏感**（`Foo` ≠ `foo`），但**同一节点可挂多个别名**（多次 `acm_checkpoint` 或 `backupCurrentHeadAs` 追加 label journal entry，不覆盖旧名）。omp-context 通过扫描全部 `label` 条目重建别名索引；OMP 原生 `getLabel()` 只反映最新一个。label 重放时若同名指向新 entry，会从旧 entry 的 alias list 移除该名。`acm_timeline` 的 `{ view: "search", query }` 对 label/内容**大小写不敏感**。
 
-`list_checkpoints` 按**别名**逐条列出（同一 `entryId` 可出现多行），active-path checkpoint 优先按路径顺序排列，off-path 再按时间、entry ID、label 排列；同一节点别名会聚在一起。timeline / `full_tree` 显示为 `checkpoint: foo, bar`。
+`{ view: "checkpoints" }` 按**别名**逐条列出（同一 `entryId` 可出现多行），active-path checkpoint 优先按路径顺序排列，off-path 再按时间、entry ID、label 排列；同一节点别名会聚在一起。active/tree 视图显示为 `checkpoint: foo, bar`。
 
 `target: "root"` 解析为 **第一个 top-level 节点**；多根会话会 notify，优先用显式 checkpoint 名或节点 ID。
 
-`acm_checkpoint` 的成功 tool result 会附带当前 context usage 和 **fold candidates**：最近锚点是 phase/burst candidate；active path 上最早的 `-start` 是 possible task-chain candidate。runtime 文案必须强调 **Choose by boundary, not proximity**，candidate 只有在位于要压缩的 semantic boundary 之前时才是正确 target，避免 agent 被最近锚点或机械 earliest 锚点吸走。名字以 `-done` 结尾的 checkpoint 结果描述为 milestone/archive pointer：后续失败可回到这里；任务结束时先看 preview，有 meaningful structural saving 才 travel 并从 handoff 回答，几乎无 saving 则保留 unique `-done` checkpoint 直接回答。
+`acm_checkpoint` 的成功结果是 progressive placement evidence：文本和 `details` 报告 `status`、checkpoint/label entry ID、resolved role、aliases、automatic/explicit target resolution、跳过的 transient entries 和当前 context usage。结果只附一个由 canonical guidance 生成的 next cue：普通 checkpoint 继续当前 working set；`-done` checkpoint 作为 milestone/archive retreat pointer。它不替 agent 选择 fold boundary 或 target，也不再返回 nearest/earliest fold candidates。
 
 当前 `skills/context-management/CORE.md` 是始终在线的领域与流程契约，核心模型是 `working set / boundary / handoff / archive / anchor gravity`。checkpoint 创建 recoverability；travel 把边界后的历史压缩成 recoverable handoff；handoff 使用 `Goal/State/Evidence/External/Exclusions/Recover/NEXT`，其中 `NEXT` 必须是一个可执行动作。task-end boundary 默认在语义上可 fold，但是否实际 travel 取决于 preview：有 meaningful structural saving 时调用 `acm_travel({ target: "<task-chain-start>", backupCurrentHeadAs: "<task>-done", summary })` 并从 handoff branch 回答；preview 几乎无 saving 时只创建唯一的 `<task>-done` checkpoint 后直接回答。**Boundary decides whether folding is semantically appropriate; preview only measures savings.** 锚点是便利品不是前提：`acm_travel`/`acm_checkpoint` 都接受裸 node ID；无锚时用 timeline 找到 boundary 前最后干净节点。`SKILL.md` 只路由 advanced branches。三个工具的 description、参数说明、返回提示和错误恢复文案必须由 canonical guidance 生成，不要复制第二份 CORE，也不要把 nearest/earliest 写成自动选择规则。
 

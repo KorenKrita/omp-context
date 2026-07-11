@@ -94,6 +94,10 @@ describe("repository agent guidance contract", () => {
       "`full_tree: true`",
       "references/playbook.md",
       "timeline 模式",
+      "`setEntryLabel(sm, entryId, label)`",
+      "成功 tool result 会附带当前 context usage 和 **fold candidates**",
+      "`list_checkpoints` 按",
+      "timeline / `full_tree`",
     ]) {
       expect(agents).not.toContain(staleContract);
     }
