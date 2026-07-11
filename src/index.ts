@@ -2,7 +2,6 @@ import type {
  ExtensionAPI,
  ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
-import type { ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type {
  SessionEntry,
  SessionTreeNode,
@@ -11,7 +10,6 @@ import type { TextContent, ImageContent, ToolCall, TSchema, ThinkingContent, Red
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import {
  ACM_INTERNAL_TOOLS as INTERNAL_TOOLS,
- buildLabelMaps,
  classifyStructuralMessageEffect,
  classifyTravelEffect,
  compareEntriesByTimestamp,
@@ -19,15 +17,12 @@ import {
  estimateUsageAfterMessageChange,
  estimateUsageAtTravelTarget,
  extractTextFromContent,
- findCheckpointLabelOwner,
  findInTree,
  findLastMeaningfulEntry as findLastMeaningfulEntryCore,
  formatBoundaryTravelCue,
  formatContextUsage,
  formatEntryLabels,
  formatFoldCandidatePreview,
- getBuildSessionMessages,
- getBuildSessionMessagesFromEntries,
  getEntryLabels,
  getMeaningfulSkipReason,
  ContextRefreshRegistry,
@@ -40,6 +35,7 @@ import {
  HANDOFF_SLOT_HINT,
  type UsageLike,
 } from "./lib.js";
+import { getHostBridge, type CheckpointLabelConflict } from "./host-bridge.js";
 import { ACM_CORE, ACM_CORE_MARKER, TOOL_DESCRIPTIONS } from "./generated-guidance.js";
 
 /** Content part types that can appear in assistant message arrays. */
@@ -158,46 +154,6 @@ function getBranchSummaryMetaParts(entry: SessionEntry): string[] {
  if (details?.target) parts.push(`target: ${details.target}`);
  if (details?.backupCurrentHeadAs) parts.push(`backupCurrentHeadAs: ${details.backupCurrentHeadAs}`);
  return parts;
-}
-
-// ── Session label helper ──────────────────────────────────────
-
-/** Set a label on a session entry. pi.setLabel() only sets the extension
- *  display name, not entry labels. ReadonlySessionManager is the full
- *  SessionManager at runtime — guarded cast to access appendLabelChange.
- *  Passing label=undefined appends a journal entry that clears ALL aliases on
- *  the target node — only safe when that entry had no prior labels. */
-function setEntryLabel(sm: ReadonlySessionManager, entryId: string, label: string | undefined): void {
- const full = sm as unknown as {
-  appendLabelChange?: (id: string, label: string | undefined) => string;
- };
- if (typeof full.appendLabelChange !== "function") {
-  throw new Error("SessionManager does not support appendLabelChange — cannot create checkpoint label");
- }
- const result = full.appendLabelChange(entryId, label);
- if (typeof result !== "string" || result.length === 0) {
-  throw new Error(`appendLabelChange returned an invalid entry id: ${typeof result}`);
- }
-}
-/** Call branchWithSummary on the runtime SessionManager.
- *  ReadonlySessionManager is the full SessionManager at runtime. */
-function branchWithSummary(
- sm: ReadonlySessionManager,
- branchFromId: string,
- summary: string,
- details?: TravelSummaryDetails,
-): string {
- const full = sm as unknown as {
-  branchWithSummary?: (id: string, summary: string, details?: unknown, fromExtension?: boolean) => string;
- };
- if (typeof full.branchWithSummary !== "function") {
-  throw new Error("SessionManager does not support branchWithSummary");
- }
- const result = full.branchWithSummary(branchFromId, summary, details, true);
- if (typeof result !== "string" || result.length === 0) {
-  throw new Error(`branchWithSummary returned invalid entry id: ${typeof result}`);
- }
- return result;
 }
 
 // ── Content extraction for timeline ───────────────────────────
@@ -721,18 +677,19 @@ export default function(pi: ExtensionAPI): void {
   ) {
    const params = checkpointSchema.parse(rawParams);
    const sm = ctx.sessionManager;
-   const tree = sm.getTree();
-   const labelMaps = buildLabelMaps(sm.getEntries());
+   const bridge = getHostBridge(sm);
+   const tree = bridge.getTree();
+   const labelMaps = bridge.buildLabelMaps();
 
    // Label names must be unique across the tree; the same entry may hold multiple aliases.
-   const branch = sm.getBranch();
+   const branch = bridge.getBranch();
    const branchIds: Set<string> = new Set(branch.map((e: SessionEntry) => e.id));
 
    let id: string;
    let autoResolved: MeaningfulResolveResult | undefined;
    let targetEntry: SessionEntry | undefined;
    if (params.target) {
-    const resolved = resolveTargetId(sm, tree, params.target, branchIds, labelMaps);
+    const resolved = resolveTargetId(bridge, tree, params.target, branchIds, labelMaps);
     id = resolved.id;
     if (!isValidEntryId(id)) {
      return {
@@ -786,17 +743,25 @@ export default function(pi: ExtensionAPI): void {
     };
    }
 
-   const existingOwner = labelMaps.labelToEntryId.get(params.name);
-   if (existingOwner && existingOwner !== id) {
-    const onPath = branchIds.has(existingOwner) ? "on-path" : "off-path";
+   const appendResult = bridge.appendCheckpointLabel(id, params.name);
+   if (!appendResult.ok) {
+    if (appendResult.error === "label_conflict") {
+     const conflict = appendResult.details as CheckpointLabelConflict | undefined;
+     const onPath = conflict?.onActivePath ? "on-path" : "off-path";
+     return {
+      content: [{ type: "text" as const, text: `Error: Checkpoint '${params.name}' already exists at ${conflict?.entryId ?? "unknown"} (${onPath}). Use a different name.` }],
+      details: { error: "duplicate_name", name: params.name, entryId: conflict?.entryId ?? "" },
+     };
+    }
     return {
-     content: [{ type: "text" as const, text: `Error: Checkpoint '${params.name}' already exists at ${existingOwner} (${onPath}). Use a different name.` }],
-     details: { error: "duplicate_name", name: params.name, entryId: existingOwner },
+     content: [{ type: "text" as const, text: `Error: checkpoint label '${params.name}' could not be set: ${appendResult.message}.` }],
+     details: { error: appendResult.error, name: params.name, entryId: id, message: appendResult.message },
     };
    }
 
-   const priorLabels = getEntryLabels(labelMaps, id);
-   if (priorLabels.includes(params.name)) {
+   const { status, aliases } = appendResult.value;
+   if (status === "already_present") {
+    const priorLabels = aliases;
     const aliasText = priorLabels.length > 1 ? ` Aliases on this node: ${priorLabels.join(", ")}.` : "";
     return {
      content: [{ type: "text" as const, text: `Checkpoint '${params.name}' already exists at ${id}.${aliasText}` }],
@@ -804,15 +769,7 @@ export default function(pi: ExtensionAPI): void {
     };
    }
 
-   try {
-    setEntryLabel(sm, id, params.name);
-   } catch (e) {
-    return {
-     content: [{ type: "text" as const, text: `Error: checkpoint label '${params.name}' could not be set: ${e instanceof Error ? e.message : String(e)}.` }],
-     details: { error: "label_set_failed", name: params.name, entryId: id, message: e instanceof Error ? e.message : String(e) },
-    };
-   }
-
+   const priorLabels = aliases.slice(0, -1);
    const aliasSuffix = priorLabels.length > 0 ? ` Added alias alongside: ${priorLabels.join(", ")}.` : "";
    const explicitRole = targetEntry ? getMessageRoleLabel(targetEntry) : "NODE";
    // Push context usage plus a fold preview into every checkpoint result,
@@ -850,24 +807,31 @@ export default function(pi: ExtensionAPI): void {
    let estimatedAtPrevAnchor: UsageLike | undefined;
    let estimatedAtEarliestStart: UsageLike | undefined;
    if (usage && (prevAnchorEntryId || earliestStartEntryId)) {
-    const entries: SessionEntry[] = sm.getEntries();
-    const entriesById = new Map<string, SessionEntry>(entries.map((entry: SessionEntry) => [entry.id, entry]));
-    const currentMessages = getBuildSessionMessagesFromEntries(entries, sm.getLeafId(), entriesById);
+    const currentMessagesResult = bridge.buildSessionMessages();
+    if (!currentMessagesResult.ok) {
+     return {
+      content: [{ type: "text" as const, text: `Created checkpoint '${params.name}' at ${id}.${aliasSuffix} Context usage: ${usageText}. (Could not build fold preview: ${currentMessagesResult.message})` }],
+      details: { entryId: id, label: params.name, aliases, previewError: currentMessagesResult.error },
+     };
+    }
+    const currentMessages = currentMessagesResult.value;
     const previewParts: string[] = [];
     if (prevAnchorEntryId && prevAnchorLabel) {
-     estimatedAtPrevAnchor = estimateUsageAfterMessageChange(
-      usage, currentMessages, getBuildSessionMessagesFromEntries(entries, prevAnchorEntryId, entriesById),
-     );
-     if (estimatedAtPrevAnchor) {
-      previewParts.push(`nearest anchor '${prevAnchorLabel}' → phase/burst candidate ~${formatContextUsage(estimatedAtPrevAnchor, true)} est.`);
+     const targetMessagesResult = bridge.buildSessionMessages(prevAnchorEntryId);
+     if (targetMessagesResult.ok) {
+      estimatedAtPrevAnchor = estimateUsageAfterMessageChange(usage, currentMessages, targetMessagesResult.value);
+      if (estimatedAtPrevAnchor) {
+       previewParts.push(`nearest anchor '${prevAnchorLabel}' → phase/burst candidate ~${formatContextUsage(estimatedAtPrevAnchor, true)} est.`);
+      }
      }
     }
     if (earliestStartEntryId && earliestStartLabel && earliestStartEntryId !== prevAnchorEntryId) {
-     estimatedAtEarliestStart = estimateUsageAfterMessageChange(
-      usage, currentMessages, getBuildSessionMessagesFromEntries(entries, earliestStartEntryId, entriesById),
-     );
-     if (estimatedAtEarliestStart) {
-      previewParts.push(`earliest on-path -start '${earliestStartLabel}' → possible task-chain candidate ~${formatContextUsage(estimatedAtEarliestStart, true)} est.`);
+     const targetMessagesResult = bridge.buildSessionMessages(earliestStartEntryId);
+     if (targetMessagesResult.ok) {
+      estimatedAtEarliestStart = estimateUsageAfterMessageChange(usage, currentMessages, targetMessagesResult.value);
+      if (estimatedAtEarliestStart) {
+       previewParts.push(`earliest on-path -start '${earliestStartLabel}' → possible task-chain candidate ~${formatContextUsage(estimatedAtEarliestStart, true)} est.`);
+      }
      }
     }
     if (previewParts.length > 0) {
@@ -947,8 +911,9 @@ export default function(pi: ExtensionAPI): void {
   ) {
    const params = timelineSchema.parse(rawParams);
    const sm = ctx.sessionManager;
-   const tree = sm.getTree();
-   const currentLeafId = sm.getLeafId();
+   const bridge = getHostBridge(sm);
+   const tree = bridge.getTree();
+   const currentLeafId = bridge.getLeafId();
    const verbose = params.verbose ?? false;
    const limit = params.limit ?? 50;
    const timelineMode = resolveTimelineMode(params);
@@ -957,10 +922,10 @@ export default function(pi: ExtensionAPI): void {
    const searchTerm = params.search?.toLowerCase().trim() ?? "";
 
    const lines: string[] = [];
-   const branch = sm.getBranch();
-   const entries: SessionEntry[] = sm.getEntries();
+   const branch = bridge.getBranch();
+   const entries: SessionEntry[] = bridge.getEntries();
    const entriesById = new Map<string, SessionEntry>(entries.map((entry: SessionEntry) => [entry.id, entry]));
-   const labelMaps = buildLabelMaps(entries);
+   const labelMaps = bridge.buildLabelMaps();
    const backboneIds: Set<string> = new Set(branch.map((e: SessionEntry) => e.id));
    const pathOrderById = new Map<string, number>(branch.map((entry: SessionEntry, index: number) => [entry.id, index]));
    const childIndex = buildChildIndex(tree);
@@ -973,18 +938,27 @@ export default function(pi: ExtensionAPI): void {
     );
     const listLimit = limit;
     const usage = ctx.getContextUsage();
-    const currentMessages = getBuildSessionMessagesFromEntries(entries, currentLeafId, entriesById);
+    const currentMessagesResult = bridge.buildSessionMessages(currentLeafId);
+    if (!currentMessagesResult.ok) {
+     lines.push(`Checkpoints (${listings.length} total${searchTerm ? ` matching '${params.search}'` : ""}, showing up to ${listLimit}; cap 50). Current messages could not be built: ${currentMessagesResult.message}`);
+     return {
+      content: [{ type: "text" as const, text: lines.join("\n") }],
+      details: { error: currentMessagesResult.error, message: currentMessagesResult.message },
+     };
+    }
+    const currentMessages = currentMessagesResult.value;
     const targetCache = new Map<string, AgentMessage[]>();
     const currentUsageText = formatContextUsage(usage, true);
     lines.push(
-     `Checkpoints (${listings.length} total${searchTerm ? ` matching '${params.search}'` : ""}, showing up to ${listLimit}; cap 50). Current: ${currentMessages.length} msgs, ${currentUsageText}:`,
+     `Checkpoints (${listings.length} total${searchTerm ? ` matching '${params.search}'` : ""}, showing up to ${listLimit}; cap 50). Current: ${currentMessages.length} msgs, ${currentUsageText}:`
     );
     for (const cp of listings.slice(0, listLimit)) {
      const pathTag = cp.onActivePath ? "on-path" : "off-path";
      const headTag = cp.isHead ? ", *HEAD*" : "";
      let targetMessages = targetCache.get(cp.entryId);
      if (!targetMessages) {
-      targetMessages = getBuildSessionMessagesFromEntries(entries, cp.entryId, entriesById);
+      const targetResult = bridge.buildSessionMessages(cp.entryId);
+      targetMessages = targetResult.ok ? targetResult.value : [];
       targetCache.set(cp.entryId, targetMessages);
      }
      const estimated = estimateUsageAfterMessageChange(usage, currentMessages, targetMessages);
@@ -1183,11 +1157,12 @@ export default function(pi: ExtensionAPI): void {
   ) {
    const params = travelSchema.parse(rawParams);
    const sm = ctx.sessionManager;
-   const tree = sm.getTree();
-   const branch = sm.getBranch();
-   const labelMaps = buildLabelMaps(sm.getEntries());
+   const bridge = getHostBridge(sm);
+   const tree = bridge.getTree();
+   const branch = bridge.getBranch();
+   const labelMaps = bridge.buildLabelMaps();
    const branchIds: Set<string> = new Set(branch.map((e: SessionEntry) => e.id));
-   const resolved = resolveTargetId(sm, tree, params.target, branchIds, labelMaps);
+   const resolved = resolveTargetId(bridge, tree, params.target, branchIds, labelMaps);
    const tid = resolved.id;
    if (params.target.toLowerCase() === "root" && !isValidEntryId(tid)) {
     return {
@@ -1209,7 +1184,7 @@ export default function(pi: ExtensionAPI): void {
      details: { error: "target_not_found", requestedTarget: params.target, resolvedTargetId: tid },
     };
    }
-   const currentLeaf = sm.getLeafId();
+   const currentLeaf = bridge.getLeafId();
    if (!currentLeaf) {
     return {
      content: [{ type: "text" as const, text: "Error: No active leaf in session. Cannot travel." }],
@@ -1236,8 +1211,22 @@ export default function(pi: ExtensionAPI): void {
    const originLabel = formatEntryLabels(labelMaps, originId);
    const usageBefore = ctx.getContextUsage();
    const usageBeforeText = formatContextUsage(usageBefore, true);
-   const currentMessages = getBuildSessionMessages(sm);
-   const targetMessages = getBuildSessionMessages(sm, tid);
+   const currentMessagesResult = bridge.buildSessionMessages();
+   if (!currentMessagesResult.ok) {
+    return {
+     content: [{ type: "text" as const, text: `Error: cannot build current session messages: ${currentMessagesResult.message}. Travel aborted.` }],
+     details: { error: "build_messages_failed", message: currentMessagesResult.message, target: params.target, targetId: tid },
+    };
+   }
+   const currentMessages = currentMessagesResult.value;
+   const targetMessagesResult = bridge.buildSessionMessages(tid);
+   if (!targetMessagesResult.ok) {
+    return {
+     content: [{ type: "text" as const, text: `Error: cannot build target session messages: ${targetMessagesResult.message}. Travel aborted.` }],
+     details: { error: "build_messages_failed", message: targetMessagesResult.message, target: params.target, targetId: tid },
+    };
+   }
+   const targetMessages = targetMessagesResult.value;
    const estimatedUsagePreview = estimateUsageAtTravelTarget(
     usageBefore,
     currentMessages,
@@ -1251,6 +1240,7 @@ export default function(pi: ExtensionAPI): void {
    let backupResolvedFromHead: string | undefined;
    let backupLabelWrittenThisCall = false;
    let backupHadNoPriorLabels = false;
+   let backupLabelEntryId: string | undefined;
    if (params.backupCurrentHeadAs) {
     const headResolve = findLastMeaningfulEntry(branch, signal);
     if (headResolve.aborted) {
@@ -1273,26 +1263,25 @@ export default function(pi: ExtensionAPI): void {
       "info",
      );
     }
-    const backupOwner = findCheckpointLabelOwner(labelMaps, params.backupCurrentHeadAs, branchIds);
-    if (backupOwner && backupOwner.entryId !== backupEntryId) {
-     const existing = `${backupOwner.entryId}${backupOwner.onActivePath ? " (on-path)" : " (off-path)"}`;
-     return {
-      content: [{ type: "text" as const, text: `Error: archive bookmark name '${params.backupCurrentHeadAs}' already exists at ${existing}. Use a different backupCurrentHeadAs name; the handoff must still carry the executable state.` }],
-      details: { error: "duplicate_backup_name", name: params.backupCurrentHeadAs, owner: backupOwner },
-     };
-    }
-    const backupPriorLabels = getEntryLabels(labelMaps, backupEntryId);
-    if (!backupPriorLabels.includes(params.backupCurrentHeadAs)) {
-     backupHadNoPriorLabels = backupPriorLabels.length === 0;
-     try {
-      setEntryLabel(sm, backupEntryId, params.backupCurrentHeadAs);
-      backupLabelWrittenThisCall = true;
-     } catch (e) {
+    const backupAppend = bridge.appendCheckpointLabel(backupEntryId, params.backupCurrentHeadAs);
+    if (!backupAppend.ok) {
+     if (backupAppend.error === "label_conflict") {
+      const conflict = backupAppend.details as CheckpointLabelConflict | undefined;
+      const existing = `${conflict?.entryId ?? "unknown"}${conflict?.onActivePath ? " (on-path)" : " (off-path)"}`;
       return {
-       content: [{ type: "text" as const, text: `Error: archive bookmark '${params.backupCurrentHeadAs}' could not be set: ${e instanceof Error ? e.message : String(e)}. Travel aborted.` }],
-       details: { error: "backup_label_failed", name: params.backupCurrentHeadAs, message: e instanceof Error ? e.message : String(e) },
+       content: [{ type: "text" as const, text: `Error: archive bookmark name '${params.backupCurrentHeadAs}' already exists at ${existing}. Use a different backupCurrentHeadAs name; the handoff must still carry the executable state.` }],
+       details: { error: "duplicate_backup_name", name: params.backupCurrentHeadAs, owner: conflict },
       };
      }
+     return {
+      content: [{ type: "text" as const, text: `Error: archive bookmark '${params.backupCurrentHeadAs}' could not be set: ${backupAppend.message}. Travel aborted.` }],
+      details: { error: "backup_label_failed", name: params.backupCurrentHeadAs, message: backupAppend.message },
+     };
+    }
+    if (backupAppend.value.status === "created") {
+     backupHadNoPriorLabels = backupAppend.value.aliases.length === 1;
+     backupLabelEntryId = backupAppend.value.labelEntryId;
+     backupLabelWrittenThisCall = true;
     }
    }
 
@@ -1304,19 +1293,18 @@ export default function(pi: ExtensionAPI): void {
     backupCurrentHeadAs: params.backupCurrentHeadAs ?? null,
    };
    let summaryEntryId: string | undefined;
-   try {
-    summaryEntryId = branchWithSummary(sm, tid, params.summary, travelDetails);
-   } catch (e) {
-    const errText = e instanceof Error ? e.message : String(e);
+   const branchResult = bridge.branchWithSummary(tid, params.summary, travelDetails);
+   if (!branchResult.ok) {
+    const errText = branchResult.message;
     let backupRolledBack = false;
     let backupRollbackFailed = false;
     let backupRollbackSkipped = false;
-    if (backupLabelWrittenThisCall && backupEntryId) {
+    if (backupLabelWrittenThisCall && backupLabelEntryId) {
      if (backupHadNoPriorLabels) {
-      try {
-       setEntryLabel(sm, backupEntryId, undefined);
+      const clear = bridge.clearCreatedLabel(backupLabelEntryId);
+      if (clear.ok) {
        backupRolledBack = true;
-      } catch {
+      } else {
        backupRollbackFailed = true;
       }
      } else {
@@ -1348,11 +1336,19 @@ export default function(pi: ExtensionAPI): void {
      },
     };
    }
+   summaryEntryId = branchResult.value.summaryEntryId;
 
    contextRefresh.markPending(sm);
    refreshTargetLeafIds.set(sm, summaryEntryId);
 
-   const afterMessages = getBuildSessionMessages(sm);
+   const afterMessagesResult = bridge.buildSessionMessages();
+   if (!afterMessagesResult.ok) {
+    return {
+     content: [{ type: "text" as const, text: `Travel completed but could not rebuild session messages: ${afterMessagesResult.message}.` }],
+     details: { error: "build_messages_failed", message: afterMessagesResult.message, summaryEntryId },
+    };
+   }
+   const afterMessages = afterMessagesResult.value;
    const messagesAfter = afterMessages.length;
    const estimatedUsageAfter = estimateUsageAfterMessageChange(usageBefore, currentMessages, afterMessages);
    const estimatedUsageAfterText = formatContextUsage(estimatedUsageAfter, true);
@@ -1417,6 +1413,7 @@ export default function(pi: ExtensionAPI): void {
  // temporarily move HEAD while persisting the current tool result.
  pi.on("context", (event, ctx: ExtensionContext) => {
   const sm = ctx.sessionManager;
+  const bridge = getHostBridge(sm);
   if (!contextRefresh.isPending(sm)) {
    const original = event.messages as AgentMessage[];
    const fixed = fixOrphanedToolUse(original);
@@ -1437,10 +1434,13 @@ export default function(pi: ExtensionAPI): void {
   };
 
   try {
-   let messages = getBuildSessionMessages(sm);
+   const messagesResult = bridge.buildSessionMessages();
+   if (!messagesResult.ok) return reportFailure(messagesResult.message);
+   let messages = messagesResult.value;
    if (messages.length === 0) {
     const fallbackLeafId = refreshTargetLeafIds.get(sm);
-    messages = fallbackLeafId ? getBuildSessionMessages(sm, fallbackLeafId) : [];
+    const fallbackResult = fallbackLeafId ? bridge.buildSessionMessages(fallbackLeafId) : { ok: true, value: [] };
+    messages = fallbackResult.ok ? fallbackResult.value : [];
    }
    if (messages.length === 0) return reportFailure("rebuilt messages array is empty");
 
@@ -1469,19 +1469,19 @@ export default function(pi: ExtensionAPI): void {
  // ── Event: session_before_compact → auto checkpoint ──────────
  pi.on("session_before_compact", (event, ctx: ExtensionContext) => {
   const sm = ctx.sessionManager;
-  const branch = sm.getBranch();
+  const bridge = getHostBridge(sm);
+  const branch = bridge.getBranch();
   if (branch.length === 0) return;
-  const labelMaps = buildLabelMaps(sm.getEntries());
+  const labelMaps = bridge.buildLabelMaps();
   const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
   const checkpointName = `pre-compact-${ts}`;
   const resolve = findLastMeaningfulEntry(branch, event.signal);
   if (!resolve.entryId) return;
   const priorLabels = getEntryLabels(labelMaps, resolve.entryId);
   if (priorLabels.includes(checkpointName)) return;
-  try {
-   setEntryLabel(sm, resolve.entryId, checkpointName);
-  } catch (e) {
-   ctx.ui.notify(`Could not create pre-compaction checkpoint: ${e instanceof Error ? e.message : String(e)}`, "warning");
+  const append = bridge.appendCheckpointLabel(resolve.entryId, checkpointName);
+  if (!append.ok) {
+   ctx.ui.notify(`Could not create pre-compaction checkpoint: ${append.message}`, "warning");
   }
  });
 

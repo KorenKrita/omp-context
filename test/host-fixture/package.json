@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "verify": "bun test ./version.test.ts ./session-manager.test.ts"
+    "verify": "bun test ./version.test.ts ./session-manager.test.ts ./host-bridge.test.ts"
   },
   "dependencies": {
     "@oh-my-pi/pi-agent-core": "16.4.2",

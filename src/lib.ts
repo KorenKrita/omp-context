@@ -1,9 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction/compaction";
 import { countTokens } from "@oh-my-pi/pi-agent-core/tokenizer";
-import type { ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import type { TextContent, ToolCall, ThinkingContent, RedactedThinkingContent, AnthropicFallbackContent } from "@oh-my-pi/pi-ai/types";
 
 export const ACM_INTERNAL_TOOLS = new Set(["acm_checkpoint", "acm_timeline", "acm_travel"]);
@@ -262,8 +260,13 @@ export function findCheckpointLabelOwner(
 
 /** Resolve "root" / label / raw hex ID to an entry ID.
  *  "root" maps to the first top-level node when the forest has multiple roots. */
+export interface SessionStructuralView {
+ getEntries(): SessionEntry[];
+ getBranch(fromId?: string): SessionEntry[];
+}
+
 export function resolveTargetId(
- sm: ReadonlySessionManager,
+ view: SessionStructuralView,
  tree: SessionTreeNode[],
  target: string,
  branchIds?: Set<string>,
@@ -272,8 +275,8 @@ export function resolveTargetId(
  if (target.toLowerCase() === "root") {
   return { id: tree.length > 0 ? tree[0].entry.id : "", fromOffPath: false };
  }
- const ids = branchIds ?? new Set(sm.getBranch().map((e: SessionEntry) => e.id));
- const maps = labelMaps ?? buildLabelMaps(sm.getEntries());
+ const ids = branchIds ?? new Set(view.getBranch().map((e: SessionEntry) => e.id));
+ const maps = labelMaps ?? buildLabelMaps(view.getEntries());
 
  const owner = findCheckpointLabelOwner(maps, target, ids);
  if (owner) {
@@ -313,21 +316,6 @@ export function classifyStructuralMessageEffect(before: number | undefined, afte
  const delta = after - before;
  if (Math.abs(delta) <= 1) return "unchanged";
  return delta < 0 ? "shrunk" : "restored";
-}
-
-export function getBuildSessionMessagesFromEntries(
- entries: SessionEntry[],
- leafId: string | null,
- byId: Map<string, SessionEntry> = new Map(entries.map((entry) => [entry.id, entry])),
-): AgentMessage[] {
- if (entries.length === 0) return [];
- return buildSessionContext(entries, leafId, byId).messages as AgentMessage[];
-}
-
-export function getBuildSessionMessages(sm: ReadonlySessionManager, leafId?: string | null): AgentMessage[] {
- const entries = sm.getEntries();
- const effectiveLeaf = leafId === undefined ? sm.getLeafId() : leafId;
- return getBuildSessionMessagesFromEntries(entries, effectiveLeaf);
 }
 
 export function compareEntriesByTimestamp(a: SessionEntry, b: SessionEntry): number {
