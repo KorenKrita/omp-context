@@ -51,30 +51,22 @@ checkpoint / `backupCurrentHeadAs` **名称**在整棵树内必须唯一且**大
 
 `acm_checkpoint` 的成功 tool result 会附带当前 context usage 和 **fold candidates**：最近锚点是 phase/burst candidate；active path 上最早的 `-start` 是 possible task-chain candidate。runtime 文案必须强调 **Choose by boundary, not proximity**，candidate 只有在位于要压缩的 semantic boundary 之前时才是正确 target，避免 agent 被最近锚点或机械 earliest 锚点吸走。名字以 `-done` 结尾的 checkpoint 结果描述为 milestone/archive pointer：后续失败可回到这里；任务结束时先看 preview，有 meaningful structural saving 才 travel 并从 handoff 回答，几乎无 saving 则保留 unique `-done` checkpoint 直接回答。
 
-当前 skill 的核心领域模型是 `working set / boundary / handoff / archive / anchor gravity`。checkpoint 创建 recoverability；travel 把边界后的历史压缩成 recoverable handoff；handoff 使用 `Goal/State/Evidence/External/Exclusions/Recover/NEXT`，其中 `NEXT` 必须是一个可执行动作。task-end boundary 默认在语义上可 fold，但是否实际 travel 取决于 preview：有 meaningful structural saving 时调用 `acm_travel({ target: "<task-chain-start>", backupCurrentHeadAs: "<task>-done", summary })` 并从 handoff branch 回答；preview 几乎无 saving 时只创建唯一的 `<task>-done` checkpoint 后直接回答。**Boundary decides whether folding is semantically appropriate; preview only measures savings.** 锚点是便利品不是前提：`acm_travel`/`acm_checkpoint` 都接受裸 node ID；无锚时用 timeline 找到 boundary 前最后干净节点。三个工具的 description、参数说明、返回提示和错误恢复文案必须与 skill 同词，不要把 nearest/earliest 写成自动选择规则。
+当前 `skills/context-management/CORE.md` 是始终在线的领域与流程契约，核心模型是 `working set / boundary / handoff / archive / anchor gravity`。checkpoint 创建 recoverability；travel 把边界后的历史压缩成 recoverable handoff；handoff 使用 `Goal/State/Evidence/External/Exclusions/Recover/NEXT`，其中 `NEXT` 必须是一个可执行动作。task-end boundary 默认在语义上可 fold，但是否实际 travel 取决于 preview：有 meaningful structural saving 时调用 `acm_travel({ target: "<task-chain-start>", backupCurrentHeadAs: "<task>-done", summary })` 并从 handoff branch 回答；preview 几乎无 saving 时只创建唯一的 `<task>-done` checkpoint 后直接回答。**Boundary decides whether folding is semantically appropriate; preview only measures savings.** 锚点是便利品不是前提：`acm_travel`/`acm_checkpoint` 都接受裸 node ID；无锚时用 timeline 找到 boundary 前最后干净节点。`SKILL.md` 只路由 advanced branches。三个工具的 description、参数说明、返回提示和错误恢复文案必须由 canonical guidance 生成，不要复制第二份 CORE，也不要把 nearest/earliest 写成自动选择规则。
 
 `acm_travel` 的 `backupCurrentHeadAs` 同样落在最近有意义的 USER/AI 消息上，而不是 raw HEAD（避免 backup 打在 `acm_timeline` 等 tool result 上）。若从 HEAD 回退，tool result 会写明 `backup@entryId (resolved from HEAD …)`。若 backup 已写入但 `branchWithSummary` 失败，extension 会 **best-effort 回滚** backup label；回滚失败时 error/details 会注明 label 仍留在树上。
 
-### timeline 是会话树结构视图
+### timeline 是严格的单视图会话树接口
 
-`acm_timeline` 默认只展示 **active path**（LLM 实际看到的 spine），并附带 context HUD。`verbose: true` 仅在 **active path 模式**下显示 ACM 工具调用及 system/custom 元消息；`list_checkpoints` / `search` / `full_tree` 会忽略 `verbose`。
+`acm_timeline` 使用单一 `view` 鉴别器；省略 `view` 等价于 `{ view: "active" }`。旧参数 `list_checkpoints`、`full_tree`、`search` 和竞争布尔组合会被 strict schema 拒绝，不做兼容转换。
 
-- context usage
-- active path 节点数
-- off-path summary 数（abandoned `branch_summary` 脚注，非所有分叉）
-- 距离最近 checkpoint 的 step 数
-- travel cue
-- 大树提示：优先 `list_checkpoints` 或 `search`
+- `{ view: "active", limit?, verbose? }`：只展示 active path（LLM 实际看到的 spine）并附带 context HUD；`verbose: true` 显示 ACM 工具调用及 system/custom 元消息。
+- `{ view: "checkpoints", limit?, filter? }`：扫描整棵树上的 checkpoint alias；`filter` 对 label 和 entry ID 做大小写不敏感匹配。
+- `{ view: "search", limit?, query }`：在整棵树（active + off-path）按 label、节点 ID、内容做大小写不敏感搜索；`query` 必填且非空。
+- `{ view: "tree", limit? }`：渲染 `sm.getTree()` 的整棵树，包括 off-path branch、checkpoint label、HEAD 和 `branch_summary` 的 `branchPoint` / `origin` 元数据。
 
-**默认模式不再把 off-path 的 `branch_summary` / `compaction` 插进主序列。** 在分支点以 `[off-path]` 脚注标出，避免假线性叙事。
+active HUD 包含 context usage、active path 节点数、off-path summary 数、距最近 checkpoint 的 step 数和 travel cue。默认 active 视图不会把 off-path `branch_summary` / `compaction` 插进主序列，而是在分支点以 `[off-path]` 脚注标出，避免假线性叙事。
 
-`list_checkpoints: true` 扫描整棵树上的 checkpoint（显示上限 50，可用 `search` 缩小）；深树时优先于 `full_tree`。
-
-`full_tree: true` 会渲染 `sm.getTree()` 返回的整棵会话树，包含 off-path branch、checkpoint label、HEAD、`branch_summary` 的 `branchPoint` / `origin` 元数据等。深度/行数超限时会截断并提示用 `list_checkpoints` 或 `search`。
-
-`search` **默认全树搜索**（active + off-path），按 label、节点 ID、内容匹配；传了 `search` 就不再限于 active path。搜索使用 literal pattern，并先做低成本字段匹配，只有命中时才构造 preview，避免对整棵树里的大型 tool result 反复拼接和 lower-case。`list_checkpoints` 可与 `search` 组合缩小清单。
-
-**模式优先级**（多参数同时传时只跑一种，其余忽略）：`list_checkpoints` > `search` > `full_tree` > 默认 active path。
+checkpoint 列表上限 50；大树或 tree 截断时优先改用 `{ view: "checkpoints" }` 或 `{ view: "search", query: "..." }`。搜索先做低成本字段匹配，只有命中时才构造 preview，避免对大型 tool result 反复拼接和 lower-case。
 
 ### travel 使用 branchWithSummary + context event
 
@@ -156,12 +148,20 @@ Node16 moduleResolution 下需要从 OMP 子路径导入类型：
 
 | 路径 | 作用 |
 |---|---|
-| `src/index.ts` | 三个工具注册、checkpoint label、timeline 渲染、同步 travel、context refresh |
-| `src/lib.ts` | 可单测的纯逻辑（label maps、resolve、usage 估算、meaningful entry、timeline 模式） |
+| `src/index.ts` | 三个工具注册、timeline 渲染、travel orchestration、context refresh 与 session lifecycle |
+| `src/host-bridge.ts` | ACM 域逻辑与 OMP runtime internals 的唯一边界；集中 guarded SessionManager access 与恢复语义 |
+| `src/generated-guidance.ts` | 从 canonical CORE / advanced guidance 派生的工具描述、正常 cue 与异常恢复片段 |
+| `src/lib.ts` | 可单测的纯逻辑（label maps、target resolve、usage 估算、meaningful entry、travel evidence） |
 | `src/lib.test.ts` | `lib.ts` 单元测试 |
-| `skills/context-management/SKILL.md` | runtime prompt 的道层：working set / boundary / handoff / archive / anchor gravity，fold gate，checkpoint/fold discipline，handoff contract |
-| `skills/context-management/references/playbook.md` | boundary reference：按 Burst / Phase / Failed direction / Batch / Task chain / Interleaved fronts / Missing anchor 帮助识别 boundary、选择 target、写 handoff |
-| `README.md` | 面向用户的安装和功能说明 |
+| `skills/context-management/CORE.md` | always-on 正常路径：领域词汇、fold gate、checkpoint/fold discipline、handoff contract |
+| `skills/context-management/SKILL.md` | model-invoked advanced-only router |
+| `skills/context-management/references/target-selection.md` | 非显然 target、interleaved fronts、missing anchor、raw node fallback、名称冲突 |
+| `skills/context-management/references/archive-recovery.md` | archive detail recovery round trip 与 archive-drift 防护 |
+| `skills/context-management/references/exceptional-recovery.md` | travel/rollback/refresh/restored-history/no-saving 异常恢复 |
+| `test/host-fixture/` | 精确 OMP 16.4.2 的真实 SessionManager/runtime contract fixtures |
+| `scripts/generate-guidance.mjs` | 从 canonical guidance 生成运行时 artifacts |
+| `scripts/sync-acm.mjs` / `scripts/acm-sync-manifest.json` | declarative canonical → consumer 手动同步 |
+| `README.md` | 面向用户的安装、行为与维护说明 |
 | `.omp-plugin/marketplace.json` | marketplace 元数据 |
 
 ## 开发注意事项

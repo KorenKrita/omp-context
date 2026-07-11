@@ -69,3 +69,33 @@ describe("maintainer documentation contract", () => {
     expect(dogfooding).toContain("changed host contract");
   });
 });
+
+describe("repository agent guidance contract", () => {
+  test("documents the strict timeline API and current canonical artifacts", async () => {
+    const agents = await repoFile("AGENTS.md");
+
+    for (const contract of [
+      '`{ view: "active", limit?, verbose? }`',
+      '`{ view: "checkpoints", limit?, filter? }`',
+      '`{ view: "search", limit?, query }`',
+      '`{ view: "tree", limit? }`',
+      "src/host-bridge.ts",
+      "src/generated-guidance.ts",
+      "skills/context-management/CORE.md",
+      "references/target-selection.md",
+      "references/archive-recovery.md",
+      "references/exceptional-recovery.md",
+    ]) {
+      expect(agents).toContain(contract);
+    }
+
+    for (const staleContract of [
+      "`list_checkpoints: true`",
+      "`full_tree: true`",
+      "references/playbook.md",
+      "timeline 模式",
+    ]) {
+      expect(agents).not.toContain(staleContract);
+    }
+  });
+});
