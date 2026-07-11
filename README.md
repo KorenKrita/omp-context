@@ -43,6 +43,23 @@ omp-context 让 agent 像管理 git 分支一样管理上下文：
 
 travel 后扩展会按 session 持续重建模型 context，并在当前 leaf 暂时不可用时回退到新建的 summary leaf；孤立 tool call/result 会在发给 provider 前修复。重建失败会显示原因并最多重试 3 次，避免静默退回旧上下文。
 
+## 支持的 OMP 版本
+
+支持的 OMP 版本：`16.4.2`。`@oh-my-pi/pi-coding-agent`、`@oh-my-pi/pi-agent-core` 和 `@oh-my-pi/pi-ai` 的 peer、development、lock 与本地安装版本必须完全一致；项目不声明兼容范围，也不维护多版本 shim。
+
+升级 OMP 时必须先把候选版本作为 **isolated candidate** 放进隔离的 `test/host-fixture`，在不启动模型的前提下完成 real SessionManager 与 extension-handler 验证。候选通过后再执行以下检查：
+
+- `extension events`
+- `public context APIs`
+- `Host Bridge capabilities`
+- `session-context construction`
+- `tool registration`
+- `token estimation`
+- `compaction events`
+- `changelog review`
+
+运行 `bun run test:host`、相关 focused tests 和 `bun run typecheck` 后，才可在一个原子变更中 **atomically replace every exact OMP version**：同时更新根 package peer/development 声明、lock、已安装依赖、支持文档与隔离 fixture。不得扩大版本范围；canonical 仓库验证通过后再手动同步 consumer。
+
 ## 安装
 
 ```bash
