@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent/extensibility/exten
 import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { z } from "zod";
 import registerACMExtension from "./index.js";
+import { GUIDANCE_CUES } from "./generated-guidance.js";
 
 type RegisteredTool = {
  name: string;
@@ -161,6 +162,7 @@ describe("registered acm_timeline execute handler", () => {
   expect(result.content[0].text).not.toContain("[USER] message 1\n");
   expect(result.content[0].text).toContain("message 52");
   expect(result.content[0].text).toContain("Context Usage:    Unknown");
+  expect(result.content[0].text).toContain(GUIDANCE_CUES.timelineActive);
  });
 
  test("checkpoints filters aliases by label or entry ID and reports matching/displayed counts", async () => {
@@ -186,6 +188,7 @@ describe("registered acm_timeline execute handler", () => {
   const limited = await execute(tool, { view: "checkpoints", limit: 1 }, ctx);
   expect(limited.details).toMatchObject({ checkpointsMatchingAliases: 3, checkpointsDisplayedAliases: 1 });
   expect(limited.content[0].text).toContain("3 matching aliases, 1 displayed");
+  expect(byLabel.content[0].text).toContain(GUIDANCE_CUES.timelineCheckpoints);
  });
 
  test("search matches active and off-path labels, IDs, and rendered content case-insensitively", async () => {
@@ -207,6 +210,7 @@ describe("registered acm_timeline execute handler", () => {
   const empty = await execute(tool, { view: "search", query: "absent" }, ctx);
   expect(empty.details).toMatchObject({ searchDisplayedMatches: 0, searchTruncated: false });
   expect(empty.content[0].text).toContain("0 displayed of 0 matching node(s)");
+  expect(result.content[0].text).toContain(GUIDANCE_CUES.timelineSearch);
  });
 
  test("tree applies depth per root and reports depth truncation", async () => {
@@ -222,6 +226,7 @@ describe("registered acm_timeline execute handler", () => {
   expect(result.details).toMatchObject({ view: "tree", limit: 1, treeTruncated: true });
   expect(result.content[0].text).toContain("root");
   expect(result.content[0].text).not.toContain("[USER] child");
+  expect(result.content[0].text).toContain(GUIDANCE_CUES.timelineTree);
  });
 
  test("tree independently enforces the 200-line ceiling", async () => {

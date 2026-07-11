@@ -1085,11 +1085,14 @@ export default function(pi: ExtensionAPI): void {
     const pendingSuffix = contextRefresh.hasRebuilt(sm) ? "" : " (travel pending)";
     hudParts.push(`• Context Sync:     persistent rebuild active${pendingSuffix}${retrySuffix}`);
    }
-   if (view === "active" || view === "search") {
-    hudParts.push(`• Tip:              large trees → view checkpoints or search before tree`);
-   } else if (useFullTree && treeTruncated) {
-    hudParts.push(`• Tip:              tree truncated → { view: "checkpoints" } or { view: "search", query: "checkpoint-name" }`);
-   }
+   const timelineCue = view === "active"
+    ? GUIDANCE_CUES.timelineActive
+    : view === "checkpoints"
+      ? GUIDANCE_CUES.timelineCheckpoints
+      : view === "search"
+        ? GUIDANCE_CUES.timelineSearch
+        : GUIDANCE_CUES.timelineTree;
+   hudParts.push(`• Guidance:        ${timelineCue}`);
    const hud = [...hudParts, `---------------------------------------------------`].join("\n");
 
    return {
