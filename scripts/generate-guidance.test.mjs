@@ -72,10 +72,14 @@ describe("canonical guidance generation", () => {
 
   test("keeps recovery branches separately selectable", () => {
     expect(Object.keys(RECOVERY_GUIDANCE).sort()).toEqual([
+      "branchRolledBack",
       "hostCapability",
       "nameCollision",
       "refreshExhausted",
+      "refreshPending",
+      "restoredHistory",
       "rollbackFailed",
+      "rollbackSkipped",
     ]);
     for (const guidance of Object.values(RECOVERY_GUIDANCE)) {
       expect(guidance.length).toBeLessThan(350);
