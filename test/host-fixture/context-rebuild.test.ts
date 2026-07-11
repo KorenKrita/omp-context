@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import type { SessionManager, ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type {
@@ -7,11 +7,9 @@ import type {
   ToolDefinition,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import * as zod from "zod/v4";
-import registerACMExtension from "../../src/index.js";
-import { RECOVERY_GUIDANCE } from "../../src/generated-guidance.js";
-import { createHostSessionHarness, type HostSessionHarness } from "./harness.js";
-
-const active: HostSessionHarness[] = [];
+import registerACMExtension from "./.acm-build/index.js";
+import { RECOVERY_GUIDANCE } from "./.acm-build/generated-guidance.js";
+import { useHostSessionHarnesses } from "./harness.js";
 const VALID_HANDOFF = [
   "Goal: exercise context reconstruction",
   "State: summary branch selected",
@@ -29,15 +27,7 @@ interface CapturedRuntime {
   tools: Map<string, ToolDefinition>;
 }
 
-function createHarness(): HostSessionHarness {
-  const harness = createHostSessionHarness();
-  active.push(harness);
-  return harness;
-}
-
-afterEach(async () => {
-  await Promise.all(active.splice(0).map((harness) => harness.cleanup()));
-});
+const createHarness = useHostSessionHarnesses();
 
 function captureRuntime(): CapturedRuntime {
   const handlers = new Map<string, Handler[]>();

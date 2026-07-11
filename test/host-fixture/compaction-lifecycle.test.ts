@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import type {
   ExtensionAPI,
@@ -7,12 +7,10 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { ReadonlySessionManager, SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as zod from "zod/v4";
-import registerACMExtension from "../../src/index.js";
-import { HostBridge } from "../../src/host-bridge.js";
-import { resolveTargetId } from "../../src/lib.js";
-import { createHostSessionHarness, type HostSessionHarness } from "./harness.js";
-
-const active: HostSessionHarness[] = [];
+import registerACMExtension from "./.acm-build/index.js";
+import { HostBridge } from "./.acm-build/host-bridge.js";
+import { resolveTargetId } from "./.acm-build/lib.js";
+import { useHostSessionHarnesses } from "./harness.js";
 const VALID_HANDOFF = [
   "Goal: verify lifecycle cleanup",
   "State: summary branch selected",
@@ -30,16 +28,7 @@ interface CapturedRuntime {
   tools: Map<string, ToolDefinition>;
 }
 
-function createHarness(): HostSessionHarness {
-  const harness = createHostSessionHarness();
-  active.push(harness);
-  return harness;
-}
-
-afterEach(async () => {
-  setSystemTime();
-  await Promise.all(active.splice(0).map((harness) => harness.cleanup()));
-});
+const createHarness = useHostSessionHarnesses({ beforeCleanup: () => setSystemTime() });
 
 function captureRuntime(): CapturedRuntime {
   const handlers = new Map<string, Handler[]>();

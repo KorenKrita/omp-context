@@ -1,19 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { HostBridge } from "../../src/host-bridge.js";
-import { createHostSessionHarness, type HostSessionHarness } from "./harness.js";
+import { HostBridge } from "./.acm-build/host-bridge.js";
+import { useHostSessionHarnesses } from "./harness.js";
 
-const active: HostSessionHarness[] = [];
-
-afterEach(async () => {
-  await Promise.all(active.splice(0).map((harness) => harness.cleanup()));
-});
-
-function createHarness(): HostSessionHarness {
-  const harness = createHostSessionHarness();
-  active.push(harness);
-  return harness;
-}
+const createHarness = useHostSessionHarnesses();
 
 function appendUserAssistantPair(session: SessionManager): { userId: string; assistantId: string } {
   const userId = session.appendMessage({

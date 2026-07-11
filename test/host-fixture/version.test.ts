@@ -1,29 +1,62 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const fixtureRoot = dirname(fileURLToPath(import.meta.url));
+const buildRoot = join(fixtureRoot, ".acm-build");
 const packages = [
   "@oh-my-pi/pi-agent-core",
   "@oh-my-pi/pi-ai",
   "@oh-my-pi/pi-coding-agent",
 ] as const;
 
+interface HostPackageEvidence {
+  supportedVersion: string;
+  entrypoints: Array<{ source: string; output: string }>;
+  resolvedPackages: Array<{
+    packageName: string;
+    packageJsonPath: string;
+    relativePackageJsonPath: string;
+    version: string;
+  }>;
+}
+
 describe("OMP 16.4.2 host fixture", () => {
-  test("resolves every supported OMP package from the isolated fixture", () => {
+  test("records the isolated source build and exact host package graph", () => {
+    const evidence = JSON.parse(
+      readFileSync(join(buildRoot, "host-packages.json"), "utf8"),
+    ) as HostPackageEvidence;
+
+    expect(evidence.supportedVersion).toBe("16.4.2");
+    expect(evidence.entrypoints.map(({ output }) => output).sort()).toEqual([
+      "generated-guidance.js",
+      "host-bridge.js",
+      "index.js",
+      "lib.js",
+    ]);
+    expect(evidence.resolvedPackages.map(({ packageName }) => packageName).sort()).toEqual([...packages].sort());
+    for (const entry of evidence.resolvedPackages) {
+      expect(entry.packageJsonPath.startsWith(join(fixtureRoot, "node_modules"))).toBe(true);
+      expect(entry.relativePackageJsonPath.startsWith("node_modules")).toBe(true);
+      expect(entry.version).toBe("16.4.2");
+    }
+  });
+
+  test("resolves every supported OMP package from the built ACM module origin", () => {
     const probe = Bun.spawnSync({
       cmd: [
         process.execPath,
         "-e",
         `const { createRequire } = require("node:module");
-const requireFromFixture = createRequire(process.cwd() + "/package.json");
+const requireFromBuild = createRequire(process.cwd() + "/index.js");
 const packages = ${JSON.stringify(packages)};
 console.log(JSON.stringify(packages.map((packageName) => {
-  const packageJsonPath = requireFromFixture.resolve(packageName + "/package.json");
-  return { packageJsonPath, version: requireFromFixture(packageJsonPath).version };
+  const packageJsonPath = requireFromBuild.resolve(packageName + "/package.json");
+  return { packageJsonPath, version: requireFromBuild(packageJsonPath).version };
 })));`,
       ],
-      cwd: fixtureRoot,
+      cwd: buildRoot,
       stdout: "pipe",
       stderr: "pipe",
     });

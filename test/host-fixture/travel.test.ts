@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type { SessionManager, ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type {
   ExtensionAPI,
@@ -6,12 +6,10 @@ import type {
   ToolDefinition,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import * as zod from "zod/v4";
-import registerACMExtension from "../../src/index.js";
-import type { UsageLike } from "../../src/lib.js";
-import { GUIDANCE_CUES, RECOVERY_GUIDANCE } from "../../src/generated-guidance.js";
-import { createHostSessionHarness, type HostSessionHarness, type HostSessionSnapshot } from "./harness.js";
-
-const active: HostSessionHarness[] = [];
+import registerACMExtension from "./.acm-build/index.js";
+import type { UsageLike } from "./.acm-build/lib.js";
+import { GUIDANCE_CUES, RECOVERY_GUIDANCE } from "./.acm-build/generated-guidance.js";
+import { type HostSessionSnapshot, useHostSessionHarnesses } from "./harness.js";
 const VALID_HANDOFF = [
   "Goal: exercise travel",
   "State: ready",
@@ -33,15 +31,7 @@ interface TravelRun {
   notifications: string[];
 }
 
-function createHarness(): HostSessionHarness {
-  const harness = createHostSessionHarness();
-  active.push(harness);
-  return harness;
-}
-
-afterEach(async () => {
-  await Promise.all(active.splice(0).map((harness) => harness.cleanup()));
-});
+const createHarness = useHostSessionHarnesses();
 
 function appendUserAssistantPair(session: SessionManager): { userId: string; assistantId: string } {
   const userId = session.appendMessage({

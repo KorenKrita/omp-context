@@ -1,3 +1,4 @@
+import { afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +21,22 @@ export interface HostSessionHarness {
   snapshot(session?: SessionManager): HostSessionSnapshot;
   cleanup(): Promise<void>;
 }
+
+export function useHostSessionHarnesses(options: {
+  beforeCleanup?: () => void | Promise<void>;
+} = {}): () => HostSessionHarness {
+  const active: HostSessionHarness[] = [];
+  afterEach(async () => {
+    await options.beforeCleanup?.();
+    await Promise.all(active.splice(0).map((harness) => harness.cleanup()));
+  });
+  return () => {
+    const harness = createHostSessionHarness();
+    active.push(harness);
+    return harness;
+  };
+}
+
 
 function collectAliases(entries: SessionEntry[]): Record<string, string[]> {
   const labelOwner = new Map<string, string>();
