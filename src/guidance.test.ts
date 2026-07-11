@@ -66,3 +66,57 @@ describe("canonical ACM CORE", () => {
     expect(TOOL_DESCRIPTIONS.timeline).toContain("view");
   });
 });
+
+describe("advanced context-management routing", () => {
+  test("keeps the model-invoked Skill compact and outside the CORE normal path", async () => {
+    const skill = await Bun.file(new URL("../skills/context-management/SKILL.md", import.meta.url)).text();
+
+    expect(skill).toContain("CORE owns the normal path");
+    expect(skill).not.toContain("## Fold gate");
+    expect(skill).not.toContain("Goal: <");
+    expect(skill).not.toContain("Burst example");
+    expect(skill).not.toContain("Use continuously");
+    for (const ordinaryCase of [
+      "ordinary checkpointing",
+      "clear phase folds",
+      "clear burst folds",
+      "pressure checks",
+      "task-end handling",
+    ]) {
+      expect(skill.toLowerCase()).toContain(ordinaryCase);
+    }
+  });
+
+  test("routes each advanced branch through an independently loadable reference", async () => {
+    const skill = await Bun.file(new URL("../skills/context-management/SKILL.md", import.meta.url)).text();
+    const references = {
+      "target-selection.md": [
+        "Interleaved fronts",
+        "Older or missing anchors",
+        "Raw node fallback",
+        "Checkpoint-name collisions",
+      ],
+      "archive-recovery.md": ["Archive recovery round trip", "<front>-resume", "Archive drift"],
+      "exceptional-recovery.md": [
+        "Travel failure",
+        "Rollback failure",
+        "Context-refresh exhaustion",
+        "Restored history",
+        "No-saving recovery",
+      ],
+    } as const;
+
+    for (const [file, branchHeadings] of Object.entries(references)) {
+      expect(skill).toContain(`references/${file}`);
+      expect(skill).toMatch(new RegExp(`Load \\[[^\\]]+\\]\\(references/${file.replace(".", "\\.")}\\) when `));
+
+      const content = await Bun.file(new URL(`../skills/context-management/references/${file}`, import.meta.url)).text();
+      for (const heading of branchHeadings) expect(content).toContain(heading);
+      for (const otherFile of Object.keys(references)) {
+        if (otherFile !== file) expect(content).not.toContain(otherFile);
+      }
+      expect(content).not.toContain("## Fold gate");
+      expect(content).not.toContain("Goal: <");
+    }
+  });
+});
