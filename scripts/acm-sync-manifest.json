@@ -19,7 +19,17 @@
     {
       "source": "package.json",
       "destination": "packages/omp-plugin/package.json",
-      "transform": "omp-package-metadata"
+      "transform": "omp-plugin-package-metadata"
+    },
+    {
+      "source": "scripts/generate-guidance.mjs",
+      "destination": "packages/omp-plugin/scripts/generate-guidance.mjs",
+      "transform": "omp-guidance-generator"
+    },
+    {
+      "source": "scripts/generate-guidance.test.mjs",
+      "destination": "packages/omp-plugin/scripts/generate-guidance.test.mjs",
+      "transform": "omp-guidance-generator-test"
     },
     {
       "source": "src/index.ts",
@@ -75,6 +85,31 @@
       "source": "src/tool-descriptions.test.ts",
       "destination": "packages/omp-plugin/src/acm/tool-descriptions.test.ts",
       "transform": "omp-test-imports"
+    },
+    {
+      "source": "test/host-fixture/.gitignore",
+      "destination": "packages/omp-plugin/src/acm/host-fixture/.gitignore",
+      "transform": "copy"
+    },
+    {
+      "source": "test/host-fixture/build-source.mjs",
+      "destination": "packages/omp-plugin/src/acm/host-fixture/build-source.mjs",
+      "transform": "omp-host-test-imports"
+    },
+    {
+      "source": "test/host-fixture/bun.lock",
+      "destination": "packages/omp-plugin/src/acm/host-fixture/bun.lock",
+      "transform": "copy"
+    },
+    {
+      "source": "test/host-fixture/package.json",
+      "destination": "packages/omp-plugin/src/acm/host-fixture/package.json",
+      "transform": "copy"
+    },
+    {
+      "source": "test/host-fixture/version.test.ts",
+      "destination": "packages/omp-plugin/src/acm/host-fixture/version.test.ts",
+      "transform": "copy"
     },
     {
       "source": "test/host-fixture/harness.ts",

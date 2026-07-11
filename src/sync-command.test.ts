@@ -216,6 +216,50 @@ describe("manual ACM sync command", () => {
     expect(consumer.peerDependencies["@oh-my-pi/pi-tui"]).toBe("16.4.2");
   });
 
+  test("installs reproducible guidance and isolated host commands in the consumer plugin", async () => {
+    const fixture = createFixture();
+    writeFileSync(join(fixture.canonical, "package.json"), JSON.stringify({
+      name: "omp-context",
+      devDependencies: {
+        "@oh-my-pi/pi-agent-core": "16.4.2",
+        "@oh-my-pi/pi-ai": "16.4.2",
+        "@oh-my-pi/pi-coding-agent": "16.4.2",
+      },
+      peerDependencies: {
+        "@oh-my-pi/pi-agent-core": "16.4.2",
+        "@oh-my-pi/pi-ai": "16.4.2",
+        "@oh-my-pi/pi-coding-agent": "16.4.2",
+      },
+    }, null, 2));
+    const pluginPackage = join(fixture.consumer, "packages", "omp-plugin", "package.json");
+    writeFileSync(pluginPackage, JSON.stringify({
+      name: "@cortexkit/omp-magic-context",
+      scripts: { build: "bun build src/index.ts" },
+    }, null, 2));
+    fixture.writeManifest({
+      version: 1,
+      canonicalPackage: "omp-context",
+      consumerPackage: "magic-acm-context",
+      requiredConsumerPaths: ["packages/omp-plugin/src/acm"],
+      preserve: ["packages/omp-plugin/src/acm/prompt.ts"],
+      mappings: [
+        {
+          source: "package.json",
+          destination: "packages/omp-plugin/package.json",
+          transform: "omp-plugin-package-metadata",
+        },
+      ],
+    });
+
+    const result = await runSync(fixture);
+    expect(result.exitCode).toBe(0);
+    const plugin = JSON.parse(readFileSync(pluginPackage, "utf8"));
+    expect(plugin.scripts.build).toBe("bun build src/index.ts");
+    expect(plugin.scripts["generate:guidance"]).toBe("bun scripts/generate-guidance.mjs");
+    expect(plugin.scripts["test:guidance"]).toBe("bun test scripts/generate-guidance.test.mjs");
+    expect(plugin.scripts["test:host"]).toBe("bun run --cwd src/acm/host-fixture verify");
+  });
+
   test("rewrites standalone real-host imports through a declared transform", async () => {
     const fixture = createFixture();
     mkdirSync(join(fixture.canonical, "test", "host-fixture"), { recursive: true });
@@ -226,6 +270,8 @@ describe("manual ACM sync command", () => {
         'import { helper } from "../../src/lib.js";',
         'import { bridge } from "../../src/host-bridge.js";',
         'import { GUIDANCE_CUES } from "../../src/generated-guidance.js";',
+        'const source = "../../src/index.ts";',
+        'const bridge = "../../src/host-bridge.ts";',
       ].join("\n"),
     );
     fixture.writeManifest({
@@ -253,6 +299,8 @@ describe("manual ACM sync command", () => {
     expect(destination).toContain('from "../lib.js"');
     expect(destination).toContain('from "../host-bridge.js"');
     expect(destination).toContain('from "../generated-guidance.js"');
+    expect(destination).toContain('const source = "../tools.ts";');
+    expect(destination).toContain('const bridge = "../host-bridge.ts";');
   });
 
   test("rejects an incompatible destination root", async () => {
@@ -280,7 +328,9 @@ test("declares the complete canonical guidance surface for the integrated plugin
   ]);
   expect(manifest.mappings.map((mapping) => `${mapping.source}=>${mapping.destination}:${mapping.transform}`).sort()).toEqual([
     "package.json=>package.json:omp-package-metadata",
-    "package.json=>packages/omp-plugin/package.json:omp-package-metadata",
+    "package.json=>packages/omp-plugin/package.json:omp-plugin-package-metadata",
+    "scripts/generate-guidance.mjs=>packages/omp-plugin/scripts/generate-guidance.mjs:omp-guidance-generator",
+    "scripts/generate-guidance.test.mjs=>packages/omp-plugin/scripts/generate-guidance.test.mjs:omp-guidance-generator-test",
     "skills/context-management/CORE.md=>packages/omp-plugin/skills/context-management/CORE.md:copy",
     "skills/context-management/SKILL.md=>packages/omp-plugin/skills/context-management/SKILL.md:copy",
     "skills/context-management/references/archive-recovery.md=>packages/omp-plugin/skills/context-management/references/archive-recovery.md:copy",
@@ -297,12 +347,17 @@ test("declares the complete canonical guidance surface for the integrated plugin
     "src/lib.ts=>packages/omp-plugin/src/acm/lib.ts:copy",
     "src/timeline.test.ts=>packages/omp-plugin/src/acm/timeline.test.ts:omp-test-imports",
     "src/tool-descriptions.test.ts=>packages/omp-plugin/src/acm/tool-descriptions.test.ts:omp-test-imports",
+    "test/host-fixture/.gitignore=>packages/omp-plugin/src/acm/host-fixture/.gitignore:copy",
+    "test/host-fixture/build-source.mjs=>packages/omp-plugin/src/acm/host-fixture/build-source.mjs:omp-host-test-imports",
+    "test/host-fixture/bun.lock=>packages/omp-plugin/src/acm/host-fixture/bun.lock:copy",
     "test/host-fixture/compaction-lifecycle.test.ts=>packages/omp-plugin/src/acm/host-fixture/compaction-lifecycle.test.ts:omp-host-test-imports",
     "test/host-fixture/context-rebuild.test.ts=>packages/omp-plugin/src/acm/host-fixture/context-rebuild.test.ts:omp-host-test-imports",
     "test/host-fixture/harness.ts=>packages/omp-plugin/src/acm/host-fixture/harness.ts:omp-host-test-imports",
     "test/host-fixture/host-bridge.test.ts=>packages/omp-plugin/src/acm/host-fixture/host-bridge.test.ts:omp-host-test-imports",
     "test/host-fixture/session-manager.test.ts=>packages/omp-plugin/src/acm/host-fixture/session-manager.test.ts:omp-host-test-imports",
+    "test/host-fixture/package.json=>packages/omp-plugin/src/acm/host-fixture/package.json:copy",
     "test/host-fixture/travel.test.ts=>packages/omp-plugin/src/acm/host-fixture/travel.test.ts:omp-host-test-imports",
+    "test/host-fixture/version.test.ts=>packages/omp-plugin/src/acm/host-fixture/version.test.ts:copy",
   ].sort());
   expect(new Set(manifest.mappings.map((mapping) => mapping.destination)).size).toBe(
     manifest.mappings.length,

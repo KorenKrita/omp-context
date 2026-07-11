@@ -73,6 +73,41 @@ function parseJsonObject(source, label) {
   return value;
 }
 
+function synchronizeOmpPackageMetadata(source, destination) {
+  if (destination === undefined) throw new Error("OMP package metadata transform requires an existing package.json");
+  const canonical = parseJsonObject(source, "canonical package metadata");
+  const consumer = parseJsonObject(destination, "consumer package metadata");
+  for (const field of ["devDependencies", "peerDependencies"]) {
+    const canonicalDependencies = canonical[field];
+    if (!canonicalDependencies || typeof canonicalDependencies !== "object" || Array.isArray(canonicalDependencies)) {
+      throw new Error(`canonical package metadata is missing ${field}`);
+    }
+    const destinationDependencies = consumer[field];
+    if (destinationDependencies !== undefined && (typeof destinationDependencies !== "object" || Array.isArray(destinationDependencies))) {
+      throw new Error(`consumer package metadata has invalid ${field}`);
+    }
+    consumer[field] = destinationDependencies ?? {};
+    for (const packageName of OMP_HOST_PACKAGES) {
+      const version = canonicalDependencies[packageName];
+      if (typeof version !== "string" || version.length === 0) {
+        throw new Error(`canonical package metadata is missing exact ${field}.${packageName}`);
+      }
+      consumer[field][packageName] = version;
+    }
+    if (typeof consumer[field]["@oh-my-pi/pi-tui"] === "string") {
+      consumer[field]["@oh-my-pi/pi-tui"] = canonicalDependencies["@oh-my-pi/pi-coding-agent"];
+    }
+  }
+  return {
+    consumer,
+    indentation: destination.match(/\n([\t ]+)"/)?.[1] ?? "  ",
+  };
+}
+
+function renderJson(value, indentation) {
+  return `${JSON.stringify(value, null, indentation)}\n`;
+}
+
 const transforms = {
   copy(source) {
     return source;
@@ -90,35 +125,41 @@ const transforms = {
       .replaceAll("../../src/index.js", "../tools.js")
       .replaceAll("../../src/lib.js", "../lib.js")
       .replaceAll("../../src/host-bridge.js", "../host-bridge.js")
-      .replaceAll("../../src/generated-guidance.js", "../generated-guidance.js");
+      .replaceAll("../../src/generated-guidance.js", "../generated-guidance.js")
+      .replaceAll("../../src/index.ts", "../tools.ts")
+      .replaceAll("../../src/lib.ts", "../lib.ts")
+      .replaceAll("../../src/host-bridge.ts", "../host-bridge.ts")
+      .replaceAll("../../src/generated-guidance.ts", "../generated-guidance.ts");
+  },
+  "omp-guidance-generator"(source) {
+    return source.replace(
+      'const defaultOutputPath = join(repoRoot, "src", "generated-guidance.ts");',
+      'const defaultOutputPath = join(repoRoot, "src", "acm", "generated-guidance.ts");',
+    );
+  },
+  "omp-guidance-generator-test"(source) {
+    return source
+      .replace('../src/generated-guidance.ts', '../src/acm/generated-guidance.ts')
+      .replace(
+        'const outputPath = join(repoRoot, "src", "generated-guidance.ts");',
+        'const outputPath = join(repoRoot, "src", "acm", "generated-guidance.ts");',
+      );
   },
   "omp-package-metadata"(source, destination) {
-    if (destination === undefined) throw new Error("omp-package-metadata requires an existing destination package.json");
-    const canonical = parseJsonObject(source, "canonical package metadata");
-    const consumer = parseJsonObject(destination, "consumer package metadata");
-    for (const field of ["devDependencies", "peerDependencies"]) {
-      const canonicalDependencies = canonical[field];
-      if (!canonicalDependencies || typeof canonicalDependencies !== "object" || Array.isArray(canonicalDependencies)) {
-        throw new Error(`canonical package metadata is missing ${field}`);
-      }
-      const destinationDependencies = consumer[field];
-      if (destinationDependencies !== undefined && (typeof destinationDependencies !== "object" || Array.isArray(destinationDependencies))) {
-        throw new Error(`consumer package metadata has invalid ${field}`);
-      }
-      consumer[field] = destinationDependencies ?? {};
-      for (const packageName of OMP_HOST_PACKAGES) {
-        const version = canonicalDependencies[packageName];
-        if (typeof version !== "string" || version.length === 0) {
-          throw new Error(`canonical package metadata is missing exact ${field}.${packageName}`);
-        }
-        consumer[field][packageName] = version;
-      }
-      if (typeof consumer[field]["@oh-my-pi/pi-tui"] === "string") {
-        consumer[field]["@oh-my-pi/pi-tui"] = canonicalDependencies["@oh-my-pi/pi-coding-agent"];
-      }
+    const { consumer, indentation } = synchronizeOmpPackageMetadata(source, destination);
+    return renderJson(consumer, indentation);
+  },
+  "omp-plugin-package-metadata"(source, destination) {
+    const { consumer, indentation } = synchronizeOmpPackageMetadata(source, destination);
+    const scripts = consumer.scripts;
+    if (scripts !== undefined && (typeof scripts !== "object" || scripts === null || Array.isArray(scripts))) {
+      throw new Error("consumer plugin package metadata has invalid scripts");
     }
-    const indentation = destination.match(/\n([\t ]+)"/)?.[1] ?? "  ";
-    return `${JSON.stringify(consumer, null, indentation)}\n`;
+    consumer.scripts = scripts ?? {};
+    consumer.scripts["generate:guidance"] = "bun scripts/generate-guidance.mjs";
+    consumer.scripts["test:guidance"] = "bun test scripts/generate-guidance.test.mjs";
+    consumer.scripts["test:host"] = "bun run --cwd src/acm/host-fixture verify";
+    return renderJson(consumer, indentation);
   },
 };
 
