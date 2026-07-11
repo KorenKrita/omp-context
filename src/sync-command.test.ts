@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const command = join(repoRoot, "scripts", "sync-acm.mjs");
@@ -169,4 +170,29 @@ describe("manual ACM sync command", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("consumer package mismatch");
   });
+});
+
+test("declares the complete canonical guidance surface for the integrated plugin", () => {
+  const parsed: unknown = JSON.parse(
+    readFileSync(join(repoRoot, "scripts", "acm-sync-manifest.json"), "utf8"),
+  );
+  const manifest = z.object({
+    preserve: z.array(z.string()),
+    mappings: z.array(z.object({ source: z.string(), destination: z.string(), transform: z.string() })),
+  }).parse(parsed);
+
+  expect(manifest.preserve).toContain("packages/omp-plugin/src/acm/prompt.ts");
+  expect(manifest.mappings.map((mapping) => mapping.source).sort()).toEqual([
+    "skills/context-management/CORE.md",
+    "skills/context-management/SKILL.md",
+    "skills/context-management/references/archive-recovery.md",
+    "skills/context-management/references/exceptional-recovery.md",
+    "skills/context-management/references/target-selection.md",
+    "src/generated-guidance.ts",
+    "src/index.ts",
+    "src/lib.ts",
+  ]);
+  expect(new Set(manifest.mappings.map((mapping) => mapping.destination)).size).toBe(
+    manifest.mappings.length,
+  );
 });

@@ -18,6 +18,36 @@
       "source": "src/lib.ts",
       "destination": "packages/omp-plugin/src/acm/lib.ts",
       "transform": "copy"
+    },
+    {
+      "source": "src/generated-guidance.ts",
+      "destination": "packages/omp-plugin/src/acm/generated-guidance.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "skills/context-management/CORE.md",
+      "destination": "packages/omp-plugin/skills/context-management/CORE.md",
+      "transform": "copy"
+    },
+    {
+      "source": "skills/context-management/SKILL.md",
+      "destination": "packages/omp-plugin/skills/context-management/SKILL.md",
+      "transform": "copy"
+    },
+    {
+      "source": "skills/context-management/references/target-selection.md",
+      "destination": "packages/omp-plugin/skills/context-management/references/target-selection.md",
+      "transform": "copy"
+    },
+    {
+      "source": "skills/context-management/references/archive-recovery.md",
+      "destination": "packages/omp-plugin/skills/context-management/references/archive-recovery.md",
+      "transform": "copy"
+    },
+    {
+      "source": "skills/context-management/references/exceptional-recovery.md",
+      "destination": "packages/omp-plugin/skills/context-management/references/exceptional-recovery.md",
+      "transform": "copy"
     }
   ]
 }
