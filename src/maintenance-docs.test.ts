@@ -102,4 +102,18 @@ describe("repository agent guidance contract", () => {
       expect(agents).not.toContain(staleContract);
     }
   });
+
+  test("keeps AGENTS focused on implementation contracts instead of restating CORE", async () => {
+    const agents = await repoFile("AGENTS.md");
+
+    expect(agents).toContain("normal-path agent guidance 的唯一可编辑来源");
+    for (const duplicatedGuidance of [
+      "working set / boundary / handoff / archive / anchor gravity",
+      "Goal/State/Evidence/External/Exclusions/Recover/NEXT",
+      'target: "<task-chain-start>"',
+      "Boundary decides whether folding is semantically appropriate",
+    ]) {
+      expect(agents).not.toContain(duplicatedGuidance);
+    }
+  });
 });
