@@ -189,6 +189,7 @@ test("declares the complete canonical guidance surface for the integrated plugin
     "skills/context-management/references/exceptional-recovery.md",
     "skills/context-management/references/target-selection.md",
     "src/generated-guidance.ts",
+    "src/host-bridge.ts",
     "src/index.ts",
     "src/lib.ts",
   ]);

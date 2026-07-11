@@ -898,8 +898,7 @@ export default function(pi: ExtensionAPI): void {
  registerTool({
   name: "acm_timeline",
   label: "ACM Timeline",
-  description:
-   "Inspect the conversation tree: active path (default), full tree, checkpoint catalog, or global search. Default shows the active path spine; search scans the entire tree including off-path branches. Call when choosing a travel target, when orientation is unclear, or to check context usage. list_checkpoints estimates post-fold usage for the displayed matching anchors when usage data is available; display limits still apply. On large trees prefer list_checkpoints or search over full_tree.",
+  description: TOOL_DESCRIPTIONS.timeline,
   parameters: timelineSchema as unknown as TSchema,
   strict: false,
   async execute(
@@ -1144,8 +1143,7 @@ export default function(pi: ExtensionAPI): void {
  registerTool({
   name: "acm_travel",
   label: "ACM Travel",
-  description:
-   "Fold conversation history into a recoverable handoff by traveling to a checkpoint, node ID, or root. Use at stable boundaries: burst distilled, phase complete, direction failed, batch item done, task chain complete, or new request over finished work. Name the boundary first, choose a target before that boundary, and write a handoff with executable NEXT plus recovery pointers. Fold by boundary, not proximity. At task end, travel to the semantic task-chain start and set backupCurrentHeadAs to '<task>-done' only when the preview shows meaningful structural saving; if it shows almost no saving, create a unique '-done' checkpoint and answer directly. Boundary decides whether folding is semantically appropriate; preview only measures savings. Travel changes conversation history only, not disk files or external systems.",
+  description: TOOL_DESCRIPTIONS.travel,
   parameters: travelSchema as unknown as TSchema,
   strict: false,
   async execute(

@@ -20,6 +20,11 @@
       "transform": "copy"
     },
     {
+      "source": "src/host-bridge.ts",
+      "destination": "packages/omp-plugin/src/acm/host-bridge.ts",
+      "transform": "copy"
+    },
+    {
       "source": "src/generated-guidance.ts",
       "destination": "packages/omp-plugin/src/acm/generated-guidance.ts",
       "transform": "copy"

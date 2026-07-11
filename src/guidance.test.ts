@@ -8,16 +8,27 @@ import {
   TOOL_DESCRIPTIONS,
 } from "./generated-guidance.js";
 
-interface CapturedHandler {
-  name: string;
-  handler: (event: any, ctx: any) => any;
+interface BeforeAgentStartEvent {
+  type: "before_agent_start";
+  prompt: string;
+  systemPrompt: string[];
 }
 
-function captureBeforeAgentStart() {
-  const handlers: CapturedHandler[] = [];
+type BeforeAgentStartHandler = (
+  event: BeforeAgentStartEvent,
+  ctx: unknown,
+) => Promise<{ systemPrompt: string[] } | undefined> | { systemPrompt: string[] } | undefined;
+
+interface RegisteredTool {
+  name: string;
+  description: string;
+}
+
+function captureBeforeAgentStart(): BeforeAgentStartHandler {
+  const handlers: Array<{ name: string; handler: BeforeAgentStartHandler }> = [];
   const pi = {
     zod: z,
-    on(name: string, handler: CapturedHandler["handler"]) {
+    on(name: string, handler: BeforeAgentStartHandler) {
       handlers.push({ name, handler });
     },
     registerTool() {},
@@ -26,6 +37,28 @@ function captureBeforeAgentStart() {
   const handler = handlers.find((candidate) => candidate.name === "before_agent_start")?.handler;
   expect(handler).toBeDefined();
   return handler!;
+}
+
+function captureRegisteredTools(): RegisteredTool[] {
+  const tools: RegisteredTool[] = [];
+  const pi = {
+    zod: z,
+    on() {},
+    registerTool(tool: unknown) {
+      if (
+        typeof tool === "object" &&
+        tool !== null &&
+        "name" in tool &&
+        typeof tool.name === "string" &&
+        "description" in tool &&
+        typeof tool.description === "string"
+      ) {
+        tools.push({ name: tool.name, description: tool.description });
+      }
+    },
+  };
+  registerACMExtension(pi as unknown as ExtensionAPI);
+  return tools;
 }
 
 describe("canonical ACM CORE", () => {
@@ -48,6 +81,7 @@ describe("canonical ACM CORE", () => {
     const handler = captureBeforeAgentStart();
     const existing = ["first extension", "second extension"];
     const first = await handler({ type: "before_agent_start", prompt: "go", systemPrompt: existing }, {});
+    if (!first) throw new Error("ACM handler did not append CORE");
     expect(first.systemPrompt.slice(0, 2)).toEqual(existing);
     expect(first.systemPrompt.at(-1)).toContain(ACM_CORE_MARKER);
     expect(first.systemPrompt.at(-1)).toContain(ACM_CORE);
@@ -57,13 +91,19 @@ describe("canonical ACM CORE", () => {
     expect(first.systemPrompt.join("\n").split(ACM_CORE_MARKER)).toHaveLength(2);
   });
 
-  test("derives concise descriptions for all three tools", () => {
-    expect(Object.keys(TOOL_DESCRIPTIONS).sort()).toEqual(["checkpoint", "timeline", "travel"]);
+  test("registers concise generated descriptions for all three tools", () => {
+    const registered = Object.fromEntries(
+      captureRegisteredTools().map((tool) => [tool.name, tool.description]),
+    );
+    expect(registered).toEqual({
+      acm_checkpoint: TOOL_DESCRIPTIONS.checkpoint,
+      acm_timeline: TOOL_DESCRIPTIONS.timeline,
+      acm_travel: TOOL_DESCRIPTIONS.travel,
+    });
     for (const description of Object.values(TOOL_DESCRIPTIONS)) {
       expect(description.length).toBeLessThan(900);
       expect(description).not.toContain("Goal:");
     }
-    expect(TOOL_DESCRIPTIONS.timeline).toContain("view");
   });
 });
 
