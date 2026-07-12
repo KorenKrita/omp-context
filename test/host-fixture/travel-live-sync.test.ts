@@ -75,6 +75,66 @@ function resultDetails(result: Awaited<ReturnType<ToolDefinition["execute"]>>): 
   return result.details as Record<string, unknown>;
 }
 
+function createLiveExtensionFixture(
+  harness: ReturnType<typeof createHarness>,
+  initialMessages: AgentMessage[],
+) {
+  const handlers = new Map<string, ExtensionHandler<never>[]>();
+  let travelTool: ToolDefinition | undefined;
+  let timelineTool: ToolDefinition | undefined;
+  let context: ExtensionContext;
+  const api = {
+    zod,
+    registerTool(tool: ToolDefinition) {
+      if (tool.name === "acm_travel") travelTool = tool;
+      if (tool.name === "acm_timeline") timelineTool = tool;
+    },
+    on(event: string, handler: ExtensionHandler<never>) {
+      const current = handlers.get(event) ?? [];
+      current.push(handler);
+      handlers.set(event, current);
+    },
+  } as unknown as ExtensionAPI;
+  registerAcmExtension(api);
+
+  const extensionRunner = {
+    hasHandlers(type: string) {
+      return (handlers.get(type)?.length ?? 0) > 0;
+    },
+    async emit(event: { type: string }) {
+      let result: unknown;
+      for (const handler of handlers.get(event.type) ?? []) result = await handler(event as never, context);
+      return result;
+    },
+  } as unknown as ExtensionRunner;
+  const agent = new Agent({ initialState: { messages: initialMessages } });
+  const session = new AgentSession({
+    agent,
+    sessionManager: harness.session,
+    settings: Settings.isolated({ "compaction.enabled": false }),
+    modelRegistry: {} as ModelRegistry,
+    extensionRunner,
+  });
+  context = {
+    sessionManager: harness.session,
+    getContextUsage: () => session.getContextUsage(),
+    ui: { notify() {} },
+  } as unknown as ExtensionContext;
+  session.getContextUsage();
+  if (!travelTool || !timelineTool) throw new Error("ACM tools were not registered");
+  return { agent, context, handlers, session, timelineTool, travelTool };
+}
+
+async function emitToolEnd(
+  handlers: Map<string, ExtensionHandler<never>[]>,
+  context: ExtensionContext,
+  toolCallId: string,
+): Promise<void> {
+  for (const handler of handlers.get("tool_execution_end") ?? []) {
+    await handler({ type: "tool_execution_end", toolCallId, toolName: "acm_travel" } as never, context);
+  }
+}
+
 describe("successful travel synchronizes the pinned live AgentSession", () => {
   test("applies after matching tool_execution_end while preserving the in-flight tool pair", async () => {
     const harness = createHarness();
@@ -192,6 +252,135 @@ describe("successful travel synchronizes the pinned live AgentSession", () => {
     );
     const timelineText = timeline.content.map((part) => part.type === "text" ? part.text : "").join("\n");
     expect(timelineText).toContain("Live Agent Sync:  applied");
+  });
+
+  test("converges to the newest leaf when a later travel supersedes pending work", async () => {
+    const harness = createHarness();
+    const rootId = harness.session.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "repeated travel root" }],
+      timestamp: Date.now(),
+    });
+    harness.session.appendMessage(assistantText("first abandoned path"));
+    const fixture = createLiveExtensionFixture(
+      harness,
+      harness.session.buildSessionContext().messages as AgentMessage[],
+    );
+
+    await fixture.travelTool.execute(
+      "travel-first",
+      { target: rootId, summary: HANDOFF, backupCurrentHeadAs: "repeated-first-done" },
+      undefined,
+      undefined,
+      fixture.context,
+    );
+    const firstSummaryLeaf = harness.session.getLeafId();
+    harness.session.appendMessage(assistantText("second abandoned path"));
+    await fixture.travelTool.execute(
+      "travel-second",
+      { target: rootId, summary: HANDOFF.replace("travel completed", "second travel completed"), backupCurrentHeadAs: "repeated-second-done" },
+      undefined,
+      undefined,
+      fixture.context,
+    );
+    const latestLeaf = harness.session.getLeafId();
+    expect(latestLeaf).not.toBe(firstSummaryLeaf);
+
+    await emitToolEnd(fixture.handlers, fixture.context, "travel-first");
+    expect(fixture.agent.state.messages).not.toEqual(
+      fixOrphanedToolUse(harness.session.buildSessionContext().messages as AgentMessage[]),
+    );
+    await emitToolEnd(fixture.handlers, fixture.context, "travel-second");
+
+    const rebuilt = fixOrphanedToolUse(harness.session.buildSessionContext().messages as AgentMessage[]);
+    expect(fixture.agent.state.messages).toEqual(rebuilt);
+    expect(JSON.stringify(rebuilt)).toContain("second travel completed");
+    expect(JSON.stringify(rebuilt)).not.toContain("first abandoned path");
+    expect(JSON.stringify(rebuilt)).not.toContain("second abandoned path");
+    expect(harness.session.getEntries().some((entry) => entry.id === firstSummaryLeaf)).toBe(true);
+  });
+
+  test("restores an off-path checkpoint and expands live state to that branch", async () => {
+    const harness = createHarness();
+    const rootId = harness.session.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "restore branch root" }],
+      timestamp: Date.now(),
+    });
+    const rawBranchId = harness.session.appendMessage(assistantText("recoverable raw branch detail"));
+    const fixture = createLiveExtensionFixture(
+      harness,
+      harness.session.buildSessionContext().messages as AgentMessage[],
+    );
+
+    await fixture.travelTool.execute(
+      "travel-shrink",
+      { target: rootId, summary: HANDOFF, backupCurrentHeadAs: "raw-branch-archive" },
+      undefined,
+      undefined,
+      fixture.context,
+    );
+    const shrunkenLeaf = harness.session.getLeafId();
+    await emitToolEnd(fixture.handlers, fixture.context, "travel-shrink");
+    expect(JSON.stringify(fixture.agent.state.messages)).not.toContain("recoverable raw branch detail");
+
+    const restoreSummary = HANDOFF.replace("travel completed", "raw branch restored");
+    await fixture.travelTool.execute(
+      "travel-restore",
+      { target: "raw-branch-archive", summary: restoreSummary, backupCurrentHeadAs: "shrunken-branch-archive" },
+      undefined,
+      undefined,
+      fixture.context,
+    );
+    await emitToolEnd(fixture.handlers, fixture.context, "travel-restore");
+
+    const restored = fixOrphanedToolUse(harness.session.buildSessionContext().messages as AgentMessage[]);
+    expect(fixture.agent.state.messages).toEqual(restored);
+    expect(JSON.stringify(restored)).toContain("recoverable raw branch detail");
+    expect(JSON.stringify(restored)).toContain("raw branch restored");
+    expect(harness.session.getEntry(rawBranchId)).toBeDefined();
+    expect(harness.session.getEntry(shrunkenLeaf!)).toBeDefined();
+  });
+
+  test("reconstructs the active traveled branch after persistence and resume", async () => {
+    const harness = createHarness();
+    const rootId = harness.session.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "persistent travel root" }],
+      timestamp: Date.now(),
+    });
+    harness.session.appendMessage(assistantText("discarded before resume"));
+    const fixture = createLiveExtensionFixture(
+      harness,
+      harness.session.buildSessionContext().messages as AgentMessage[],
+    );
+    await fixture.travelTool.execute(
+      "travel-before-resume",
+      { target: rootId, summary: HANDOFF.replace("travel completed", "persisted travel state"), backupCurrentHeadAs: "resume-archive" },
+      undefined,
+      undefined,
+      fixture.context,
+    );
+    await emitToolEnd(fixture.handlers, fixture.context, "travel-before-resume");
+    const beforeReload = harness.snapshot();
+
+    const reloaded = await harness.reload();
+    const resumedMessages = reloaded.buildSessionContext().messages as AgentMessage[];
+    const resumedAgent = new Agent({ initialState: { messages: resumedMessages } });
+    const resumedSession = new AgentSession({
+      agent: resumedAgent,
+      sessionManager: reloaded,
+      settings: Settings.isolated({ "compaction.enabled": false }),
+      modelRegistry: {} as ModelRegistry,
+      extensionRunner: { hasHandlers: () => false } as unknown as ExtensionRunner,
+    });
+    resumedSession.getContextUsage();
+
+    expect(harness.snapshot(reloaded).leafId).toBe(beforeReload.leafId);
+    expect(harness.snapshot(reloaded).tree).toEqual(beforeReload.tree);
+    expect(resumedAgent.state.messages).toEqual(resumedMessages);
+    expect(JSON.stringify(resumedAgent.state.messages)).toContain("persisted travel state");
+    expect(JSON.stringify(resumedAgent.state.messages)).not.toContain("discarded before resume");
   });
 
   test("preserves the traveled branch and persistent provider context when live replacement fails", async () => {

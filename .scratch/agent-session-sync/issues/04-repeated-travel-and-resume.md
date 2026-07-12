@@ -4,13 +4,13 @@
 
 **Blocked by:** 02 — Synchronize one successful shrinking travel end to end.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Two or more consecutive travel operations synchronize the live AgentSession to the latest resulting leaf.
-- [ ] A later travel supersedes only pending work for the same SessionManager and cannot apply an obsolete replacement after the newer travel.
-- [ ] Traveling to an off-path checkpoint expands to the selected branch and synchronizes the live state to that restored branch.
-- [ ] Folded branches remain available for later restoration after their messages have been removed from live AgentSession state.
-- [ ] Session persistence and resume reconstruct the same active branch without relying on AgentSession objects captured by the previous process.
-- [ ] Session start, reload, compact, shutdown, and terminal synchronization outcomes clear or rebuild adapter state according to their lifecycle meaning.
-- [ ] The next provider context after each scenario equals the sanitized active branch and contains no messages from an unrelated abandoned path.
-- [ ] Host-fixture scenarios cover repeated shrinking travel, expanding off-path restoration, persistence, resume, and lifecycle cleanup.
+- [x] Two or more consecutive travel operations synchronize the live AgentSession to the latest resulting leaf.
+- [x] A later travel supersedes only pending work for the same SessionManager and cannot apply an obsolete replacement after the newer travel.
+- [x] Traveling to an off-path checkpoint expands to the selected branch and synchronizes the live state to that restored branch.
+- [x] Folded branches remain available for later restoration after their messages have been removed from live AgentSession state.
+- [x] Session persistence and resume reconstruct the same active branch without relying on AgentSession objects captured by the previous process.
+- [x] Session start, reload, compact, shutdown, and terminal synchronization outcomes clear or rebuild adapter state according to their lifecycle meaning.
+- [x] The next provider context after each scenario equals the sanitized active branch and contains no messages from an unrelated abandoned path.
+- [x] Host-fixture scenarios cover repeated shrinking travel, expanding off-path restoration, persistence, resume, and lifecycle cleanup.

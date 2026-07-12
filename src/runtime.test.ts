@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type {
   AgentSessionSyncOutcome,
   LiveAgentSessionAdapter,
 } from "./live-agent-session-adapter.js";
+import { registerAcmLifecycle } from "./runtime-lifecycle.js";
 import { AcmSessionRuntime } from "./runtime.js";
 
 class RecordingAdapter implements LiveAgentSessionAdapter {
@@ -63,6 +65,35 @@ describe("AcmSessionRuntime live synchronization failures", () => {
       preferredLeafId: "leaf-new",
     });
     expect(runtime.applyLiveAgentSync(session, "travel-new")).toMatchObject({ status: "applied" });
+  });
+
+  test("session lifecycle boundaries discard stale pending work and permit recapture", async () => {
+    for (const eventName of ["session_start", "session_compact", "session_shutdown"] as const) {
+      const adapter = new RecordingAdapter();
+      const runtime = new AcmSessionRuntime(adapter);
+      const session = {};
+      const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
+      const api = {
+        on(name: string, handler: (event: unknown, ctx: unknown) => unknown) {
+          const current = handlers.get(name) ?? [];
+          current.push(handler);
+          handlers.set(name, current);
+        },
+      } as unknown as ExtensionAPI;
+      registerAcmLifecycle(api, runtime);
+
+      runtime.scheduleLiveAgentSync(session, `${eventName}-old`, "old-leaf");
+      for (const handler of handlers.get(eventName) ?? []) {
+        await handler({}, { sessionManager: session });
+      }
+      expect(runtime.applyLiveAgentSync(session, `${eventName}-old`)).toMatchObject({
+        status: "skipped",
+        reason: "not_pending",
+      });
+
+      runtime.scheduleLiveAgentSync(session, `${eventName}-new`, "new-leaf");
+      expect(runtime.applyLiveAgentSync(session, `${eventName}-new`)).toMatchObject({ status: "applied" });
+    }
   });
 
   test("a terminal failure clears only its request and permits a later travel", () => {
