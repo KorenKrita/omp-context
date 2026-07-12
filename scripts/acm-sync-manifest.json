@@ -93,6 +93,11 @@
       "transform": "copy"
     },
     {
+      "source": "src/live-agent-session-adapter.ts",
+      "destination": "packages/omp-plugin/src/acm/live-agent-session-adapter.ts",
+      "transform": "copy"
+    },
+    {
       "source": "src/runtime.ts",
       "destination": "packages/omp-plugin/src/acm/runtime.ts",
       "transform": "copy"
@@ -100,6 +105,11 @@
     {
       "source": "src/travel-coordinator.ts",
       "destination": "packages/omp-plugin/src/acm/travel-coordinator.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "src/runtime.test.ts",
+      "destination": "packages/omp-plugin/src/acm/runtime.test.ts",
       "transform": "copy"
     },
     {
@@ -180,6 +190,16 @@
     {
       "source": "test/host-fixture/host-bridge.test.ts",
       "destination": "packages/omp-plugin/src/acm/host-fixture/host-bridge.test.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "test/host-fixture/agent-session-adapter.test.ts",
+      "destination": "packages/omp-plugin/src/acm/host-fixture/agent-session-adapter.test.ts",
+      "transform": "copy"
+    },
+    {
+      "source": "test/host-fixture/travel-live-sync.test.ts",
+      "destination": "packages/omp-plugin/src/acm/host-fixture/travel-live-sync.test.ts",
       "transform": "copy"
     },
     {

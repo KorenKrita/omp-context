@@ -17,6 +17,8 @@ describe("maintainer documentation contract", () => {
       "transform match cardinality",
       "rollback journal",
       "acm-provenance.json",
+      "46 个 canonical mappings",
+      "runtime regression tests",
       "no changes",
       "不会执行任何 Git 操作",
       "分别提交",

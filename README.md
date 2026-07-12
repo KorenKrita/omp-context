@@ -70,7 +70,7 @@ bun run sync:acm -- \
 
 同步命令读取 `scripts/acm-sync-manifest.json`。它先校验 package identity、consumer layout、source、destination、transform match cardinality 与 preserved wrapper；随后在 consumer 内的 staging tree 生成并独立验证全部产物。发布阶段为所有目标建立 rollback journal，任一 rename 或最终验证失败都会恢复本次已替换的全部文件，不留下 partial consumer state。
 
-Manifest 当前声明 42 个 canonical mappings，并额外生成带 canonical version、exact host version、manifest hash 与每个产物 SHA-256 的 `acm-provenance.json`。输出逐行 `changed <path>`；重复运行输出 `no changes`。
+Manifest 当前声明 46 个 canonical mappings，并额外生成带 canonical version、exact host version、manifest hash 与每个产物 SHA-256 的 `acm-provenance.json`。映射包含 pinned live AgentSession adapter、runtime regression tests 与对应 real-host fixtures，避免 consumer 接收引用却缺少实现。输出逐行 `changed <path>`；重复运行输出 `no changes`。
 
 ```bash
 bun run sync:acm -- \
