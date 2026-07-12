@@ -25,6 +25,7 @@ const entrypoints = [
   { source: "../../src/host-bridge.ts", output: "host-bridge.js" },
   { source: "../../src/lib.ts", output: "lib.js" },
   { source: "../../src/generated-guidance.ts", output: "generated-guidance.js" },
+  { source: "../../src/live-agent-session-adapter.ts", output: "live-agent-session-adapter.js" },
 ];
 
 rmSync(outputRoot, { recursive: true, force: true });

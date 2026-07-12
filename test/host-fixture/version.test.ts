@@ -39,6 +39,7 @@ describe("exact OMP host fixture", () => {
       "host-bridge.js",
       "index.js",
       "lib.js",
+      "live-agent-session-adapter.js",
     ]);
     expect(evidence.resolvedPackages.map(({ packageName }) => packageName).sort()).toEqual([...packages].sort());
     for (const entry of evidence.resolvedPackages) {
