@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -37,7 +38,8 @@ describe("canonical guidance generation", () => {
   });
 
   test("check mode reports stale output without writing", async () => {
-    const tempOutput = `${outputPath}.stale-test`;
+    const tempDirectory = mkdtempSync(join(tmpdir(), "omp-context-guidance-"));
+    const tempOutput = join(tempDirectory, "generated-guidance.ts");
     await Bun.write(tempOutput, "stale\n");
     try {
       const process = Bun.spawn(["bun", new URL("./generate-guidance.mjs", import.meta.url).pathname, "--source", sourcePath, "--output", tempOutput, "--check"], {
@@ -52,7 +54,7 @@ describe("canonical guidance generation", () => {
       expect(stderr).toContain("Generated guidance is stale");
       expect(readFileSync(tempOutput, "utf8")).toBe("stale\n");
     } finally {
-      await Bun.file(tempOutput).delete();
+      rmSync(tempDirectory, { recursive: true, force: true });
     }
   });
 
