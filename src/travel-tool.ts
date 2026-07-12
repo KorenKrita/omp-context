@@ -8,6 +8,7 @@ import {
   buildLabelMaps,
   calculateUsageDelta,
   classifyStructuralMessageDirection,
+  countActiveSummaryDepth,
   estimateUsageAfterMessageChange,
   estimateUsageAtTravelTarget,
   findInTree,
@@ -62,10 +63,10 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
   const registerTool = (tool: Parameters<ExtensionAPI["registerTool"]>[0] & { strict?: boolean }) => pi.registerTool(tool);
   const schema = pi.zod.object({
     target: pi.zod.string().min(1).max(256).describe(
-      "Checkpoint name, history node ID, or 'root'. Name the boundary first, then choose a target before that boundary. On large trees use acm_timeline with view checkpoints or search; use view tree only when the surrounding branch structure is needed.",
+      "Checkpoint name, history node ID, or 'root'. For a local fold, choose a target before the named boundary. For a rebase, run cold start on candidate bases from earliest to latest and choose the earliest safe base; root is a candidate, not a default. On large trees use acm_timeline with view checkpoints or search; use view tree only when topology matters.",
     ),
     summary: pi.zod.string().min(1).max(10000).describe(
-      `Handoff summary — the working state after travel. It must make the next action executable without rereading the folded trail. Fill every slot, write 'none' rather than dropping one: ${HANDOFF_SLOT_HINT}. Include recovery pointers; pointers over dumps. Max 10000 chars.`,
+      `Handoff summary — the working state after travel. It must make the next action executable without rereading the folded trail. A rebase snapshot must pass cold start: a fresh agent can execute NEXT from this handoff and direct evidence pointers without reading archived summaries. Fill every slot, write 'none' rather than dropping one: ${HANDOFF_SLOT_HINT}. Include recovery pointers; pointers over dumps. Max 10000 chars.`,
     ),
     backupCurrentHeadAs: pi.zod.string().min(1).max(64).regex(/^[\w\-\.]+$/).optional().describe(
       "Optional archive bookmark for the raw path being folded away. At task end, use '<task>-done' when the preview shows meaningful structural saving and the path does not already carry a suitable '-done' checkpoint. If the preview shows almost no saving, create a unique '-done' checkpoint and answer directly instead of calling travel merely to set this field. This is a recovery pointer, never the travel target or a substitute for a self-contained handoff.",
@@ -165,6 +166,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
       );
       const estimatedPreviewText = formatContextUsage(estimatedUsagePreview, true);
       const messagesBefore = currentMessages.length;
+      const activeSummaryDepthBefore = countActiveSummaryDepth(branch);
 
       let backupEntryId: string | undefined;
       let backupResolvedFromHead: string | undefined;
@@ -301,6 +303,8 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
 
       const summaryEntryId = mutation.summaryEntryId;
       const resultingLeafId = mutation.resultingLeafId;
+      const activeSummaryDepthAfter = countActiveSummaryDepth(sessionManager.getBranch());
+      const activeSummaryDepthDelta = activeSummaryDepthAfter - activeSummaryDepthBefore;
       runtime.scheduleRefresh(sessionManager, summaryEntryId);
       const liveAgentSessionSync = runtime.scheduleLiveAgentSync(
         sessionManager,
@@ -320,6 +324,9 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
             originId,
             summaryEntryId,
             resultingLeafId,
+            activeSummaryDepthBefore,
+            activeSummaryDepthAfter,
+            activeSummaryDepthDelta,
             contextRefreshPending: true,
             liveAgentSessionSyncState: liveAgentSessionSync.status,
             liveAgentSessionSync,
@@ -351,7 +358,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
         content: [{
           type: "text" as const,
           text: [
-            `Travel complete. target=${params.target} (${targetId}); origin=${originLabel ? `${originLabel}@${originId}` : originId}; summaryEntryId=${summaryEntryId}; resultingLeafId=${resultingLeafId}; backup=${backupText} (${backupOutcome}); contextTokens=${formatNumericValue(usageBeforeTokens)} → ${formatNumericValue(estimatedUsageAfterTokens)} est. (delta=${formatSignedDelta(usageDelta.tokenDelta)}); contextPercent=${usageBeforePercentText} → ${estimatedUsageAfterPercentText} est. (delta=${formatSignedDelta(usageDelta.percentagePointDelta, 1, " pp")}); sessionMessages=${messageDelta}; contextRefresh=pending; liveAgentSessionSync=${liveAgentSessionSync.status}.`,
+            `Travel complete. target=${params.target} (${targetId}); origin=${originLabel ? `${originLabel}@${originId}` : originId}; summaryEntryId=${summaryEntryId}; resultingLeafId=${resultingLeafId}; backup=${backupText} (${backupOutcome}); contextTokens=${formatNumericValue(usageBeforeTokens)} → ${formatNumericValue(estimatedUsageAfterTokens)} est. (delta=${formatSignedDelta(usageDelta.tokenDelta)}); contextPercent=${usageBeforePercentText} → ${estimatedUsageAfterPercentText} est. (delta=${formatSignedDelta(usageDelta.percentagePointDelta, 1, " pp")}); sessionMessages=${messageDelta}; summaryDepth=${activeSummaryDepthBefore} → ${activeSummaryDepthAfter} (delta=${formatSignedDelta(activeSummaryDepthDelta)}); contextRefresh=pending; liveAgentSessionSync=${liveAgentSessionSync.status}.`,
             liveAgentSessionSyncRecovery,
             resolved.fromOffPath ? RECOVERY_GUIDANCE.restoredHistory : null,
             nextCue,
@@ -385,6 +392,9 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
           structuralMessagesAfter: messagesAfter,
           structuralMessageDelta,
           structuralMessageDirection,
+          activeSummaryDepthBefore,
+          activeSummaryDepthAfter,
+          activeSummaryDepthDelta,
           sessionMessages: messageDelta,
           messagesBefore,
           messagesAfter,

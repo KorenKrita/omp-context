@@ -516,6 +516,9 @@ describe("acm_travel with real OMP SessionManager", () => {
     expect(details.structuralMessageDelta).toBe(
       (details.messagesAfter as number) - (details.messagesBefore as number),
     );
+    expect(details.activeSummaryDepthBefore).toBe(0);
+    expect(details.activeSummaryDepthAfter).toBe(1);
+    expect(details.activeSummaryDepthDelta).toBe(1);
     expect(details.backupCurrentHeadAs).toBeNull();
     expect(details.backupEntryId).toBeUndefined();
     expect(details.usageAfter).toBe("pending_next_context_event");
@@ -523,8 +526,45 @@ describe("acm_travel with real OMP SessionManager", () => {
     expect(details).not.toHaveProperty("estimatedEffect");
     expect(details).not.toHaveProperty("structuralEffect");
     expect(text).toContain(GUIDANCE_CUES.travelPhase);
+    expect(text).toContain("summaryDepth=0 → 1 (delta=+1)");
     expect(text).not.toContain("estimatedEffect");
     expect(text).not.toMatch(/\b(shrunk|restored|unchanged)\b/);
+  });
+
+  test("reports stacked local folds and root rebases as factual summary-depth changes", async () => {
+    const harness = createHarness();
+    const firstPair = appendUserAssistantPair(harness.session);
+    const firstFold = resultDetails(await runTravel(harness.session, {
+      target: firstPair.userId,
+      summary: VALID_HANDOFF,
+    }));
+    expect(firstFold).toMatchObject({
+      activeSummaryDepthBefore: 0,
+      activeSummaryDepthAfter: 1,
+      activeSummaryDepthDelta: 1,
+    });
+
+    const secondPair = appendUserAssistantPair(harness.session);
+    const stackedFold = resultDetails(await runTravel(harness.session, {
+      target: secondPair.userId,
+      summary: VALID_HANDOFF,
+    }));
+    expect(stackedFold).toMatchObject({
+      activeSummaryDepthBefore: 1,
+      activeSummaryDepthAfter: 2,
+      activeSummaryDepthDelta: 1,
+    });
+
+    const rootRebase = await runTravel(harness.session, {
+      target: "root",
+      summary: VALID_HANDOFF,
+    });
+    expect(resultDetails(rootRebase)).toMatchObject({
+      activeSummaryDepthBefore: 2,
+      activeSummaryDepthAfter: 1,
+      activeSummaryDepthDelta: -1,
+    });
+    expect(resultText(rootRebase)).toContain("summaryDepth=2 → 1 (delta=-1)");
   });
 
   test("uses null raw usage fields when context usage is unavailable", async () => {

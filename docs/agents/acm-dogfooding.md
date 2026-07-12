@@ -11,6 +11,7 @@ Use exactly one primary category per observation:
 | `missed checkpointing` | An unbounded or risky action ran without a recoverable pre-action anchor. |
 | `wrong boundary selection` | Travel compressed the wrong semantic unit or targeted a node inside the material meant to be folded. |
 | `anchor gravity` | The agent selected a nearby checkpoint despite evidence that an older target matched the named boundary. |
+| `missed rebase` | A fold stacked another active summary, or pressure/new-goal/stable-chain evidence appeared, without a cold-start check of the earliest safe base. |
 | `archive drift` | After recovering archived detail, the agent continued ordinary work on the archive branch instead of returning to the summary branch. |
 | `unnecessary Skill loading` | The advanced Skill or an unrelated reference was loaded for a normal-path case already covered by CORE. |
 | `exceptional recovery failure` | The agent mishandled a reported collision, host capability failure, rollback outcome, refresh exhaustion, restored history, or no-saving result. |

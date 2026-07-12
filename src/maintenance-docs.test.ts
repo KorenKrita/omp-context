@@ -40,7 +40,9 @@ describe("maintainer documentation contract", () => {
 
     expect(readme).toContain("七槽 handoff 是 agent completion criterion");
     expect(readme).toContain("不是 runtime 对语义正确性的证明");
-    expect(readme).toContain("高 context pressure 只触发 boundary check，不会自动授权 travel");
+    expect(readme).toContain("高 context pressure 只触发 rebase check，不会降低 cold start gate 或自动授权 travel");
+    expect(readme).toContain("active summary depth");
+    expect(readme).toContain("projected summary depth");
     expect(readme).toContain("observed failure");
     expect(readme).toContain("changed host contract");
     expect(readme).toContain("docs/agents/acm-dogfooding.md");
@@ -62,6 +64,7 @@ describe("maintainer documentation contract", () => {
       "missed checkpointing",
       "wrong boundary selection",
       "anchor gravity",
+      "missed rebase",
       "archive drift",
       "unnecessary Skill loading",
       "exceptional recovery failure",

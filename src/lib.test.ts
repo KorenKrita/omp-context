@@ -7,6 +7,7 @@ import {
  calculateUsageDelta,
  classifyStructuralMessageDirection,
  compareEntriesByTimestamp,
+ countActiveSummaryDepth,
  estimateUsageAfterMessageChange,
  estimateUsageAtTravelTarget,
  findLastMeaningfulEntry,
@@ -14,6 +15,7 @@ import {
  formatFoldCandidatePreview,
  formatTokens,
  getMeaningfulSkipReason,
+ projectSummaryDepthAfterTravel,
  resolveTargetId,
  isValidEntryId,
  HANDOFF_SLOT_HINT,
@@ -40,6 +42,17 @@ function userEntry(id: string, text: string, timestamp = "2026-01-01T00:00:00.00
   parentId: null,
   timestamp,
   message: { role: "user", content: text },
+ } as SessionEntry;
+}
+
+function summaryEntry(id: string, parentId: string | null): SessionEntry {
+ return {
+  type: "branch_summary",
+  id,
+  parentId,
+  timestamp: "2026-01-01T00:00:00.000Z",
+  fromId: parentId ?? id,
+  summary: "summary",
  } as SessionEntry;
 }
 
@@ -228,6 +241,24 @@ describe("raw travel deltas", () => {
   expect(classifyStructuralMessageDirection(12, 80)).toBe("increased");
   expect(classifyStructuralMessageDirection(10, 10)).toBe("equal");
   expect(classifyStructuralMessageDirection(undefined, 10)).toBe("unknown");
+ });
+
+ test("counts active semantic summaries separately from native compaction and projects travel depth", () => {
+  const branch = [
+   userEntry("root", "root"),
+   summaryEntry("summary-1", "root"),
+   {
+    type: "compaction",
+    id: "compact-1",
+    parentId: "summary-1",
+    timestamp: "2026-01-01T00:00:00.000Z",
+    summary: "native compaction",
+   } as SessionEntry,
+   summaryEntry("summary-2", "compact-1"),
+  ];
+  expect(countActiveSummaryDepth(branch)).toBe(2);
+  expect(projectSummaryDepthAfterTravel(branch)).toBe(3);
+  expect(projectSummaryDepthAfterTravel([branch[0]])).toBe(1);
  });
 });
 

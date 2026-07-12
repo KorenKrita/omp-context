@@ -51,7 +51,7 @@ checkpoint / `backupCurrentHeadAs` **名称**在整棵树内必须唯一且**大
 
 `acm_checkpoint` 的成功结果是 progressive placement evidence：文本和 `details` 报告 `status`、checkpoint/label entry ID、resolved role、aliases、automatic/explicit target resolution、跳过的 transient entries 和当前 context usage。结果只附一个由 canonical guidance 生成的 next cue：普通 checkpoint 继续当前 working set；`-done` checkpoint 作为 milestone/archive retreat pointer。它不替 agent 选择 fold boundary 或 target，也不再返回 nearest/earliest fold candidates。
 
-`skills/context-management/CORE.md` 是 normal-path agent guidance 的唯一可编辑来源，`SKILL.md` 只负责 advanced branch routing。本知识文档只记录实现所有权、生成链路与可观察 host contract，不重复 agent 的决策流程、handoff 模板或 fold policy。
+`skills/context-management/CORE.md` 是 normal-path agent guidance 的唯一可编辑来源，拥有 fold/rebase 词汇与 cold start agent criterion；`SKILL.md` 只负责 advanced branch routing。Runtime 只能报告 summary-depth evidence，不能证明 rebase snapshot 的语义完整性。本知识文档只记录实现所有权、生成链路与可观察 host contract，不重复 agent 的决策流程、handoff 模板或 policy。
 
 `acm_travel` 的 `backupCurrentHeadAs` 落在最近有意义的 USER/AI 消息上。`travel-coordinator.ts` 拥有单次 mutation transaction：branch 明确未应用时通过 operation-scoped token 恢复之前的完整 alias 集；branch 已应用或状态不确定时保留 backup，并强制安排 context refresh，避免在未知 branch 上继续旧 provider context。
 
@@ -64,9 +64,9 @@ checkpoint / `backupCurrentHeadAs` **名称**在整棵树内必须唯一且**大
 - `{ view: "search", limit?, query }`：在整棵树（active + off-path）按 label、节点 ID、内容做大小写不敏感搜索；`query` 必填且非空。
 - `{ view: "tree", limit? }`：渲染 `sm.getTree()` 的整棵树，包括 off-path branch、checkpoint label、HEAD 和 `branch_summary` 的 `branchPoint` / `origin` 元数据。
 
-active HUD 包含 context usage、active path 节点数、off-path summary 数、距最近 checkpoint 的 step 数和 travel cue。默认 active 视图不会把 off-path `branch_summary` / `compaction` 插进主序列，而是在分支点以 `[off-path]` 脚注标出，避免假线性叙事。
+active HUD 包含 context usage、active path 节点数、active summary depth、off-path summary 数、距最近 checkpoint 的 step 数和 travel cue。active summary depth 只统计当前 spine 上的 `branch_summary`，不混入 native `compaction`。已有 active summary 时，HUD 使用 canonical rebase-check cue；它仍是 evidence，不是 travel authorization。默认 active 视图不会把 off-path `branch_summary` / `compaction` 插进主序列，而是在分支点以 `[off-path]` 脚注标出，避免假线性叙事。
 
-checkpoint 列表上限 50；大树或 tree 截断时优先改用 `{ view: "checkpoints" }` 或 `{ view: "search", query: "..." }`。搜索先做低成本字段匹配，只有命中时才构造 preview，避免对大型 tool result 反复拼接和 lower-case。
+checkpoint 列表上限 50；大树或 tree 截断时优先改用 `{ view: "checkpoints" }` 或 `{ view: "search", query: "..." }`。checkpoint view 额外显示不计入 alias limit 的 `root` structural candidate，并对 root 与每个 alias 报告 travel 后 projected summary depth；root 是候选证据，不是安全 verdict。搜索先做低成本字段匹配，只有命中时才构造 preview，避免对大型 tool result 反复拼接和 lower-case。
 
 ### travel 使用 branchWithSummary + context event
 
@@ -78,7 +78,7 @@ checkpoint 列表上限 50；大树或 tree 截断时优先改用 `{ view: "chec
 4. 精确观察到期望 summary 时提交 transaction；明确未应用时补偿 backup；mutation 已发生或无法排除时返回 `indeterminate`，保留恢复标签并设置 refresh obligation。
 5. `runtime-lifecycle.ts` 在每次 LLM 调用前通过公开的 compaction-aware `buildSessionContext()` 重建 messages；失败最多重试 3 次，HUD 显示原因与进度。`session_start`、`session_shutdown`、`session_compact` 清当前 session state。
 
-travel tool result `details` 保留 resolved target、origin、`summaryEntryId`、backup outcome、`messagesBefore`/`messagesAfter`、`contextRefreshPending` 等结构标识，并新增 raw `tokenDelta`、`percentagePointDelta`、`structuralMessageDelta` 与 factual `structuralMessageDirection`。**无** legacy `summaryEntry` 别名字段。
+travel tool result `details` 保留 resolved target、origin、`summaryEntryId`、backup outcome、`messagesBefore`/`messagesAfter`、`contextRefreshPending` 等结构标识，并报告 raw `tokenDelta`、`percentagePointDelta`、`structuralMessageDelta`、factual `structuralMessageDirection` 与 `activeSummaryDepthBefore` / `After` / `Delta`。这些字段不把一次 travel 认证为 safe rebase。**无** legacy `summaryEntry` 别名字段。
 
 travel 改的是 OMP 会话历史树和发给模型的上下文，不会回滚磁盘文件、进程、浏览器状态、远端服务或任何外部副作用。
 
@@ -147,9 +147,9 @@ Node16 moduleResolution 下需要从 OMP 子路径导入类型：
 | `src/entry-resolution.ts` / `src/message-sanitizer.ts` | meaningful entry resolution 与 orphan tool sanitation |
 | `src/label-journal.ts` / `src/lib.ts` | dependency-free alias replay 与纯领域逻辑 |
 | `src/generated-guidance.ts` | 从 canonical CORE / advanced guidance 派生的工具描述、正常 cue 与异常恢复片段 |
-| `skills/context-management/CORE.md` | always-on 正常路径：领域词汇、fold gate、checkpoint/fold discipline、handoff contract |
+| `skills/context-management/CORE.md` | always-on 正常路径：领域词汇、fold/rebase gate、cold start criterion、handoff contract |
 | `skills/context-management/SKILL.md` | model-invoked advanced-only router |
-| `skills/context-management/references/target-selection.md` | 非显然 target、interleaved fronts、missing anchor、raw node fallback、名称冲突 |
+| `skills/context-management/references/target-selection.md` | 非显然 earliest-safe-base、interleaved fronts、missing anchor、raw node fallback、名称冲突 |
 | `skills/context-management/references/archive-recovery.md` | archive detail recovery round trip 与 archive-drift 防护 |
 | `skills/context-management/references/exceptional-recovery.md` | travel/rollback/refresh/restored-history/no-saving 异常恢复 |
 | `test/host-fixture/` | 精确 OMP 16.4.5 的真实 SessionManager/runtime contract fixtures |

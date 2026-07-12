@@ -16,7 +16,7 @@
 </head>
 <body>
   <h1>ACM Implementation Notes</h1>
-  <p class="meta">Created 2026-07-11 before implementation. These decisions were resolved during the ACM improvement grilling and specification sessions.</p>
+  <p class="meta">Created 2026-07-11 before implementation; updated 2026-07-12 for semantic rebase. These decisions were resolved during ACM grilling and specification sessions.</p>
 
   <h2>Decision Record</h2>
   <table>
@@ -163,6 +163,21 @@
         <td>agent-resolved</td>
         <td>Treat the private lifecycle seam as a replaceable compatibility boundary.</td>
         <td>The pinned-host matrix verifies successful shrinking travel, complete in-flight tool pairing, native accounting, repeated travel, off-path restoration, persistence/resume, failure recovery, lifecycle cleanup, and multi-session/subagent isolation. Future OMP upgrades must revalidate this seam. If OMP exposes an official AgentSession refresh or tree-navigation API to extensions, replace and remove the private adapter rather than maintaining both paths.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Add semantic rebase as a normal-path agent transition, not a new tool.</td>
+        <td>A rebase carries all surviving state in one authoritative snapshot to the earliest safe base, with root as the ideal candidate rather than a default. The existing <code>acm_travel</code> mutation remains the only execution primitive; no <code>acm_rebase</code> tool or decorative travel mode is added.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Use cold start as the hard rebase gate.</td>
+        <td>A fresh agent must be able to execute <code>NEXT</code> from the snapshot and direct evidence pointers without reading archived summaries. Context pressure triggers this check but never lowers it; local fold, live detail, or native compaction remain valid when the gate fails.</td>
+      </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>Expose summary-depth evidence without runtime safety verdicts.</td>
+        <td>Timeline counts active <code>branch_summary</code> nodes separately from native compaction, exposes root as a structural candidate, and projects post-travel depth. Travel reports before/after/delta facts. Runtime never labels a candidate safe or claims that a completed mutation passed cold start.</td>
       </tr>
     </tbody>
   </table>

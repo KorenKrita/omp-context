@@ -64,7 +64,7 @@ function captureRegisteredTools(): RegisteredTool[] {
 
 describe("canonical ACM CORE", () => {
   test("contains the fixed vocabulary, fold gate, handoff order, and representative examples", () => {
-    for (const word of ["working set", "boundary", "handoff", "archive", "chain", "burst", "anchor gravity"]) {
+    for (const word of ["working set", "boundary", "handoff", "archive", "chain", "burst", "anchor gravity", "rebase", "cold start"]) {
       expect(ACM_CORE.toLowerCase()).toContain(word);
     }
     const slotPositions = ["Goal:", "State:", "Evidence:", "External:", "Exclusions:", "Recover:", "NEXT:"]
@@ -73,9 +73,12 @@ describe("canonical ACM CORE", () => {
     expect([...slotPositions].sort((a, b) => a - b)).toEqual(slotPositions);
     expect(ACM_CORE).toContain("Burst example");
     expect(ACM_CORE).toContain("Failed-direction example");
-    expect(ACM_CORE).toContain("Finished-chain example");
-    expect(ACM_CORE).toContain("High context pressure triggers a boundary check");
-    expect(ACM_CORE).toContain("does not authorize travel");
+    expect(ACM_CORE).toContain("Finished-chain rebase example");
+    expect(ACM_CORE).toContain("### Rebase gate");
+    expect(ACM_CORE).toContain("evaluate candidate bases from earliest to latest");
+    expect(ACM_CORE).toContain("Root is ideal when it passes; it is never presumed safe");
+    expect(ACM_CORE).toContain("Context pressure triggers a rebase check");
+    expect(ACM_CORE).toContain("does not lower the cold start gate or authorize travel");
   });
 
   test("appends CORE once while preserving existing system segments in order", async () => {
@@ -160,6 +163,7 @@ describe("advanced context-management routing", () => {
       "target-selection.md": [
         "Interleaved fronts",
         "Older or missing anchors",
+        "Rebase base selection",
         "Raw node fallback",
         "Checkpoint-name collisions",
       ],

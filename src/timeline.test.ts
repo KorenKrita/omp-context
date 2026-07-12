@@ -36,6 +36,17 @@ function label(id: string, targetId: string, name: string, timestamp: string): S
  } as unknown as SessionEntry;
 }
 
+function summary(id: string, parentId: string, text: string, timestamp: string): SessionEntry {
+ return {
+  id,
+  type: "branch_summary",
+  parentId,
+  timestamp,
+  fromId: parentId,
+  summary: text,
+ } as unknown as SessionEntry;
+}
+
 function node(entry: SessionEntry, children: SessionTreeNode[] = []): SessionTreeNode {
  return { entry, children };
 }
@@ -156,6 +167,7 @@ describe("registered acm_timeline execute handler", () => {
    activeVisibleEntries: 52,
    activeDisplayedEntries: 50,
    activeOmittedEntries: 2,
+   activeSummaryDepth: 0,
    contextUsage: null,
   });
   expect(result.content[0].text).toContain("2 earlier visible entries omitted by limit");
@@ -163,19 +175,41 @@ describe("registered acm_timeline execute handler", () => {
   expect(result.content[0].text).toContain("message 52");
   expect(result.content[0].text).toContain("Context Usage:    Unknown");
   expect(result.content[0].text).toContain(GUIDANCE_CUES.timelineActive);
+  expect(result.content[0].text).not.toContain(GUIDANCE_CUES.rebaseCheck);
+ });
+
+ test("active reports semantic summary depth and switches to the canonical rebase cue", async () => {
+  const root = message("root", null, "root", "2026-01-01T00:00:00.000Z");
+  const firstSummary = summary("summary-1", "root", "first handoff", "2026-01-01T00:00:01.000Z");
+  const current = message("current", "summary-1", "current", "2026-01-01T00:00:02.000Z");
+  const entries = [root, firstSummary, current];
+  const tree = [node(root, [node(firstSummary, [node(current)])])];
+  const result = await execute(tool, {}, makeContext({ entries, tree, branch: entries, leafId: "current" }));
+
+  expect(result.details).toMatchObject({ activeSummaryDepth: 1 });
+  expect(result.content[0].text).toContain("Summary Depth:    1 active summary node(s)");
+  expect(result.content[0].text).toContain(GUIDANCE_CUES.rebaseCheck);
+  expect(result.content[0].text).toContain(GUIDANCE_CUES.timelineActive);
  });
 
  test("checkpoints filters aliases by label or entry ID and reports matching/displayed counts", async () => {
   const active = message("ActiveEntry", null, "active", "2026-01-01T00:00:00.000Z");
-  const offPath = message("OffPathEntry", "ActiveEntry", "off path", "2026-01-01T00:00:01.000Z");
+  const activeChild = message("CurrentEntry", "ActiveEntry", "current", "2026-01-01T00:00:01.000Z");
+  const offPath = message("OffPathEntry", "ActiveEntry", "off path", "2026-01-01T00:00:02.000Z");
   const entries = [
    active,
+   activeChild,
    offPath,
-   label("l1", "ActiveEntry", "Alpha", "2026-01-01T00:00:02.000Z"),
-   label("l2", "ActiveEntry", "SecondAlias", "2026-01-01T00:00:03.000Z"),
-   label("l3", "OffPathEntry", "Beta", "2026-01-01T00:00:04.000Z"),
+   label("l1", "ActiveEntry", "Alpha", "2026-01-01T00:00:03.000Z"),
+   label("l2", "ActiveEntry", "SecondAlias", "2026-01-01T00:00:04.000Z"),
+   label("l3", "OffPathEntry", "Beta", "2026-01-01T00:00:05.000Z"),
   ];
-  const ctx = makeContext({ entries, tree: [node(active, [node(offPath)])], branch: [active], leafId: "ActiveEntry" });
+  const ctx = makeContext({
+   entries,
+   tree: [node(active, [node(activeChild), node(offPath)])],
+   branch: [active, activeChild],
+   leafId: "CurrentEntry",
+  });
 
   const byLabel = await execute(tool, { view: "checkpoints", filter: "ALP", limit: 1 }, ctx);
   expect(byLabel.details).toMatchObject({ checkpointsMatchingAliases: 1, checkpointsDisplayedAliases: 1 });
@@ -186,9 +220,28 @@ describe("registered acm_timeline execute handler", () => {
   expect(byId.content[0].text).toContain("Beta → OffPathEntry (off-path)");
 
   const limited = await execute(tool, { view: "checkpoints", limit: 1 }, ctx);
-  expect(limited.details).toMatchObject({ checkpointsMatchingAliases: 3, checkpointsDisplayedAliases: 1 });
+  expect(limited.details).toMatchObject({
+   checkpointsMatchingAliases: 3,
+   checkpointsDisplayedAliases: 1,
+   activeSummaryDepth: 0,
+   rootCandidateDisplayed: true,
+   rootCandidateEntryId: "ActiveEntry",
+   rootProjectedSummaryDepth: 1,
+  });
   expect(limited.content[0].text).toContain("3 matching aliases, 1 displayed");
+  expect(limited.content[0].text).toContain("root → ActiveEntry (structural candidate, not a checkpoint)");
+  expect(limited.content[0].text).toContain("summary depth 0 → 1 projected");
+  expect(byLabel.details).toMatchObject({ rootCandidateDisplayed: false });
   expect(byLabel.content[0].text).toContain(GUIDANCE_CUES.timelineCheckpoints);
+
+  const alreadyAtRoot = await execute(tool, { view: "checkpoints" }, makeContext({
+   entries: [active],
+   tree: [node(active)],
+   branch: [active],
+   leafId: "ActiveEntry",
+  }));
+  expect(alreadyAtRoot.details).toMatchObject({ rootCandidateDisplayed: false });
+  expect(alreadyAtRoot.content[0].text).not.toContain("structural candidate, not a checkpoint");
  });
 
  test("search matches active and off-path labels, IDs, and rendered content case-insensitively", async () => {

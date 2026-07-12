@@ -23,7 +23,7 @@
 | [`skills/context-management/SKILL.md`](skills/context-management/SKILL.md) | 只路由 non-obvious target、archive round trip 与 exceptional recovery |
 | `src/generated-guidance.ts` | 由 CORE marker 生成；禁止手改 |
 
-七槽 handoff 是 agent completion criterion，不是 runtime 对语义正确性的证明。插件只能校验可观察结构，不能证明 target 位于正确的 semantic boundary 之前、raw detail 足够可恢复，或 `NEXT` 真正可执行。高 context pressure 只触发 boundary check，不会自动授权 travel。
+七槽 handoff 是 agent completion criterion，不是 runtime 对语义正确性的证明。插件只能校验可观察结构，不能证明 target 位于正确的 semantic boundary 之前、rebase snapshot 通过 cold start、raw detail 足够可恢复，或 `NEXT` 真正可执行。高 context pressure 只触发 rebase check，不会降低 cold start gate 或自动授权 travel。
 
 ## 安装
 
@@ -87,7 +87,8 @@ bun run sync:acm -- \
 - 成功 travel 会在对应 `acm_travel` 的 `tool_execution_end` 后，通过精确版本检查的窄 adapter 从当前 SessionManager leaf 重建消息并调用 live AgentSession 的公开 `agent.replaceMessages()`。关联只按 SessionManager 对象 identity 建立，使用弱引用，不猜测其他私有字段，也不复制 synthetic tool call 或 compaction entry。
 - adapter 依赖 OMP 16.4.5 的 `AgentSession.getContextUsage` lifecycle seam 来捕获 live session。host 版本或 shape 不匹配、association 缺失或 replacement 失败时，持久 SessionManager branch 与公开 `context` event rebuild 仍然有效；HUD 会报告 `unavailable`、`failed` 或 `skipped` 并给出 reload guidance。
 - 成功 live sync 后，native stored-context accounting 使用 traveled branch，不会因 pre-travel message array 立即触发 stale auto-compaction。插件仍不取消、延迟或替换真实的 OMP compaction。
-- travel 只改变会话树与后续 model context；不会回滚文件、进程、浏览器、commit 或远端副作用。
+- timeline 报告 active summary depth，并在 checkpoint catalog 中显示 root structural candidate 与 travel 后的 projected summary depth；这些都是 target-selection evidence，不是 rebase safety verdict。
+- travel 只改变会话树与后续 model context；不会回滚文件、进程、浏览器、commit 或远端副作用。成功结果会报告 factual summary-depth delta，但不会声称 runtime 已证明 cold start completeness。
 
 ## Guidance 维护
 

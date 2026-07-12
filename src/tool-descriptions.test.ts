@@ -34,12 +34,14 @@ describe("ACM tool description contract", () => {
   test("describes timeline through the strict view discriminator", () => {
     expect(TOOL_DESCRIPTIONS.timeline).toContain("one view: `active`, `checkpoints`, `search`, or `tree`");
     expect(TOOL_DESCRIPTIONS.timeline).toContain("Omit view for `active`");
+    expect(TOOL_DESCRIPTIONS.timeline).toContain("active summary depth and projected depth");
     expect(TOOL_DESCRIPTIONS.timeline).not.toMatch(/list_checkpoints|full_tree|active_path/);
   });
 
   test("keeps checkpoint and travel descriptions concise and evidence-oriented", () => {
     expect(TOOL_DESCRIPTIONS.checkpoint).toContain("Checkpoint does not branch or fold the active context");
-    expect(TOOL_DESCRIPTIONS.travel).toContain("Travel reports structural and context deltas");
+    expect(TOOL_DESCRIPTIONS.travel).toContain("fold a named boundary or rebase accumulated summaries");
+    expect(TOOL_DESCRIPTIONS.travel).toContain("cannot prove boundary quality or cold start completeness");
     expect(TOOL_DESCRIPTIONS.travel).not.toContain("preview");
   });
 });
