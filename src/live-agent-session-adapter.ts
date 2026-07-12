@@ -27,7 +27,7 @@ export type AgentSessionSyncOutcome =
   | { status: "unavailable"; reason: "unsupported_host_version" | "unsupported_host_shape" | "host_version_unreadable"; message: string }
   | { status: "pending"; preferredLeafId?: string }
   | { status: "applied"; leafId: string | null; messageCount: number }
-  | { status: "failed"; reason: "build_messages_failed" | "replace_messages_failed"; message: string }
+  | { status: "failed"; reason: "read_leaf_failed" | "build_messages_failed" | "replace_messages_failed"; message: string }
   | { status: "skipped"; reason: "branch_not_applied" | "missing_association" | "not_pending" | "stale_leaf"; message: string };
 
 type AgentSessionUnavailableOutcome = Extract<AgentSessionSyncOutcome, { status: "unavailable" }>;
@@ -112,8 +112,8 @@ function install(HostClass: AgentSessionHostClass): InstallationState | AgentSes
   });
   prototype.getContextUsage = function (this: LiveAgentSession, ...args: unknown[]) {
     if (this && typeof this.sessionManager === "object" && this.sessionManager !== null) {
-      const existing = state.sessions.get(this.sessionManager)?.deref();
-      if (existing !== this) state.sessions.set(this.sessionManager, new WeakRef(this));
+      const tracked = state.sessions.get(this.sessionManager)?.deref();
+      if (tracked !== this) state.sessions.set(this.sessionManager, new WeakRef(this));
     }
     return originalGetContextUsage.apply(this, args);
   };
@@ -199,8 +199,20 @@ export function createLiveAgentSessionAdapter(
         return outcome;
       }
       const preferredLeafId = state.pending.get(sessionManager);
+      let currentLeafId: string | null;
+      try {
+        currentLeafId = readLeafId(sessionManager);
+      } catch (error) {
+        state.pending.delete(sessionManager);
+        const outcome: AgentSessionSyncOutcome = {
+          status: "failed",
+          reason: "read_leaf_failed",
+          message: error instanceof Error ? error.message : String(error),
+        };
+        state.outcomes.set(sessionManager, outcome);
+        return outcome;
+      }
       state.pending.delete(sessionManager);
-      const currentLeafId = readLeafId(sessionManager);
       if (preferredLeafId && currentLeafId !== preferredLeafId) {
         const outcome: AgentSessionSyncOutcome = {
           status: "skipped",

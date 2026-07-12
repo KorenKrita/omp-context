@@ -85,6 +85,28 @@ describe("live AgentSession adapter against pinned OMP", () => {
     expect(unsupportedShape.installation).toMatchObject({ status: "unavailable", reason: "unsupported_host_shape" });
   });
 
+  test("records a terminal diagnostic when the associated manager cannot expose its leaf", () => {
+    class IsolatedAgentSession {
+      getContextUsage() { return undefined; }
+    }
+    const adapter = createLiveAgentSessionAdapter({
+      AgentSessionClass: IsolatedAgentSession as unknown as AgentSessionHostClass,
+    });
+    const brokenManager = { getLeafId: () => { throw new Error("leaf unavailable"); } };
+    IsolatedAgentSession.prototype.getContextUsage.call({
+      sessionManager: brokenManager,
+      agent: { replaceMessages() {} },
+    } as never);
+
+    expect(adapter.schedule(brokenManager)).toMatchObject({ status: "pending" });
+    expect(adapter.apply(brokenManager)).toMatchObject({
+      status: "failed",
+      reason: "read_leaf_failed",
+      message: "leaf unavailable",
+    });
+    expect(adapter.getStatus(brokenManager)).toMatchObject({ status: "failed", reason: "read_leaf_failed" });
+  });
+
   test("reports skipped without an association and failed when replacement throws", () => {
     const missingManager = {};
     const adapter = createLiveAgentSessionAdapter();
