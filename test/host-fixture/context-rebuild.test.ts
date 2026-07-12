@@ -7,7 +7,7 @@ import type {
   ToolDefinition,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import * as zod from "zod/v4";
-import registerACMExtension from "./.acm-build/index.js";
+import registerACMExtension, { fixOrphanedToolUse } from "./.acm-build/index.js";
 import { RECOVERY_GUIDANCE } from "./.acm-build/generated-guidance.js";
 import { useHostSessionHarnesses } from "./harness.js";
 const VALID_HANDOFF = [
@@ -267,6 +267,41 @@ describe("public context reconstruction with real OMP SessionManager", () => {
       expect(serialized([repaired])).toContain("Interrupted by context travel");
     }
     expect(serialized(rebuilt)).not.toContain("abandoned parser source");
+  });
+
+  test("orders preserved and synthesized tool results by assistant tool-call order", () => {
+    const messages = [
+      {
+        role: "assistant" as const,
+        content: [
+          { type: "toolCall" as const, id: "call-a", name: "read", arguments: { path: "a.ts" } },
+          { type: "toolCall" as const, id: "call-b", name: "read", arguments: { path: "b.ts" } },
+          { type: "toolCall" as const, id: "call-c", name: "read", arguments: { path: "c.ts" } },
+        ],
+        api: "test",
+        provider: "test",
+        model: "test",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: 0 },
+        stopReason: "toolUse" as const,
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult" as const,
+        toolCallId: "call-b",
+        toolName: "read",
+        content: [{ type: "text" as const, text: "real b result" }],
+        isError: false,
+        timestamp: Date.now(),
+      },
+    ] satisfies AgentMessage[];
+
+    const repaired = fixOrphanedToolUse(messages);
+    const toolResultIds = repaired
+      .filter((message) => message.role === "toolResult")
+      .map((message) => message.toolCallId);
+
+    expect(toolResultIds).toEqual(["call-a", "call-b", "call-c"]);
+    expect(repaired[2]).toBe(messages[1]);
   });
 
   test("preserves valid tool pairs and unrelated content when no rebuild is pending", async () => {
