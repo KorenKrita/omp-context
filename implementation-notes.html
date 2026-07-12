@@ -97,7 +97,7 @@
       <tr>
         <td>agent-resolved</td>
         <td>Expose summary-depth evidence without runtime safety verdicts.</td>
-        <td>Timeline counts active <code>branch_summary</code> nodes separately from native compaction, exposes root as a structural candidate, and projects post-travel depth. Travel reports before/after/delta facts but never labels a candidate safe.</td>
+        <td>Timeline counts active <code>branch_summary</code> handoff layers separately from native compaction, exposes root as a structural candidate, and projects post-travel depth. Travel reports before/after/delta plus target/root facts and explains that a root rebase replaces prior layers while appending one new handoff, so resulting depth is normally target depth + 1 rather than zero; it never labels a candidate safe.</td>
       </tr>
       <tr>
         <td>user-decided</td>

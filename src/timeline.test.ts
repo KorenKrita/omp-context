@@ -187,9 +187,12 @@ describe("registered acm_timeline execute handler", () => {
   const result = await execute(tool, {}, makeContext({ entries, tree, branch: entries, leafId: "current" }));
 
   expect(result.details).toMatchObject({ activeSummaryDepth: 1 });
-  expect(result.content[0].text).toContain("Summary Depth:    1 active summary node(s)");
+  expect(result.content[0].text).toContain("Summary Depth:    1 active handoff summary layer(s)");
   expect(result.content[0].text).toContain(GUIDANCE_CUES.rebaseCheck);
   expect(result.content[0].text).toContain(GUIDANCE_CUES.timelineActive);
+
+  const checkpoints = await execute(tool, { view: "checkpoints" }, makeContext({ entries, tree, branch: entries, leafId: "current" }));
+  expect(checkpoints.content[0].text).toContain("summary depth 1 → 1 projected; projected depth is 1 rather than 0 because travel appends one new handoff");
  });
 
  test("checkpoints filters aliases by label or entry ID and reports matching/displayed counts", async () => {

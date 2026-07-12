@@ -553,6 +553,8 @@ describe("acm_travel with real OMP SessionManager", () => {
       activeSummaryDepthBefore: 1,
       activeSummaryDepthAfter: 2,
       activeSummaryDepthDelta: 1,
+      targetIsStructuralRoot: false,
+      summaryDepthNote: null,
     });
 
     const rootRebase = await runTravel(harness.session, {
@@ -563,8 +565,12 @@ describe("acm_travel with real OMP SessionManager", () => {
       activeSummaryDepthBefore: 2,
       activeSummaryDepthAfter: 1,
       activeSummaryDepthDelta: -1,
+      targetSummaryDepth: 0,
+      targetIsStructuralRoot: true,
+      summaryDepthNote: "Root rebase replaced prior active handoff layers with one new handoff; resulting summary depth is 1 rather than 0.",
     });
     expect(resultText(rootRebase)).toContain("summaryDepth=2 → 1 (delta=-1)");
+    expect(resultText(rootRebase)).toContain("Root rebase replaced prior active handoff layers with one new handoff; resulting summary depth is 1 rather than 0.");
   });
 
   test("uses null raw usage fields when context usage is unavailable", async () => {

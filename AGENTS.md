@@ -79,7 +79,7 @@ checkpoint 列表上限 50；大树或 tree 截断时优先改用 `{ view: "chec
 4. 精确观察到期望 summary 时提交 transaction；明确未应用时补偿 backup；mutation 已发生或无法排除时返回 `indeterminate`，保留恢复标签并设置 refresh obligation。
 5. `runtime-lifecycle.ts` 在每次 LLM 调用前通过公开的 compaction-aware `buildSessionContext()` 重建 messages；失败最多重试 3 次，HUD 显示原因与进度。`session_start`、`session_shutdown`、`session_compact` 清当前 session state。
 
-travel tool result `details` 保留 resolved target、origin、`summaryEntryId`、backup outcome、`messagesBefore`/`messagesAfter`、`contextRefreshPending` 等结构标识，并报告 raw `tokenDelta`、`percentagePointDelta`、`structuralMessageDelta`、factual `structuralMessageDirection` 与 `activeSummaryDepthBefore` / `After` / `Delta`。这些字段不把一次 travel 认证为 safe rebase。**无** legacy `summaryEntry` 别名字段。
+travel tool result `details` 保留 resolved target、origin、`summaryEntryId`、backup outcome、`messagesBefore`/`messagesAfter`、`contextRefreshPending` 等结构标识，并报告 raw `tokenDelta`、`percentagePointDelta`、`structuralMessageDelta`、factual `structuralMessageDirection`、`activeSummaryDepthBefore` / `After` / `Delta`、`targetSummaryDepth` 与 `targetIsStructuralRoot`。Root rebase 会替换旧 active handoff layers，但 travel 本身追加一个新 handoff，因此结果 depth 通常是 target depth + 1，而不是 0；runtime 只解释这个结构事实，不把一次 travel 认证为 safe rebase。**无** legacy `summaryEntry` 别名字段。
 
 travel 改的是 OMP 会话历史树和发给模型的上下文，不会回滚磁盘文件、进程、浏览器状态、远端服务或任何外部副作用。
 
