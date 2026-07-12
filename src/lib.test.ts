@@ -353,6 +353,15 @@ describe("getMeaningfulSkipReason", () => {
   } as unknown as SessionEntry;
   expect(getMeaningfulSkipReason(assistant)).toBeNull();
  });
+
+ test("defensively ignores malformed text blocks without throwing", () => {
+  const assistant = {
+   type: "message",
+   id: "a2",
+   message: { role: "assistant", content: [{ type: "text" }] },
+  } as unknown as SessionEntry;
+  expect(getMeaningfulSkipReason(assistant)).toBe("empty_assistant");
+ });
 });
 
 describe("findLastMeaningfulEntry", () => {
