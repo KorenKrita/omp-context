@@ -16,8 +16,8 @@ interface PackageManifest {
   peerDependencies?: Record<string, string>;
 }
 
-describe("exact OMP host support contract", () => {
-  test("pins peer, development, installed, fixture, adapter, and lock metadata to one exact release", async () => {
+describe("exact OMP host verification contract", () => {
+  test("pins peer, development, installed, fixture, and lock metadata to one exact tested release", async () => {
     const manifest = await Bun.file(new URL("../package.json", import.meta.url)).json() as PackageManifest;
     const supportedVersion = manifest.peerDependencies?.["@oh-my-pi/pi-coding-agent"];
     expect(supportedVersion).toMatch(/^\d+\.\d+\.\d+$/);
@@ -39,9 +39,6 @@ describe("exact OMP host support contract", () => {
     };
     for (const packageName of ompPackages) expect(fixture.dependencies?.[packageName]).toBe(supportedVersion);
     expect(fixture.scripts?.verify).toStartWith("bun install --frozen-lockfile && bun ./build-source.mjs &&");
-
-    const adapter = await Bun.file(new URL("./live-agent-session-adapter.ts", import.meta.url)).text();
-    expect(adapter).toContain(`SUPPORTED_AGENT_SESSION_HOST_VERSION = "${supportedVersion}"`);
 
     const lock = await Bun.file(new URL("../bun.lock", import.meta.url)).text();
     const workspaceSection = lock.split("\n  \"packages\":")[0] ?? "";

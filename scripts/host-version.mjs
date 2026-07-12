@@ -138,11 +138,8 @@ export function updateExactHostVersion(repoRoot, version) {
 
   const packagePath = join(repoRoot, "package.json");
   const fixturePath = join(repoRoot, "test", "host-fixture", "package.json");
-  const adapterPath = join(repoRoot, "src", "live-agent-session-adapter.ts");
   const metadata = readJson(packagePath, "omp-context package");
   const fixture = readJson(fixturePath, "host fixture package");
-  const adapter = readFileSync(adapterPath, "utf8");
-  const pattern = /export const SUPPORTED_AGENT_SESSION_HOST_VERSION = "\d+\.\d+\.\d+";/;
 
   for (const field of ["devDependencies", "peerDependencies"]) {
     if (!metadata[field] || typeof metadata[field] !== "object" || Array.isArray(metadata[field])) {
@@ -152,7 +149,6 @@ export function updateExactHostVersion(repoRoot, version) {
   if (!fixture.dependencies || typeof fixture.dependencies !== "object" || Array.isArray(fixture.dependencies)) {
     throw new Error("host fixture package is missing required object dependencies");
   }
-  if (!pattern.test(adapter)) throw new Error("Could not locate SUPPORTED_AGENT_SESSION_HOST_VERSION");
 
   for (const field of ["devDependencies", "peerDependencies"]) {
     for (const packageName of OMP_HOST_PACKAGES) metadata[field][packageName] = version;
@@ -162,6 +158,5 @@ export function updateExactHostVersion(repoRoot, version) {
   replaceFilesTransactionally([
     { path: packagePath, content: `${JSON.stringify(metadata, null, 2)}\n` },
     { path: fixturePath, content: `${JSON.stringify(fixture, null, 2)}\n` },
-    { path: adapterPath, content: adapter.replace(pattern, `export const SUPPORTED_AGENT_SESSION_HOST_VERSION = "${version}";`) },
   ]);
 }

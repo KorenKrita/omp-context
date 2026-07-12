@@ -17,7 +17,6 @@ const deadline = Date.now() + 15 * 60_000;
 const promotionTargets = [
   "package.json",
   "bun.lock",
-  "src/live-agent-session-adapter.ts",
   "test/host-fixture/package.json",
   "test/host-fixture/bun.lock",
 ];
@@ -171,7 +170,7 @@ try {
     throw new Error(`Local OMP promotion failed after candidate validation: ${promotionError instanceof Error ? promotionError.message : String(promotionError)}; ${recovery}`);
   }
   process.stderr.write(
-    `Local OMP ${local.version} passed the isolated host contract. Repository version fields and locks were updated from ${declared}; review and stage them, then commit again.\n`,
+    `Local OMP ${local.version} passed the isolated host contract. Repository dependency fields and locks were updated from ${declared}; review and stage them, then commit again.\n`,
   );
   process.exit(2);
 } catch (error) {

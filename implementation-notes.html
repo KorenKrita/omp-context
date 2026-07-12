@@ -36,8 +36,8 @@
       </tr>
       <tr>
         <td>user-decided</td>
-        <td>Remain extension-only and synchronize live AgentSession state through one pinned adapter.</td>
-        <td><code>branchWithSummary()</code> remains the persistent tree mutation. After a definitively successful travel, the exact-version adapter rebuilds the active branch and calls <code>agent.replaceMessages()</code> at the matching <code>tool_execution_end</code>.</td>
+        <td>Remain extension-only and synchronize live AgentSession state through one capability-probed adapter.</td>
+        <td><code>branchWithSummary()</code> remains the persistent tree mutation. After a definitively successful travel, the adapter rebuilds the active branch and calls <code>agent.replaceMessages()</code> at the matching <code>tool_execution_end</code>. Runtime availability must depend on observed capabilities rather than a hard-coded OMP version, so a locally updated but compatible host remains usable.</td>
       </tr>
       <tr>
         <td>user-decided</td>
@@ -76,8 +76,8 @@
       </tr>
       <tr>
         <td>agent-resolved</td>
-        <td>Use a version-checked, identity-scoped live AgentSession adapter.</td>
-        <td>The adapter installs one idempotent wrapper at <code>AgentSession.getContextUsage()</code>, associates <code>SessionManager → WeakRef&lt;AgentSession&gt;</code> by object identity, and schedules replacement only for the matching successful travel tool call.</td>
+        <td>Use a capability-probed, identity-scoped live AgentSession adapter.</td>
+        <td>The adapter installs one descriptor-safe idempotent wrapper at <code>AgentSession.getContextUsage()</code>, associates <code>SessionManager → WeakRef&lt;AgentSession&gt;</code> by object identity, keeps the complete tool-call ticket atomically inside the shared adapter, and validates the retained message sequence after <code>replaceMessages()</code>. Exact dependency versions remain verification targets only.</td>
       </tr>
       <tr>
         <td>agent-resolved</td>
@@ -113,6 +113,6 @@
   </table>
 
   <h2>Open Decisions</h2>
-  <p>None. A failed local-host cold candidate or a new official OMP navigation API must reopen the pinned adapter decision.</p>
+  <p>None. A failed local-host cold candidate or a new official OMP navigation API must reopen the capability seam decision.</p>
 </body>
 </html>

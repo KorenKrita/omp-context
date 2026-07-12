@@ -25,7 +25,7 @@ const TOOL_CALL_ID = "travel-live-sync";
 const HANDOFF = [
   "Goal: exercise live travel synchronization",
   "State: travel completed",
-  "Evidence: pinned host prompt-loop fixture",
+  "Evidence: capability host prompt-loop fixture",
   "External: none",
   "Exclusions: none",
   "Recover: live-sync-done",
@@ -136,7 +136,7 @@ async function emitToolEnd(
   }
 }
 
-describe("successful travel synchronizes the pinned live AgentSession", () => {
+describe("successful travel synchronizes a capability-compatible live AgentSession", () => {
   test("applies after matching tool_execution_end while preserving the in-flight tool pair", async () => {
     const harness = createHarness();
     const rootId = harness.session.appendMessage({
@@ -568,7 +568,7 @@ describe("successful travel synchronizes the pinned live AgentSession", () => {
     expect(notifications).toEqual([]);
   });
 
-  test("keeps travel functional and reports reload guidance when the pinned live adapter is unavailable", async () => {
+  test("keeps travel functional and reports reload guidance when live capabilities are unavailable", async () => {
     const harness = createHarness();
     const rootId = harness.session.appendMessage({
       role: "user",
@@ -591,7 +591,9 @@ describe("successful travel synchronizes the pinned live AgentSession", () => {
         handlers.set(event, current);
       },
     } as unknown as ExtensionAPI;
-    const runtime = new AcmSessionRuntime(createLiveAgentSessionAdapter({ hostVersion: "16.4.4" }));
+    const runtime = new AcmSessionRuntime(createLiveAgentSessionAdapter({
+      AgentSessionClass: { prototype: {} } as never,
+    }));
     registerTravelTool(api, runtime);
     registerTimelineTool(api, runtime);
     registerAcmLifecycle(api, runtime);

@@ -11,7 +11,6 @@ import {
 
 function createFixture() {
   const root = mkdtempSync(join(tmpdir(), "omp-context-host-version-"));
-  mkdirSync(join(root, "src"), { recursive: true });
   mkdirSync(join(root, "test", "host-fixture"), { recursive: true });
   const hostEntries = Object.fromEntries(OMP_HOST_PACKAGES.map((name) => [name, "1.2.3"]));
   writeFileSync(join(root, "package.json"), `${JSON.stringify({
@@ -21,10 +20,6 @@ function createFixture() {
   writeFileSync(join(root, "test", "host-fixture", "package.json"), `${JSON.stringify({
     dependencies: { ...hostEntries, zod: "4.4.3" },
   }, null, 2)}\n`);
-  writeFileSync(
-    join(root, "src", "live-agent-session-adapter.ts"),
-    'export const SUPPORTED_AGENT_SESSION_HOST_VERSION = "1.2.3";\n',
-  );
   return root;
 }
 
@@ -60,7 +55,6 @@ describe("local OMP host version promotion", () => {
       }
       expect(rootPackage.devDependencies.unrelated).toBe("9.9.9");
       expect(fixturePackage.dependencies.zod).toBe("4.4.3");
-      expect(readFileSync(join(root, "src", "live-agent-session-adapter.ts"), "utf8")).toContain('"2.3.4"');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

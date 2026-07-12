@@ -30,9 +30,4 @@ for (const packageName of OMP_HOST_PACKAGES) {
   }
 }
 
-const adapter = readFileSync(join(repoRoot, "src", "live-agent-session-adapter.ts"), "utf8");
-if (!adapter.includes(`SUPPORTED_AGENT_SESSION_HOST_VERSION = "${packageVersion}"`)) {
-  throw new Error(`Live AgentSession adapter does not declare supported host ${packageVersion}`);
-}
-
-process.stdout.write(`Verified canonical guidance and exact OMP host ${packageVersion}.\n`);
+process.stdout.write(`Verified canonical guidance and exact tested OMP host ${packageVersion}.\n`);

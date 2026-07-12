@@ -32,7 +32,7 @@ function createSession(sessionManager: ReturnType<typeof createHarness>["session
   return { agent, session };
 }
 
-describe("live AgentSession adapter against pinned OMP", () => {
+describe("live AgentSession capability adapter", () => {
   test("captures by SessionManager identity and applies rebuilt active-branch messages", () => {
     const harness = createHarness();
     harness.session.appendMessage({
@@ -45,8 +45,8 @@ describe("live AgentSession adapter against pinned OMP", () => {
 
     expect(adapter.installation).toEqual({ status: "ready" });
     session.getContextUsage();
-    expect(adapter.schedule(harness.session, harness.session.getLeafId() ?? undefined)).toMatchObject({ status: "pending" });
-    expect(adapter.apply(harness.session)).toMatchObject({ status: "applied", messageCount: 1 });
+    expect(adapter.schedule(harness.session, "travel", harness.session.getLeafId() ?? undefined)).toMatchObject({ status: "pending" });
+    expect(adapter.apply(harness.session, "travel")).toMatchObject({ status: "applied", messageCount: 1 });
     expect(agent.state.messages).toEqual(harness.session.buildSessionContext().messages);
   });
 
@@ -68,21 +68,34 @@ describe("live AgentSession adapter against pinned OMP", () => {
     expect(hostClass.prototype.getContextUsage).toBe(wrapped);
     hostClass.prototype.getContextUsage.call(session);
     expect(calls).toBe(1);
-    expect(first.schedule(harness.session).status).toBe("pending");
-    expect(second.apply(harness.session).status).toBe("applied");
+    expect(first.schedule(harness.session, "travel").status).toBe("pending");
+    expect(second.apply(harness.session, "travel").status).toBe("applied");
   });
 
-  test("reports unavailable for an unsupported version or host shape", () => {
-    const unsupportedVersion = createLiveAgentSessionAdapter({ hostVersion: "16.4.4" });
-    expect(unsupportedVersion.installation).toMatchObject({ status: "unavailable", reason: "unsupported_host_version" });
-    const unsupportedOutcome = unsupportedVersion.schedule({});
-    expect(unsupportedOutcome).toMatchObject({ status: "unavailable" });
-    expect(getLiveAgentSyncRecoveryGuidance(unsupportedOutcome)).toContain("Reload");
-
+  test("reports unavailable only when required runtime capabilities are absent", () => {
     const unsupportedShape = createLiveAgentSessionAdapter({
       AgentSessionClass: { prototype: {} } as AgentSessionHostClass,
     });
     expect(unsupportedShape.installation).toMatchObject({ status: "unavailable", reason: "unsupported_host_shape" });
+    const unsupportedOutcome = unsupportedShape.schedule({}, "travel");
+    expect(unsupportedOutcome).toMatchObject({ status: "unavailable" });
+    expect(getLiveAgentSyncRecoveryGuidance(unsupportedOutcome)).toContain("Reload");
+
+    class MissingReplaceMessagesSession {
+      getContextUsage() { return undefined; }
+    }
+    const missingCapability = createLiveAgentSessionAdapter({
+      AgentSessionClass: MissingReplaceMessagesSession as unknown as AgentSessionHostClass,
+    });
+    const manager = {};
+    MissingReplaceMessagesSession.prototype.getContextUsage.call({
+      sessionManager: manager,
+      agent: { state: { messages: [] } },
+    } as never);
+    expect(missingCapability.schedule(manager, "travel")).toMatchObject({
+      status: "unavailable",
+      reason: "unsupported_session_shape",
+    });
   });
 
   test("records a terminal diagnostic when the associated manager cannot expose its leaf", () => {
@@ -95,11 +108,11 @@ describe("live AgentSession adapter against pinned OMP", () => {
     const brokenManager = { getLeafId: () => { throw new Error("leaf unavailable"); } };
     IsolatedAgentSession.prototype.getContextUsage.call({
       sessionManager: brokenManager,
-      agent: { replaceMessages() {} },
+      agent: { state: { messages: [] }, replaceMessages() {} },
     } as never);
 
-    expect(adapter.schedule(brokenManager)).toMatchObject({ status: "pending" });
-    expect(adapter.apply(brokenManager)).toMatchObject({
+    expect(adapter.schedule(brokenManager, "travel")).toMatchObject({ status: "pending" });
+    expect(adapter.apply(brokenManager, "travel")).toMatchObject({
       status: "failed",
       reason: "read_leaf_failed",
       message: "leaf unavailable",
@@ -110,7 +123,7 @@ describe("live AgentSession adapter against pinned OMP", () => {
   test("reports skipped without an association and failed when replacement throws", () => {
     const missingManager = {};
     const adapter = createLiveAgentSessionAdapter();
-    expect(adapter.schedule(missingManager)).toMatchObject({ status: "skipped", reason: "missing_association" });
+    expect(adapter.schedule(missingManager, "missing")).toMatchObject({ status: "skipped", reason: "missing_association" });
 
     const harness = createHarness();
     const { session } = createSession(harness.session);
@@ -118,13 +131,47 @@ describe("live AgentSession adapter against pinned OMP", () => {
     session.agent.replaceMessages = () => {
       throw new Error("replacement refused");
     };
-    expect(adapter.schedule(harness.session)).toMatchObject({ status: "pending" });
-    const failure = adapter.apply(harness.session);
+    expect(adapter.schedule(harness.session, "travel")).toMatchObject({ status: "pending" });
+    const failure = adapter.apply(harness.session, "travel");
     expect(failure).toMatchObject({
       status: "failed",
       reason: "replace_messages_failed",
       message: "replacement refused",
     });
     expect(getLiveAgentSyncRecoveryGuidance(failure)).toContain("Reload");
+  });
+
+  test("does not consume a newer pending ticket on an unrelated tool end", () => {
+    const harness = createHarness();
+    const { session } = createSession(harness.session);
+    const adapter = createLiveAgentSessionAdapter();
+    session.getContextUsage();
+
+    expect(adapter.schedule(harness.session, "newer-travel")).toMatchObject({ status: "pending" });
+    expect(adapter.apply(harness.session, "older-travel")).toMatchObject({ status: "skipped", reason: "not_pending" });
+    expect(adapter.getStatus(harness.session)).toMatchObject({ status: "pending" });
+    expect(adapter.apply(harness.session, "newer-travel")).toMatchObject({ status: "applied" });
+  });
+
+  test("fails when replaceMessages does not retain the rebuilt message sequence", () => {
+    const harness = createHarness();
+    harness.session.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "must replace" }],
+      timestamp: Date.now(),
+    });
+    const { session } = createSession(harness.session);
+    const retainedMessages = session.agent.state.messages;
+    const adapter = createLiveAgentSessionAdapter();
+    session.getContextUsage();
+    session.agent.replaceMessages = () => undefined;
+
+    expect(adapter.schedule(harness.session, "ignored")).toMatchObject({ status: "pending" });
+    expect(adapter.apply(harness.session, "ignored")).toMatchObject({
+      status: "failed",
+      reason: "replace_messages_failed",
+      message: "AgentSession.agent.replaceMessages did not retain the replacement message sequence",
+    });
+    expect(session.agent.state.messages).toBe(retainedMessages);
   });
 });
