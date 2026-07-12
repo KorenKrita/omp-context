@@ -7,7 +7,9 @@ describe("maintainer documentation contract", () => {
     const readme = await repoFile("README.md");
 
     for (const fact of [
-      "`omp-context` 是唯一 canonical ACM",
+      "由 KorenKrita 独立维护的第三方 OMP",
+      "不是 OMP 官方组件",
+      "ACM 实现与 guidance 的唯一同步源",
       "magic-acm-context",
       "bun run sync:acm",
       "--canonical-root",

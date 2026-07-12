@@ -1,10 +1,10 @@
 # omp-context
 
-`omp-context` 是 OMP 的 Agentic Context Management（ACM）插件，也是唯一 canonical ACM 实现与 guidance 仓库。它注册 `acm_checkpoint`、`acm_timeline`、`acm_travel`，并通过公开的 `before_agent_start` hook 交付 always-on CORE。
+`omp-context` 是由 KorenKrita 独立维护的第三方 OMP Agentic Context Management（ACM）插件，不是 OMP 官方组件。它注册 `acm_checkpoint`、`acm_timeline`、`acm_travel`，并通过公开的 `before_agent_start` hook 交付 always-on CORE。
 
 ## 仓库关系
 
-- `omp-context` 是唯一 canonical ACM；实现、Host Bridge、CORE、advanced Skill 与生成产物都从这里维护。
+- 在 KorenKrita 维护的 `omp-context` / `magic-acm-context` 两个仓库之间，`omp-context` 是 ACM 实现与 guidance 的唯一同步源；Host Bridge、CORE、advanced Skill 与生成产物都从这里维护。
 - `magic-acm-context` 是 consumer，只能通过本仓库的 `bun run sync:acm` 手动接收已声明的 ACM surface；同步方向不可逆。
 - standalone extension 直接注册 CORE prompt hook；integrated consumer 禁用该 hook，并由唯一的 consumer prompt orchestrator 调用 canonical `ensureAcmCoreSegment` 后组合 Magic Context-owned segments。两者共享同一 CORE producer，不形成 functional fork。
 
