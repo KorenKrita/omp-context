@@ -18,6 +18,7 @@ import {
   type LabelMaps,
 } from "./lib.js";
 import { buildSessionMessages } from "./host-bridge.js";
+import { getLiveAgentSyncRecoveryGuidance } from "./live-agent-session-adapter.js";
 import type { AcmSessionRuntime } from "./runtime.js";
 import { GUIDANCE_CUES, RECOVERY_GUIDANCE, TOOL_DESCRIPTIONS } from "./generated-guidance.js";
 
@@ -334,7 +335,8 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
           : "message" in liveSync
             ? ` — ${liveSync.message}`
             : "";
-      hudParts.push(`• Live Agent Sync:  ${liveSync.status}${liveSyncDetail}`);
+      const liveSyncRecovery = getLiveAgentSyncRecoveryGuidance(liveSync);
+      hudParts.push(`• Live Agent Sync:  ${liveSync.status}${liveSyncDetail}${liveSyncRecovery ? ` ${liveSyncRecovery}` : ""}`);
       const cue = params.view === "active"
         ? GUIDANCE_CUES.timelineActive
         : params.view === "checkpoints"

@@ -49,6 +49,16 @@ export interface LiveAgentSessionAdapterOptions {
   hostVersion?: string;
 }
 
+export function getLiveAgentSyncRecoveryGuidance(outcome: AgentSessionSyncOutcome): string | null {
+  if (outcome.status === "unavailable") {
+    return `Persistent context rebuild remains active. Reload the session after installing the exact supported OMP ${SUPPORTED_AGENT_SESSION_HOST_VERSION} host if native AgentSession accounting must be refreshed.`;
+  }
+  if (outcome.status === "failed") {
+    return "Persistent context rebuild remains active and the traveled branch is preserved. Reload the session to reconstruct native AgentSession state before relying on native context accounting.";
+  }
+  return null;
+}
+
 export function readInstalledAgentSessionHostVersion(): string | undefined {
   try {
     const require = createRequire(`${import.meta.dir}/package.json`);

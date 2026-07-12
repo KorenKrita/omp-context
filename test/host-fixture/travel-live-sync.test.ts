@@ -13,6 +13,11 @@ import type {
 import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import * as zod from "zod/v4";
 import registerAcmExtension, { fixOrphanedToolUse } from "./.acm-build/index.js";
+import { createLiveAgentSessionAdapter } from "./.acm-build/live-agent-session-adapter.js";
+import { registerAcmLifecycle } from "./.acm-build/runtime-lifecycle.js";
+import { AcmSessionRuntime } from "./.acm-build/runtime.js";
+import { registerTimelineTool } from "./.acm-build/timeline-tool.js";
+import { registerTravelTool } from "./.acm-build/travel-tool.js";
 import { useHostSessionHarnesses } from "./harness.js";
 
 const TOOL_CALL_ID = "travel-live-sync";
@@ -187,5 +192,148 @@ describe("successful travel synchronizes the pinned live AgentSession", () => {
     );
     const timelineText = timeline.content.map((part) => part.type === "text" ? part.text : "").join("\n");
     expect(timelineText).toContain("Live Agent Sync:  applied");
+  });
+
+  test("preserves the traveled branch and persistent provider context when live replacement fails", async () => {
+    const harness = createHarness();
+    const rootId = harness.session.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "failure branch root" }],
+      timestamp: Date.now(),
+    });
+    const abandonedId = harness.session.appendMessage(assistantText("abandoned live state"));
+    const handlers = new Map<string, ExtensionHandler<never>[]>();
+    let travelTool: ToolDefinition | undefined;
+    let timelineTool: ToolDefinition | undefined;
+    const api = {
+      zod,
+      registerTool(tool: ToolDefinition) {
+        if (tool.name === "acm_travel") travelTool = tool;
+        if (tool.name === "acm_timeline") timelineTool = tool;
+      },
+      on(event: string, handler: ExtensionHandler<never>) {
+        const current = handlers.get(event) ?? [];
+        current.push(handler);
+        handlers.set(event, current);
+      },
+    } as unknown as ExtensionAPI;
+    registerAcmExtension(api);
+
+    const staleMessages = harness.session.buildSessionContext().messages as AgentMessage[];
+    const agent = new Agent({ initialState: { messages: staleMessages } });
+    const session = new AgentSession({
+      agent,
+      sessionManager: harness.session,
+      settings: Settings.isolated({ "compaction.enabled": false }),
+      modelRegistry: {} as ModelRegistry,
+      extensionRunner: { hasHandlers: () => false } as unknown as ExtensionRunner,
+    });
+    const notifications: string[] = [];
+    const context = {
+      sessionManager: harness.session,
+      getContextUsage: () => session.getContextUsage(),
+      ui: { notify(message: string) { notifications.push(message); } },
+    } as unknown as ExtensionContext;
+    session.getContextUsage();
+    session.agent.replaceMessages = () => {
+      throw new Error("replacement refused by fixture");
+    };
+
+    const result = await travelTool!.execute(
+      "travel-failure",
+      { target: rootId, summary: HANDOFF, backupCurrentHeadAs: "live-sync-failure-done" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(resultDetails(result)).toMatchObject({ liveAgentSessionSyncState: "pending" });
+    for (const handler of handlers.get("tool_execution_end") ?? []) {
+      await handler({
+        type: "tool_execution_end",
+        toolCallId: "travel-failure",
+        toolName: "acm_travel",
+      } as never, context);
+    }
+
+    expect(agent.state.messages).toEqual(staleMessages);
+    expect(harness.session.getEntry(abandonedId)).toBeDefined();
+    expect(harness.session.getEntries().some((entry) => entry.type === "label" && entry.label === "live-sync-failure-done")).toBe(true);
+    expect(harness.session.getEntries().some((entry) => entry.type === "branch_summary")).toBe(true);
+    expect(hasToolCall(harness.session.buildSessionContext().messages as AgentMessage[], "travel-failure")).toBe(false);
+
+    let providerContext = staleMessages;
+    for (const handler of handlers.get("context") ?? []) {
+      const response = await handler({ type: "context", messages: providerContext } as never, context) as { messages?: AgentMessage[] } | undefined;
+      if (response?.messages) providerContext = response.messages;
+    }
+    expect(providerContext).toEqual(fixOrphanedToolUse(harness.session.buildSessionContext().messages as AgentMessage[]));
+
+    const timeline = await timelineTool!.execute("timeline-after-failure", { view: "active" }, undefined, undefined, context);
+    const timelineText = timeline.content.map((part) => part.type === "text" ? part.text : "").join("\n");
+    expect(timelineText).toContain("Live Agent Sync:  failed");
+    expect(timelineText).toContain("replacement refused by fixture");
+    expect(timelineText).toContain("Reload the session");
+    expect(notifications).toEqual([]);
+  });
+
+  test("keeps travel functional and reports reload guidance when the pinned live adapter is unavailable", async () => {
+    const harness = createHarness();
+    const rootId = harness.session.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "unsupported host root" }],
+      timestamp: Date.now(),
+    });
+    harness.session.appendMessage(assistantText("fold this unsupported-host path"));
+    const handlers = new Map<string, ExtensionHandler<never>[]>();
+    let travelTool: ToolDefinition | undefined;
+    let timelineTool: ToolDefinition | undefined;
+    const api = {
+      zod,
+      registerTool(tool: ToolDefinition) {
+        if (tool.name === "acm_travel") travelTool = tool;
+        if (tool.name === "acm_timeline") timelineTool = tool;
+      },
+      on(event: string, handler: ExtensionHandler<never>) {
+        const current = handlers.get(event) ?? [];
+        current.push(handler);
+        handlers.set(event, current);
+      },
+    } as unknown as ExtensionAPI;
+    const runtime = new AcmSessionRuntime(createLiveAgentSessionAdapter({ hostVersion: "16.4.4" }));
+    registerTravelTool(api, runtime);
+    registerTimelineTool(api, runtime);
+    registerAcmLifecycle(api, runtime);
+    const context = {
+      sessionManager: harness.session,
+      getContextUsage: () => undefined,
+      ui: { notify() {} },
+    } as unknown as ExtensionContext;
+    const staleMessages = harness.session.buildSessionContext().messages as AgentMessage[];
+
+    const result = await travelTool!.execute(
+      "travel-unavailable",
+      { target: rootId, summary: HANDOFF, backupCurrentHeadAs: "live-sync-unavailable-done" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(resultDetails(result)).toMatchObject({
+      contextRefreshState: "pending",
+      liveAgentSessionSyncState: "unavailable",
+    });
+    const resultText = result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
+    expect(resultText).toContain("Reload the session");
+
+    let providerContext = staleMessages;
+    for (const handler of handlers.get("context") ?? []) {
+      const response = await handler({ type: "context", messages: providerContext } as never, context) as { messages?: AgentMessage[] } | undefined;
+      if (response?.messages) providerContext = response.messages;
+    }
+    expect(providerContext).toEqual(fixOrphanedToolUse(harness.session.buildSessionContext().messages as AgentMessage[]));
+
+    const timeline = await timelineTool!.execute("timeline-unavailable", { view: "active" }, undefined, undefined, context);
+    const timelineText = timeline.content.map((part) => part.type === "text" ? part.text : "").join("\n");
+    expect(timelineText).toContain("Live Agent Sync:  unavailable");
+    expect(timelineText).toContain("Reload the session");
   });
 });

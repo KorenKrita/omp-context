@@ -40,6 +40,10 @@ describe("exact OMP host fixture", () => {
       "index.js",
       "lib.js",
       "live-agent-session-adapter.js",
+      "runtime-lifecycle.js",
+      "runtime.js",
+      "timeline-tool.js",
+      "travel-tool.js",
     ]);
     expect(evidence.resolvedPackages.map(({ packageName }) => packageName).sort()).toEqual([...packages].sort());
     for (const entry of evidence.resolvedPackages) {

@@ -7,6 +7,7 @@ import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-regis
 import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import {
   createLiveAgentSessionAdapter,
+  getLiveAgentSyncRecoveryGuidance,
   type AgentSessionHostClass,
 } from "./.acm-build/live-agent-session-adapter.js";
 import { useHostSessionHarnesses } from "./harness.js";
@@ -73,7 +74,9 @@ describe("live AgentSession adapter against pinned OMP", () => {
   test("reports unavailable for an unsupported version or host shape", () => {
     const unsupportedVersion = createLiveAgentSessionAdapter({ hostVersion: "16.4.4" });
     expect(unsupportedVersion.installation).toMatchObject({ status: "unavailable", reason: "unsupported_host_version" });
-    expect(unsupportedVersion.schedule({})).toMatchObject({ status: "unavailable" });
+    const unsupportedOutcome = unsupportedVersion.schedule({});
+    expect(unsupportedOutcome).toMatchObject({ status: "unavailable" });
+    expect(getLiveAgentSyncRecoveryGuidance(unsupportedOutcome)).toContain("Reload");
 
     const unsupportedShape = createLiveAgentSessionAdapter({
       AgentSessionClass: { prototype: {} } as AgentSessionHostClass,
@@ -93,10 +96,12 @@ describe("live AgentSession adapter against pinned OMP", () => {
       throw new Error("replacement refused");
     };
     expect(adapter.schedule(harness.session)).toMatchObject({ status: "pending" });
-    expect(adapter.apply(harness.session)).toMatchObject({
+    const failure = adapter.apply(harness.session);
+    expect(failure).toMatchObject({
       status: "failed",
       reason: "replace_messages_failed",
       message: "replacement refused",
     });
+    expect(getLiveAgentSyncRecoveryGuidance(failure)).toContain("Reload");
   });
 });

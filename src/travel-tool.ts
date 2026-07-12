@@ -27,6 +27,7 @@ import {
 } from "./host-bridge.js";
 import { findLastMeaningfulEntry } from "./entry-resolution.js";
 import { executeTravelMutation } from "./travel-coordinator.js";
+import { getLiveAgentSyncRecoveryGuidance } from "./live-agent-session-adapter.js";
 import type { AcmSessionRuntime } from "./runtime.js";
 import { GUIDANCE_CUES, RECOVERY_GUIDANCE, TOOL_DESCRIPTIONS } from "./generated-guidance.js";
 
@@ -283,6 +284,12 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
             remainingBackupLabel: mutation.remainingBackupLabel,
             contextRefreshPending: mutation.refreshRequired,
             contextRefreshState: mutation.refreshRequired ? "pending" : "not_scheduled",
+            liveAgentSessionSyncState: "skipped",
+            liveAgentSessionSync: {
+              status: "skipped",
+              reason: "branch_not_applied",
+              message: "Live AgentSession synchronization was not scheduled because travel did not definitively succeed",
+            },
             recoveryAction,
           },
         };
@@ -296,10 +303,11 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
         toolCallId,
         resultingLeafId,
       );
+      const liveAgentSessionSyncRecovery = getLiveAgentSyncRecoveryGuidance(liveAgentSessionSync);
       const afterMessagesResult = buildSessionMessages(sessionManager);
       if (!afterMessagesResult.ok) {
         return {
-          content: [{ type: "text" as const, text: `Travel mutation completed, but session-message evidence is unavailable: ${afterMessagesResult.message}. ${RECOVERY_GUIDANCE.refreshPending}` }],
+          content: [{ type: "text" as const, text: `Travel mutation completed, but session-message evidence is unavailable: ${afterMessagesResult.message}. ${RECOVERY_GUIDANCE.refreshPending}${liveAgentSessionSyncRecovery ? ` ${liveAgentSessionSyncRecovery}` : ""}` }],
           details: {
             error: "build_messages_failed",
             message: afterMessagesResult.message,
@@ -340,6 +348,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
           type: "text" as const,
           text: [
             `Travel complete. target=${params.target} (${targetId}); origin=${originLabel ? `${originLabel}@${originId}` : originId}; summaryEntryId=${summaryEntryId}; resultingLeafId=${resultingLeafId}; backup=${backupText} (${backupOutcome}); contextTokens=${formatNumericValue(usageBeforeTokens)} → ${formatNumericValue(estimatedUsageAfterTokens)} est. (delta=${formatSignedDelta(usageDelta.tokenDelta)}); contextPercent=${usageBeforePercentText} → ${estimatedUsageAfterPercentText} est. (delta=${formatSignedDelta(usageDelta.percentagePointDelta, 1, " pp")}); sessionMessages=${messageDelta}; contextRefresh=pending; liveAgentSessionSync=${liveAgentSessionSync.status}.`,
+            liveAgentSessionSyncRecovery,
             resolved.fromOffPath ? RECOVERY_GUIDANCE.restoredHistory : null,
             nextCue,
           ].filter((line): line is string => line !== null).join("\n"),
