@@ -63,7 +63,7 @@ function captureRegisteredTools(): RegisteredTool[] {
 }
 
 describe("canonical ACM CORE", () => {
-  test("contains the fixed vocabulary, fold gate, handoff order, and representative examples", () => {
+  test("preserves the base workflow while adding a bounded rebase gate", () => {
     for (const word of ["working set", "boundary", "handoff", "archive", "chain", "burst", "anchor gravity", "rebase", "cold start"]) {
       expect(ACM_CORE.toLowerCase()).toContain(word);
     }
@@ -71,14 +71,28 @@ describe("canonical ACM CORE", () => {
       .map((slot) => ACM_CORE.indexOf(slot));
     expect(slotPositions.every((position) => position >= 0)).toBe(true);
     expect([...slotPositions].sort((a, b) => a - b)).toEqual(slotPositions);
-    expect(ACM_CORE).toContain("Burst example");
-    expect(ACM_CORE).toContain("Failed-direction example");
+    for (const baseBehavior of [
+      "New chain starts",
+      "Phase, attempt, or batch item starts",
+      "Unbounded burst or risky step is next",
+      "Findings are distilled",
+      "Direction is rejected or superseded",
+      "Final answer is next",
+    ]) {
+      expect(ACM_CORE).toContain(baseBehavior);
+    }
+    expect(ACM_CORE).toContain("Local fold example");
+    expect(ACM_CORE).not.toContain("Failed-direction example");
     expect(ACM_CORE).toContain("Finished-chain rebase example");
     expect(ACM_CORE).toContain("### Rebase gate");
+    expect(ACM_CORE).toContain("Structural reset passes only when");
+    expect(ACM_CORE).toContain("projected summary depth does not grow");
+    expect(ACM_CORE).toContain("Cold start passes only when");
     expect(ACM_CORE).toContain("evaluate candidate bases from earliest to latest");
     expect(ACM_CORE).toContain("Root is ideal when it passes; it is never presumed safe");
     expect(ACM_CORE).toContain("Context pressure triggers a rebase check");
     expect(ACM_CORE).toContain("does not lower the cold start gate or authorize travel");
+    expect(ACM_CORE.length).toBeLessThan(6000);
   });
 
   test("appends CORE once while preserving existing system segments in order", async () => {
@@ -144,7 +158,7 @@ describe("advanced context-management routing", () => {
     expect(skill).toContain("CORE owns the normal path");
     expect(skill).not.toContain("## Fold gate");
     expect(skill).not.toContain("Goal: <");
-    expect(skill).not.toContain("Burst example");
+    expect(skill).not.toContain("Local fold example");
     expect(skill).not.toContain("Use continuously");
     for (const ordinaryCase of [
       "ordinary checkpointing",
@@ -155,6 +169,23 @@ describe("advanced context-management routing", () => {
     ]) {
       expect(skill.toLowerCase()).toContain(ordinaryCase);
     }
+  });
+
+  test("keeps advanced completion criteria factual and checkable", async () => {
+    const target = await Bun.file(new URL("../skills/context-management/references/target-selection.md", import.meta.url)).text();
+    const archive = await Bun.file(new URL("../skills/context-management/references/archive-recovery.md", import.meta.url)).text();
+    const exceptional = await Bun.file(new URL("../skills/context-management/references/exceptional-recovery.md", import.meta.url)).text();
+
+    expect(target).toContain("tree topology orders them");
+    expect(target).toContain("must precede at least one active `branch_summary`");
+    expect(target).toContain("projected summary depth must not grow");
+    expect(target).toContain("every surviving item has one authoritative home");
+    expect(archive).toContain("Pending is scheduled work, not success");
+    expect(archive).toContain("return to the Skill router and replace this reference");
+    expect(archive).not.toContain("structural effect");
+    expect(exceptional).toContain("branch creation was not applied");
+    expect(exceptional).toContain("mutation may have landed");
+    expect(exceptional).not.toContain("failed travel rollback means branch mutation may be partial");
   });
 
   test("routes each advanced branch through an independently loadable reference", async () => {
@@ -170,12 +201,17 @@ describe("advanced context-management routing", () => {
       "archive-recovery.md": ["Archive recovery round trip", "<front>-resume", "Archive drift"],
       "exceptional-recovery.md": [
         "Travel failure",
-        "Rollback failure",
+        "Backup rollback failure",
+        "Indeterminate branch mutation",
         "Context-refresh exhaustion",
         "Restored history",
         "No-saving recovery",
       ],
     } as const;
+
+    expect(skill).toContain("Load one reference at a time");
+    expect(skill).toContain("observable condition changes");
+    expect(skill).toContain("replace the active reference");
 
     for (const [file, branchHeadings] of Object.entries(references)) {
       expect(skill).toContain(`references/${file}`);
@@ -188,6 +224,7 @@ describe("advanced context-management routing", () => {
       }
       expect(content).not.toContain("## Fold gate");
       expect(content).not.toContain("Goal: <");
+      expect(content).not.toContain("structural effect");
     }
   });
 });

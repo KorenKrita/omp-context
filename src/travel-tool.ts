@@ -63,7 +63,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
   const registerTool = (tool: Parameters<ExtensionAPI["registerTool"]>[0] & { strict?: boolean }) => pi.registerTool(tool);
   const schema = pi.zod.object({
     target: pi.zod.string().min(1).max(256).describe(
-      "Checkpoint name, history node ID, or 'root'. For a local fold, choose a target before the named boundary. For a rebase, run cold start on candidate bases from earliest to latest and choose the earliest safe base; root is a candidate, not a default. On large trees use acm_timeline with view checkpoints or search; use view tree only when topology matters.",
+      "Checkpoint name, history node ID, or 'root'. For a local fold, choose a target before the named boundary. For a rebase, evaluate candidate bases from earliest to latest and choose the first whose target retires an active summary without growing projected depth and whose snapshot passes cold start; root is a candidate, not a default. On large trees use acm_timeline with view checkpoints or search; use view tree only when topology matters.",
     ),
     summary: pi.zod.string().min(1).max(10000).describe(
       `Handoff summary — the working state after travel. It must make the next action executable without rereading the folded trail. A rebase snapshot must pass cold start: a fresh agent can execute NEXT from this handoff and direct evidence pointers without reading archived summaries. Fill every slot, write 'none' rather than dropping one: ${HANDOFF_SLOT_HINT}. Include recovery pointers; pointers over dumps. Max 10000 chars.`,

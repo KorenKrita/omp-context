@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { z } from "zod";
 import registerAcmExtension from "./index.js";
@@ -22,6 +23,8 @@ function captureToolDescriptions(): Map<string, string> {
   return tools;
 }
 
+const travelToolSource = readFileSync(new URL("./travel-tool.ts", import.meta.url), "utf8");
+
 describe("ACM tool description contract", () => {
   test("registers every runtime description from canonical generated guidance", () => {
     expect(captureToolDescriptions()).toEqual(new Map([
@@ -36,6 +39,12 @@ describe("ACM tool description contract", () => {
     expect(TOOL_DESCRIPTIONS.timeline).toContain("Omit view for `active`");
     expect(TOOL_DESCRIPTIONS.timeline).toContain("active summary depth and projected depth");
     expect(TOOL_DESCRIPTIONS.timeline).not.toMatch(/list_checkpoints|full_tree|active_path/);
+  });
+
+  test("keeps the rebase target schema aligned with structural reset and cold start", () => {
+    expect(travelToolSource).toContain("retires an active summary without growing projected depth");
+    expect(travelToolSource).toContain("whose snapshot passes cold start");
+    expect(travelToolSource).toContain("root is a candidate, not a default");
   });
 
   test("keeps checkpoint and travel descriptions concise and evidence-oriented", () => {
