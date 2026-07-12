@@ -13,6 +13,11 @@ import type { AcmSessionRuntime } from "./runtime.js";
 export function registerAcmLifecycle(pi: ExtensionAPI, runtime: AcmSessionRuntime): void {
   const contextRefresh = runtime.contextRefresh;
 
+  pi.on("tool_execution_end", (event, ctx: ExtensionContext) => {
+    if (event.toolName !== "acm_travel") return;
+    runtime.applyLiveAgentSync(ctx.sessionManager, event.toolCallId);
+  });
+
   pi.on("context", (event, ctx: ExtensionContext) => {
     const sessionManager = ctx.sessionManager;
     if (!contextRefresh.isPending(sessionManager)) {

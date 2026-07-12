@@ -326,6 +326,15 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
         const attempt = runtime.contextRefresh.getAttemptCount(sessionManager);
         hudParts.push(`• Context Sync:     persistent rebuild active${runtime.contextRefresh.hasRebuilt(sessionManager) ? "" : " (travel pending)"}${attempt > 0 ? ` (retry ${attempt}/${ContextRefreshRegistry.MAX_ATTEMPTS})` : ""}`);
       }
+      const liveSync = runtime.getLiveAgentSyncStatus(sessionManager);
+      const liveSyncDetail = liveSync.status === "applied"
+        ? ` — ${liveSync.messageCount} message(s) at ${liveSync.leafId ?? "no leaf"}`
+        : liveSync.status === "pending" && liveSync.preferredLeafId
+          ? ` — awaiting tool completion for ${liveSync.preferredLeafId}`
+          : "message" in liveSync
+            ? ` — ${liveSync.message}`
+            : "";
+      hudParts.push(`• Live Agent Sync:  ${liveSync.status}${liveSyncDetail}`);
       const cue = params.view === "active"
         ? GUIDANCE_CUES.timelineActive
         : params.view === "checkpoints"

@@ -75,7 +75,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
     parameters: schema as unknown as TSchema,
     strict: false,
     async execute(
-      _id: string,
+      toolCallId: string,
       rawParams: unknown,
       signal: AbortSignal | undefined,
       _onUpdate: unknown,
@@ -291,6 +291,11 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
       const summaryEntryId = mutation.summaryEntryId;
       const resultingLeafId = mutation.resultingLeafId;
       runtime.scheduleRefresh(sessionManager, summaryEntryId);
+      const liveAgentSessionSync = runtime.scheduleLiveAgentSync(
+        sessionManager,
+        toolCallId,
+        resultingLeafId,
+      );
       const afterMessagesResult = buildSessionMessages(sessionManager);
       if (!afterMessagesResult.ok) {
         return {
@@ -304,6 +309,8 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
             summaryEntryId,
             resultingLeafId,
             contextRefreshPending: true,
+            liveAgentSessionSyncState: liveAgentSessionSync.status,
+            liveAgentSessionSync,
             recoveryAction: RECOVERY_GUIDANCE.refreshPending,
           },
         };
@@ -332,7 +339,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
         content: [{
           type: "text" as const,
           text: [
-            `Travel complete. target=${params.target} (${targetId}); origin=${originLabel ? `${originLabel}@${originId}` : originId}; summaryEntryId=${summaryEntryId}; resultingLeafId=${resultingLeafId}; backup=${backupText} (${backupOutcome}); contextTokens=${formatNumericValue(usageBeforeTokens)} → ${formatNumericValue(estimatedUsageAfterTokens)} est. (delta=${formatSignedDelta(usageDelta.tokenDelta)}); contextPercent=${usageBeforePercentText} → ${estimatedUsageAfterPercentText} est. (delta=${formatSignedDelta(usageDelta.percentagePointDelta, 1, " pp")}); sessionMessages=${messageDelta}; contextRefresh=pending.`,
+            `Travel complete. target=${params.target} (${targetId}); origin=${originLabel ? `${originLabel}@${originId}` : originId}; summaryEntryId=${summaryEntryId}; resultingLeafId=${resultingLeafId}; backup=${backupText} (${backupOutcome}); contextTokens=${formatNumericValue(usageBeforeTokens)} → ${formatNumericValue(estimatedUsageAfterTokens)} est. (delta=${formatSignedDelta(usageDelta.tokenDelta)}); contextPercent=${usageBeforePercentText} → ${estimatedUsageAfterPercentText} est. (delta=${formatSignedDelta(usageDelta.percentagePointDelta, 1, " pp")}); sessionMessages=${messageDelta}; contextRefresh=pending; liveAgentSessionSync=${liveAgentSessionSync.status}.`,
             resolved.fromOffPath ? RECOVERY_GUIDANCE.restoredHistory : null,
             nextCue,
           ].filter((line): line is string => line !== null).join("\n"),
@@ -372,6 +379,8 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
           resultingLeafId,
           contextRefreshPending: true,
           contextRefreshState: "pending",
+          liveAgentSessionSyncState: liveAgentSessionSync.status,
+          liveAgentSessionSync,
           fromOffPath: resolved.fromOffPath,
         },
       };
