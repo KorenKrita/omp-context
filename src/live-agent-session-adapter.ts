@@ -6,7 +6,7 @@ import type { ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent/session/s
 import { buildSessionMessages } from "./host-bridge.js";
 import { fixOrphanedToolUse } from "./message-sanitizer.js";
 
-export const SUPPORTED_AGENT_SESSION_HOST_VERSION = "16.4.5";
+export const SUPPORTED_AGENT_SESSION_HOST_VERSION = "16.4.6";
 const INSTALLATION_SYMBOL = Symbol.for("omp-context.live-agent-session-adapter.v1");
 
 interface LiveAgentSession {

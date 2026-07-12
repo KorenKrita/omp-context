@@ -18,7 +18,7 @@ Use exactly one primary category per observation:
 
 ## Observation template
 
-Append one row only after a real standalone or integrated session exposes the behavior.
+Append one row only after a real omp-context session exposes the behavior.
 
 | Date / session | Category | Observed evidence | Expected behavior | Outcome | Guidance or host action |
 |---|---|---|---|---|---|
@@ -31,7 +31,7 @@ Append one row only after a real standalone or integrated session exposes the be
 1. an entry above with recoverable **Observed evidence** that demonstrates a repeated or material agent failure; or
 2. a **changed host contract** that invalidates current runtime or recovery instructions.
 
-Before editing CORE or the advanced Skill, identify the smallest owning section, add or update a deterministic contract test, regenerate derived guidance, and verify standalone/integrated composition. If the evidence points to a runtime defect rather than agent understanding, fix the Host Bridge or tool contract instead of adding prose.
+Before editing CORE or the advanced Skill, identify the smallest owning section, add or update a deterministic contract test, regenerate derived guidance, and verify the public prompt hook and tool interface. If the evidence points to a runtime defect rather than agent understanding, fix the Host Bridge or tool contract instead of adding prose.
 
 ## Observations
 

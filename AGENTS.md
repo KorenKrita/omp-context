@@ -15,8 +15,9 @@
 ## 技术栈
 
 - TypeScript ESM (`"type": "module"`, `module: Node16`, `target: ES2022`, `strict: true`)
-- `@oh-my-pi/pi-coding-agent` ExtensionAPI 作为 peer dependency（精确版本 `16.4.5`），由 OMP 运行时提供
-- `@oh-my-pi/pi-agent-core`（token estimator）和 `@oh-my-pi/pi-ai` 同为精确版本 `16.4.5` 的 peer/dev dependency
+- `@oh-my-pi/pi-coding-agent` ExtensionAPI 作为 exact peer dependency，由 OMP 运行时提供
+- `@oh-my-pi/pi-agent-core`（token estimator）和 `@oh-my-pi/pi-ai` 与 coding agent 始终使用同一 exact peer/dev version
+- `package.json` 是当前支持版本的权威来源；repository-local pre-commit hook 会对齐并验证本机 `omp`
 - 工具参数 schema 使用运行时注入的 `pi.zod`
 - Source-first: OMP 直接加载 `src/*.ts`, 不打包 `dist/`
 
@@ -24,7 +25,7 @@
 
 ### 扩展入口
 
-`src/index.ts` 是短 composition root，默认导出 `registerAcmExtension(pi, options?)`。standalone 默认注册三个工具和七个事件 handler；integrated consumer 传 `{ promptInjection: false }`，由 consumer 的唯一 prompt orchestrator 调用 canonical `ensureAcmCoreSegment`。
+`src/index.ts` 是短 composition root，默认导出 `registerAcmExtension(pi)`，注册 canonical prompt hook、三个工具和七个事件 handler。
 
 `package.json` 的 `omp` 字段是 OMP 发现入口：
 
@@ -37,7 +38,7 @@
 
 ### checkpoint 使用 appendLabelChange
 
-不要用 `pi.setLabel(id, name)` 给会话节点打 label。OMP 16.4.5 的类型声明看起来支持两个参数，但扩展加载时拿到的 `ConcreteExtensionAPI.setLabel(label: string)` 仍只修改扩展显示名，不会写 session label。
+不要用 `pi.setLabel(id, name)` 给会话节点打 label。当前 exact host 的扩展加载路径中，`ConcreteExtensionAPI.setLabel(label: string)` 只修改扩展显示名，不会写 session label；该 seam 每次 commit 都由 real-host fixture 复验。
 
 当前实现通过 `appendCheckpointLabel()`、`applyBranchWithSummary()` 和 `rollbackCheckpointLabel()` 三个 typed mutation ports 访问完整 `SessionManager`。结果明确区分 `not_applied`、`applied` 与 `indeterminate`；返回值畸形时以 mutation 后可观察的 journal/leaf 状态为准，不能仅依赖 host 返回 ID。
 
@@ -86,11 +87,11 @@ travel 不保证降 token，也不再给出基于 500-token/2-percent 阈值的 
 
 ### Live AgentSession 同步仍依赖 pinned host seam
 
-OMP 16.4.5 的普通 tool context 仍不暴露原子的 tree-navigation/state-sync API。当前 `live-agent-session-adapter.ts` 只支持精确 OMP 16.4.5：通过幂等包装 `AgentSession.getContextUsage()`，按 SessionManager 对象 identity 捕获对应 live AgentSession，并在匹配的 `acm_travel` `tool_execution_end` 后从当前 active leaf 重建消息、调用 `agent.replaceMessages()`。关联和 pending state 使用 WeakMap/WeakRef；禁止全局 current-session、路径匹配或通用私有访问框架。
+当前 exact OMP host 的普通 tool context 仍不暴露原子的 tree-navigation/state-sync API。`live-agent-session-adapter.ts` 只支持 `package.json` 声明的精确版本：通过幂等包装 `AgentSession.getContextUsage()`，按 SessionManager 对象 identity 捕获对应 live AgentSession，并在匹配的 `acm_travel` `tool_execution_end` 后从当前 active leaf 重建消息、调用 `agent.replaceMessages()`。关联和 pending state 使用 WeakMap/WeakRef；禁止全局 current-session、路径匹配或通用私有访问框架。
 
 只有明确 `applied` 的 branch mutation 可以 schedule live sync。版本/shape 不支持、association 缺失或 replacement 失败时，不回滚已成功的 travel；持久 branch 与公开 `context` rebuild 继续生效，diagnostics 给出 `unavailable` / `failed` / `skipped` 与 reload guidance。成功同步后，native stored-context accounting 不再携带 pre-travel message array，因此不会立即触发 stale auto-compaction；真实 OMP compaction 仍完全由 host 拥有。
 
-该 adapter 的主要风险是 OMP 私有 lifecycle seam 在未来版本变化。升级 OMP 前必须先在 isolated fixture 验证捕获时机、`agent.replaceMessages()`、tool execution ordering、重复 travel、resume 和 multi-session isolation；若 OMP 暴露官方 refresh/navigation API，应删除该 adapter 并迁移到官方接口。
+该 adapter 的主要风险是 OMP 私有 lifecycle seam 在未来版本变化。每次 commit 前的 host contract gate 会读取本机 `omp` 版本，并在 cold candidate copy 中验证捕获时机、`agent.replaceMessages()`、tool execution ordering、重复 travel、resume 和 multi-session isolation；若 OMP 暴露官方 refresh/navigation API，应删除该 adapter 并迁移到官方接口。
 
 ### 没有 /acm command
 
@@ -143,7 +144,7 @@ Node16 moduleResolution 下需要从 OMP 子路径导入类型：
 | `src/travel-coordinator.ts` | travel transaction、compensation 与 refresh obligation |
 | `src/host-bridge.ts` | typed guarded mutation ports，不保存跨操作状态 |
 | `src/runtime.ts` / `src/runtime-lifecycle.ts` | session-scoped refresh、live sync、usage、compaction 与 context rebuild |
-| `src/live-agent-session-adapter.ts` | 精确 OMP 16.4.5 的 live AgentSession 捕获与 message replacement seam |
+| `src/live-agent-session-adapter.ts` | exact-version live AgentSession 捕获与 message replacement seam |
 | `src/entry-resolution.ts` / `src/message-sanitizer.ts` | meaningful entry resolution 与 orphan tool sanitation |
 | `src/label-journal.ts` / `src/lib.ts` | dependency-free alias replay 与纯领域逻辑 |
 | `src/generated-guidance.ts` | 从 canonical CORE / advanced guidance 派生的工具描述、正常 cue 与异常恢复片段 |
@@ -152,11 +153,35 @@ Node16 moduleResolution 下需要从 OMP 子路径导入类型：
 | `skills/context-management/references/target-selection.md` | 非显然 earliest-safe-base、interleaved fronts、missing anchor、raw node fallback、名称冲突 |
 | `skills/context-management/references/archive-recovery.md` | archive detail recovery round trip 与 archive-drift 防护 |
 | `skills/context-management/references/exceptional-recovery.md` | travel/rollback/refresh/restored-history/no-saving 异常恢复 |
-| `test/host-fixture/` | 精确 OMP 16.4.5 的真实 SessionManager/runtime contract fixtures |
+| `test/host-fixture/` | exact OMP host 的真实 SessionManager/runtime contract fixtures |
 | `scripts/generate-guidance.mjs` | 从 canonical guidance 生成运行时 artifacts |
-| `scripts/sync-acm.mjs` / `scripts/acm-sync-manifest.json` | declarative canonical → consumer 手动同步 |
-| `README.md` | 面向用户的安装、行为与维护说明 |
+| `scripts/precommit-host-contract.mjs` / `scripts/host-version.mjs` | 本机 OMP detection、cold candidate validation 与 exact-version promotion |
+| `.githooks/pre-commit` | 每次 commit 前执行 host contract gate |
+| `README.md` | 面向用户的产品说明 |
 | `.omp-plugin/marketplace.json` | marketplace 元数据 |
+
+## Host compatibility 与提交门禁
+
+仓库使用 `.githooks/pre-commit`，通过 `bun scripts/install-git-hooks.mjs` 设置 repository-local `core.hooksPath`。`bun install` 的 `prepare` 会自动完成安装；禁止修改 global Git config。
+
+每次 commit 都执行 `scripts/precommit-host-contract.mjs`：
+
+1. 从 `PATH` 上的 `omp` executable 定位本机 `@oh-my-pi/pi-coding-agent` package root。
+2. 验证本机 coding-agent、agent-core 与 pi-ai 版本完全一致。
+3. 若本机版本等于仓库 exact version，直接运行 typecheck、real-host fixture 和 version contract。
+4. 若版本不同，先复制当前 working tree 到隔离的 **cold candidate**，只在 candidate 中更新 package/fixture/adapter version，安装对应 release 并跑完整 host contract。
+5. Candidate 失败则阻止 commit 且不修改仓库；candidate 成功时，只有五个 promotion targets 均无现有改动才会更新真实仓库的 exact dependency fields、adapter constant 和两份 lock。任何目标已有 staged/unstaged/untracked work 都会 fail closed，避免覆盖用户内容。
+6. 真实仓库 promotion 后若 install/verification 意外失败，脚本恢复五个 tracked targets 并尝试按旧 lock reconcile dependencies；整个 gate 有 15 分钟总 deadline。
+7. 成功 promotion 仍会阻止本次 commit，要求人工 review/stage 后重新提交。
+
+手动命令：
+
+```bash
+bun run host:check-local    # 只验证；版本不一致时不写仓库
+bun run host:promote-local  # 验证成功后更新 exact version fields 与 locks
+```
+
+版本提升不得跳过 cold candidate。检查覆盖 extension registration、SessionManager mutation ports、session-context construction、token estimation、compaction lifecycle、live AgentSession capture/replacement、重复 travel、resume 和 multi-session isolation。Host contract 成功只证明已覆盖 seam 未失效，不代表未使用的 OMP surface 全部兼容。
 
 ## 开发注意事项
 

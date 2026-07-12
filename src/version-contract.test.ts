@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
-const supportedVersion = "16.4.5";
 const ompPackages = [
   "@oh-my-pi/pi-agent-core",
   "@oh-my-pi/pi-ai",
@@ -12,13 +11,17 @@ const ompPackages = [
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 interface PackageManifest {
+  scripts?: Record<string, string>;
   devDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
 }
 
 describe("exact OMP host support contract", () => {
-  test("pins peer, development, installed, and lock metadata to one exact release", async () => {
+  test("pins peer, development, installed, fixture, adapter, and lock metadata to one exact release", async () => {
     const manifest = await Bun.file(new URL("../package.json", import.meta.url)).json() as PackageManifest;
+    const supportedVersion = manifest.peerDependencies?.["@oh-my-pi/pi-coding-agent"];
+    expect(supportedVersion).toMatch(/^\d+\.\d+\.\d+$/);
+    if (!supportedVersion) throw new Error("Missing exact OMP host version");
 
     for (const packageName of ompPackages) {
       expect(manifest.peerDependencies?.[packageName]).toBe(supportedVersion);
@@ -29,6 +32,16 @@ describe("exact OMP host support contract", () => {
       ) as { version?: string };
       expect(installed.version).toBe(supportedVersion);
     }
+
+    const fixture = await Bun.file(new URL("../test/host-fixture/package.json", import.meta.url)).json() as {
+      dependencies?: Record<string, string>;
+      scripts?: Record<string, string>;
+    };
+    for (const packageName of ompPackages) expect(fixture.dependencies?.[packageName]).toBe(supportedVersion);
+    expect(fixture.scripts?.verify).toStartWith("bun install --frozen-lockfile && bun ./build-source.mjs &&");
+
+    const adapter = await Bun.file(new URL("./live-agent-session-adapter.ts", import.meta.url)).text();
+    expect(adapter).toContain(`SUPPORTED_AGENT_SESSION_HOST_VERSION = "${supportedVersion}"`);
 
     const lock = await Bun.file(new URL("../bun.lock", import.meta.url)).text();
     const workspaceSection = lock.split("\n  \"packages\":")[0] ?? "";
@@ -44,33 +57,17 @@ describe("exact OMP host support contract", () => {
     expect([...lockedOmpVersions]).toEqual([supportedVersion]);
   });
 
-  test("bootstraps the isolated fixture from its lock before building ACM source", async () => {
-    const fixture = await Bun.file(new URL("../test/host-fixture/package.json", import.meta.url)).json() as {
-      scripts?: Record<string, string>;
-    };
-
-    expect(fixture.scripts?.verify).toStartWith("bun install --frozen-lockfile && bun ./build-source.mjs &&");
-  });
-
-  test("documents the exact release and the complete promotion checklist", async () => {
-    const readme = await Bun.file(new URL("../README.md", import.meta.url)).text();
+  test("installs a repository-local pre-commit host contract gate", async () => {
+    const manifest = await Bun.file(new URL("../package.json", import.meta.url)).json() as PackageManifest;
+    const hook = await Bun.file(new URL("../.githooks/pre-commit", import.meta.url)).text();
     const agents = await Bun.file(new URL("../AGENTS.md", import.meta.url)).text();
-    expect(agents).toContain(`精确版本 \`${supportedVersion}\``);
-    expect(agents).not.toContain("16.3.15");
-    expect(readme).toContain(`支持的 OMP 版本：\`${supportedVersion}\``);
-    for (const item of [
-      "extension events",
-      "public context APIs",
-      "Host Bridge capabilities",
-      "session-context construction",
-      "tool registration",
-      "token estimation",
-      "compaction events",
-      "changelog review",
-    ]) {
-      expect(readme).toContain(item);
-    }
-    expect(readme).toContain("isolated candidate");
-    expect(readme).toContain("atomically replace every exact OMP version");
+
+    expect(manifest.scripts?.prepare).toContain("install-git-hooks.mjs");
+    expect(manifest.scripts?.["host:check-local"]).toContain("--check-only");
+    expect(manifest.scripts?.["host:promote-local"]).toContain("precommit-host-contract.mjs");
+    expect(hook).toContain("precommit-host-contract.mjs");
+    expect(agents).toContain("每次 commit");
+    expect(agents).toContain("host:promote-local");
+    expect(agents).toContain("cold candidate");
   });
 });

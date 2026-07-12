@@ -2,65 +2,42 @@ import { describe, expect, test } from "bun:test";
 
 const repoFile = (path: string) => Bun.file(new URL(`../${path}`, import.meta.url)).text();
 
-describe("maintainer documentation contract", () => {
-  test("documents canonical ownership, exact host support, and one-way manual synchronization", async () => {
+describe("product documentation contract", () => {
+  test("presents the user problem, product behavior, installation, and safety boundary", async () => {
     const readme = await repoFile("README.md");
 
-    for (const fact of [
-      "由 KorenKrita 独立维护的第三方 OMP",
-      "不是 OMP 官方组件",
-      "ACM 实现与 guidance 的唯一同步源",
-      "magic-acm-context",
-      "bun run sync:acm",
-      "--canonical-root",
-      "--consumer-root",
-      "transform match cardinality",
+    for (const claim of [
+      "让 OMP agent 主动维护自己的上下文",
+      "summary chain",
+      "Semantic rebase",
+      "cold start",
+      "acm_checkpoint",
+      "acm_timeline",
+      "acm_travel",
+      "omp install github:KorenKrita/omp-context",
+      "root 是理想候选，不是默认答案",
+      "不会回滚文件、进程、浏览器、Git commit 或远端服务",
+      "不会取消、替换或延迟 OMP 原生 compaction",
+      "AGENTS.md",
+    ]) {
+      expect(readme).toContain(claim);
+    }
+  });
+
+  test("keeps maintainer mechanics out of the product README", async () => {
+    const readme = await repoFile("README.md");
+    for (const maintainerDetail of [
+      "手动同步到",
+      "Host Bridge capabilities",
+      "atomically replace every exact OMP version",
       "rollback journal",
-      "acm-provenance.json",
-      "46 个 canonical mappings",
-      "runtime regression tests",
-      "no changes",
-      "不会执行任何 Git 操作",
-      "分别提交",
-      "支持的 OMP 版本：`16.4.5`",
-      "Typed host mutation ports",
-      "src/live-agent-session-adapter.ts",
-      "agent.replaceMessages()",
-      "公开 `context` event rebuild 仍然有效",
+      "provenance manifest",
     ]) {
-      expect(readme).toContain(fact);
-    }
-
-    expect(readme).toContain("skills/context-management/CORE.md");
-    expect(readme).toContain("skills/context-management/SKILL.md");
-    expect(readme).toContain("standalone extension 直接注册 CORE prompt hook");
-    expect(readme).toContain("唯一的 consumer prompt orchestrator");
-  });
-
-  test("states guidance maintenance facts without duplicating the normal agent contract", async () => {
-    const readme = await repoFile("README.md");
-
-    expect(readme).toContain("七槽 handoff 是 agent completion criterion");
-    expect(readme).toContain("不是 runtime 对语义正确性的证明");
-    expect(readme).toContain("高 context pressure 只触发 rebase check，不会降低 cold start gate 或自动授权 travel");
-    expect(readme).toContain("active summary depth");
-    expect(readme).toContain("projected summary depth");
-    expect(readme).toContain("observed failure");
-    expect(readme).toContain("changed host contract");
-    expect(readme).toContain("docs/agents/acm-dogfooding.md");
-
-    for (const duplicatedNormalRule of [
-      "## 时间旅行",
-      "## Fold gate",
-      "Goal: <",
-      "Checkpoint at these events",
-      "Fold only when all three",
-    ]) {
-      expect(readme).not.toContain(duplicatedNormalRule);
+      expect(readme).not.toContain(maintainerDetail);
     }
   });
 
-  test("keeps a lightweight observed-use record with distinct failure categories", async () => {
+  test("keeps observed-use evidence categories current", async () => {
     const dogfooding = await repoFile("docs/agents/acm-dogfooding.md");
     for (const category of [
       "missed checkpointing",
@@ -75,12 +52,11 @@ describe("maintainer documentation contract", () => {
     }
     expect(dogfooding).toContain("Observed evidence");
     expect(dogfooding).toContain("Do not change guidance from speculation");
-    expect(dogfooding).toContain("changed host contract");
   });
 });
 
 describe("repository agent guidance contract", () => {
-  test("documents the strict timeline API and current canonical artifacts", async () => {
+  test("owns architecture, exact-host maintenance, and the pre-commit gate", async () => {
     const agents = await repoFile("AGENTS.md");
 
     for (const contract of [
@@ -90,37 +66,24 @@ describe("repository agent guidance contract", () => {
       '`{ view: "tree", limit? }`',
       "src/host-bridge.ts",
       "src/travel-coordinator.ts",
-      "src/runtime-lifecycle.ts",
-      "src/label-journal.ts",
-      "src/generated-guidance.ts",
-      "skills/context-management/CORE.md",
-      "references/target-selection.md",
-      "references/archive-recovery.md",
-      "references/exceptional-recovery.md",
+      "src/live-agent-session-adapter.ts",
+      "scripts/precommit-host-contract.mjs",
+      "scripts/host-version.mjs",
+      ".githooks/pre-commit",
+      "每次 commit",
+      "cold candidate",
+      "host:promote-local",
     ]) {
       expect(agents).toContain(contract);
     }
 
-    for (const staleContract of [
-      "`list_checkpoints: true`",
-      "`full_tree: true`",
-      "references/playbook.md",
-      "timeline 模式",
-      "`setEntryLabel(sm, entryId, label)`",
-      "成功 tool result 会附带当前 context usage 和 **fold candidates**",
-      "`list_checkpoints` 按",
-      "timeline / `full_tree`",
-    ]) {
-      expect(agents).not.toContain(staleContract);
-    }
+    expect(agents).not.toContain("declarative canonical →");
   });
 
   test("keeps AGENTS focused on implementation contracts instead of restating CORE", async () => {
     const agents = await repoFile("AGENTS.md");
-
     expect(agents).toContain("normal-path agent guidance 的唯一可编辑来源");
     for (const duplicatedGuidance of [
-      "working set / boundary / handoff / archive / anchor gravity",
       "Goal/State/Evidence/External/Exclusions/Recover/NEXT",
       'target: "<task-chain-start>"',
       "Boundary decides whether folding is semantically appropriate",

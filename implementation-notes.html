@@ -16,7 +16,7 @@
 </head>
 <body>
   <h1>ACM Implementation Notes</h1>
-  <p class="meta">Created 2026-07-11 before implementation; updated 2026-07-12 for semantic rebase. These decisions were resolved during ACM grilling and specification sessions.</p>
+  <p class="meta">Current implementation decisions, updated 2026-07-12. Superseded cross-repository synchronization decisions were removed when omp-context became independently maintained.</p>
 
   <h2>Decision Record</h2>
   <table>
@@ -26,176 +26,83 @@
     <tbody>
       <tr>
         <td>user-decided</td>
-        <td><code>omp-context</code> is the canonical ACM repository.</td>
-        <td><code>magic-acm-context</code> consumes ACM through a one-way manual sync. The integrated repository is not an independent implementation authority.</td>
+        <td>Maintain <code>omp-context</code> as an independent repository.</td>
+        <td>The repository no longer owns or synchronizes another product repository. Product documentation, verification, release state, and host compatibility are local concerns only.</td>
       </tr>
       <tr>
         <td>user-decided</td>
-        <td>Synchronization remains manual.</td>
-        <td>Expand the local sync command to cover implementation, guidance, generated artifacts, and tests. Do not add CI parity, webhooks, scheduled synchronization, or automatic pull requests.</td>
-      </tr>
-      <tr>
-        <td>user-decided</td>
-        <td>Support exactly OMP <code>16.4.5</code>.</td>
-        <td><code>@oh-my-pi/pi-coding-agent</code>, <code>@oh-my-pi/pi-agent-core</code>, and <code>@oh-my-pi/pi-ai</code> must share the exact version. This replaces the previous exact <code>16.4.2</code> contract after changelog, imported-surface, type, and isolated real-host verification.</td>
+        <td>Track the exact locally installed OMP host through a pre-commit contract gate.</td>
+        <td>Every commit detects the local coding-agent, agent-core, and pi-ai versions. A changed version is validated in an isolated cold candidate before package metadata, the adapter constant, and locks are updated. Failed candidates leave the repository version untouched.</td>
       </tr>
       <tr>
         <td>user-decided</td>
         <td>Remain extension-only and synchronize live AgentSession state through one pinned adapter.</td>
-        <td><code>branchWithSummary()</code> remains the persistent tree mutation. After a definitively successful travel, the exact OMP 16.4.5 adapter rebuilds the active branch and calls the associated AgentSession's <code>agent.replaceMessages()</code> at the matching <code>tool_execution_end</code>. No OMP source patch or command-only navigation API is required.</td>
+        <td><code>branchWithSummary()</code> remains the persistent tree mutation. After a definitively successful travel, the exact-version adapter rebuilds the active branch and calls <code>agent.replaceMessages()</code> at the matching <code>tool_execution_end</code>.</td>
       </tr>
       <tr>
         <td>user-decided</td>
         <td>Isolate OMP internals behind one narrow Host Bridge.</td>
-        <td>All guarded SessionManager capabilities live at this seam. Domain logic and agent-facing tools consume typed structural results rather than casting host internals directly.</td>
+        <td>All guarded SessionManager mutations live at this seam. Domain logic and agent-facing tools consume typed structural results rather than casting host internals directly.</td>
       </tr>
       <tr>
         <td>user-decided</td>
-        <td>Verify runtime behavior with the real SessionManager.</td>
-        <td>Use an isolated OMP <code>16.4.5</code> fixture without a model or API key. Pin resolver roots and prove all OMP imports come from the fixture.</td>
-      </tr>
-      <tr>
-        <td>agent-resolved</td>
-        <td>OMP <code>16.4.5</code> requires no ACM compatibility shim.</td>
-        <td>The <code>16.4.2 → 16.4.5</code> audit found unchanged SessionManager, session-entry, tokenizer, compaction, and PI AI type surfaces used by ACM. Session-context only added an opt-in transcript option; the breaking task-tool wire schema is outside ACM's extension contract.</td>
+        <td>Verify runtime behavior with the real SessionManager and AgentSession.</td>
+        <td>The isolated fixture uses the exact declared OMP packages without a model or API key and proves resolver origin, mutation behavior, context reconstruction, compaction lifecycle, live replacement, repeated travel, resume, and session isolation.</td>
       </tr>
       <tr>
         <td>user-decided</td>
         <td>The ACM Skill package is the sole guidance authority.</td>
-        <td>A canonical CORE supplies the normal path. Generated system-prompt and tool guidance are derived artifacts, not editable behavioral sources.</td>
+        <td>Canonical CORE owns the normal path. Generated system-prompt text, tool descriptions, cues, and recovery fragments are derived artifacts rather than editable behavioral sources.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Retain one model-invoked advanced Skill and the fixed seven-slot handoff.</td>
+        <td>Advanced guidance loads only for ambiguous target selection, interleaved fronts, archive round trips, or exceptional recovery. Every handoff contains <code>Goal</code>, <code>State</code>, <code>Evidence</code>, <code>External</code>, <code>Exclusions</code>, <code>Recover</code>, and <code>NEXT</code>.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Use hard structural invariants and soft semantic criteria.</td>
+        <td>Runtime validates observable shape and mutation state. Boundary quality, cold start, recoverability sufficiency, and whether <code>NEXT</code> is genuinely executable remain agent completion criteria.</td>
+      </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Use one strict timeline view discriminator.</td>
+        <td>The public views are <code>active</code>, <code>checkpoints</code>, <code>search</code>, and <code>tree</code>. Legacy booleans, unknown keys, blank queries, and view-incompatible fields are rejected.</td>
       </tr>
       <tr>
         <td>agent-resolved</td>
-        <td>Use one canonical CORE producer and one prompt owner per deployed extension.</td>
-        <td>Standalone ACM registers its public <code>before_agent_start</code> hook. The integrated consumer disables that hook and calls <code>ensureAcmCoreSegment()</code> from its sole prompt orchestrator, preserving unrelated segment boundaries.</td>
-      </tr>
-      <tr>
-        <td>user-decided</td>
-        <td>Use one model-invoked advanced Skill.</td>
-        <td>CORE owns the normal path. The Skill triggers only non-obvious target selection, interleaved fronts, missing anchors, archive round trips, and exceptional recovery.</td>
-      </tr>
-      <tr>
-        <td>user-decided</td>
-        <td>Keep three representative examples always on.</td>
-        <td>Burst, failed direction, and finished task chain provide transferable usage patterns. Advanced reference is split by cognitive task rather than by one Skill per scenario.</td>
-      </tr>
-      <tr>
-        <td>user-decided</td>
-        <td>Retain the fixed seven-slot handoff.</td>
-        <td><code>Goal</code>, <code>State</code>, <code>Evidence</code>, <code>External</code>, <code>Exclusions</code>, <code>Recover</code>, and <code>NEXT</code> always appear; empty categories use <code>none</code>. This is an agent completion criterion, not runtime proof of semantic correctness.</td>
-      </tr>
-      <tr>
-        <td>user-decided</td>
-        <td>Use hard structural invariants and soft semantic heuristics.</td>
-        <td>The plugin validates observable structure only. Boundary quality, fold value, raw recoverability sufficiency, and whether NEXT is genuinely executable remain agent judgments.</td>
-      </tr>
-      <tr>
-        <td>user-decided</td>
-        <td>Context pressure triggers boundary inspection.</td>
-        <td>Pressure does not independently authorize travel. Native token compaction remains OMP's responsibility and the plugin never cancels, replaces, or delays it; travel remains a semantic-boundary operation.</td>
-      </tr>
-      <tr>
-        <td>user-decided</td>
-        <td>Simplify timeline to one strict view discriminator.</td>
-        <td>Use <code>active</code>, <code>checkpoints</code>, <code>search</code>, or <code>tree</code>. Reject legacy booleans, unknown keys, whitespace-only search/filter values, and fields invalid for the selected view.</td>
-      </tr>
-      <tr>
-        <td>user-decided</td>
-        <td>Do not add a travel preview/apply protocol.</td>
-        <td>Timeline provides candidate evidence. Travel performs side-effect-free prevalidation and then applies one recoverable transition.</td>
-      </tr>
-      <tr>
-        <td>user-decided</td>
-        <td>Tool results use progressive disclosure and raw evidence.</td>
-        <td>Success returns concise facts and one next cue; exceptional paths return relevant recovery guidance. Remove threshold-based effect labels and report raw before/after/delta and structural message facts.</td>
-      </tr>
-      <tr>
-        <td>user-decided</td>
-        <td>README is maintainer-facing.</td>
-        <td>Document installation, architecture, exact version, sync direction, verification, and known limits. Link to canonical agent guidance instead of duplicating it.</td>
-      </tr>
-      <tr>
-        <td>user-decided</td>
-        <td>Validate guidance through static contracts and real use.</td>
-        <td>Do not create a stochastic model benchmark now. Change guidance in response to observed failures or host-contract changes.</td>
-      </tr>
-      <tr>
-        <td>agent-resolved</td>
-        <td>Model host mutations as an explicit transaction outcome.</td>
-        <td>Mutation ports return <code>not_applied</code>, <code>applied</code>, or <code>indeterminate</code> after observing the real label journal and leaf. Travel compensation uses an operation-scoped token; applied or indeterminate branch changes always create a context-refresh obligation.</td>
-      </tr>
-      <tr>
-        <td>agent-resolved</td>
-        <td>Publish the synchronized ACM surface transactionally.</td>
-        <td>Transforms assert source match cardinality, staged outputs receive independent structural validation, and a rollback journal restores every replaced destination if publication or final verification fails. Per-file temporary rename alone was insufficient because it allowed a partial consumer state.</td>
-      </tr>
-      <tr>
-        <td>agent-resolved</td>
-        <td>Keep one OMP synchronization authority in the consumer.</td>
-        <td>The scheduled workflow invokes canonical <code>sync-acm.mjs</code> plus <code>--verify-only</code>. The legacy OMP copier and injector were removed. A checked consumer-owned patch restores only the integration seam after upstream Magic Context sync and fails closed on drift.</td>
-      </tr>
-      <tr>
-        <td>agent-resolved</td>
-        <td>Bind consumer verification to derived provenance.</td>
-        <td><code>verify:acm</code> is non-mutating. Exact host versions derive from package metadata, and <code>acm-provenance.json</code> records canonical/host versions, manifest hash, and every synchronized artifact hash.</td>
-      </tr>
-      <tr>
-        <td>agent-resolved</td>
-        <td>Split runtime behavior by ownership rather than file size.</td>
-        <td><code>src/index.ts</code> is a short composition root. Checkpoint, timeline, travel, transaction coordination, lifecycle, message sanitation, entry resolution, and label replay each have one owning module.</td>
+        <td>Model host mutations as explicit transaction outcomes.</td>
+        <td>Mutation ports return <code>not_applied</code>, <code>applied</code>, or <code>indeterminate</code> after observing the real journal and leaf. Compensation uses an operation-scoped token; applied or indeterminate branch changes create a context-refresh obligation.</td>
       </tr>
       <tr>
         <td>agent-resolved</td>
         <td>Use a version-checked, identity-scoped live AgentSession adapter.</td>
-        <td><code>src/live-agent-session-adapter.ts</code> supports exactly OMP 16.4.5. It installs one idempotent wrapper at <code>AgentSession.getContextUsage()</code>, associates <code>SessionManager → WeakRef&lt;AgentSession&gt;</code> by object identity, and exposes only structured synchronization outcomes. Host Bridge remains the sole owner of label and branch mutations.</td>
-      </tr>
-      <tr>
-        <td>agent-resolved</td>
-        <td>Apply live replacement only after the matching successful travel tool execution.</td>
-        <td>Only a definitively applied branch mutation schedules work for its resulting leaf. The matching <code>tool_execution_end</code> rebuilds and sanitizes messages from that leaf, preserving the host-owned in-flight tool call/result pair while making the next provider context and native stored-context accounting reflect the traveled branch. Repeated travel is leaf-checked so obsolete work cannot overwrite a newer branch.</td>
+        <td>The adapter installs one idempotent wrapper at <code>AgentSession.getContextUsage()</code>, associates <code>SessionManager → WeakRef&lt;AgentSession&gt;</code> by object identity, and schedules replacement only for the matching successful travel tool call.</td>
       </tr>
       <tr>
         <td>agent-resolved</td>
         <td>Preserve persistent recovery when live synchronization is unavailable or fails.</td>
-        <td>Unsupported host version/shape, missing association, stale work, message-build failure, or replacement failure never rolls back an otherwise valid travel. The branch summary and backup checkpoint remain authoritative; public context rebuild continues, diagnostics expose the exact state, and terminal failures include reload guidance.</td>
-      </tr>
-      <tr>
-        <td>agent-resolved</td>
-        <td>Treat the private lifecycle seam as a replaceable compatibility boundary.</td>
-        <td>The pinned-host matrix verifies successful shrinking travel, complete in-flight tool pairing, native accounting, repeated travel, off-path restoration, persistence/resume, failure recovery, lifecycle cleanup, and multi-session/subagent isolation. Future OMP upgrades must revalidate this seam. If OMP exposes an official AgentSession refresh or tree-navigation API to extensions, replace and remove the private adapter rather than maintaining both paths.</td>
+        <td>Unsupported host shape, missing association, stale work, build failure, or replacement failure never rolls back an otherwise valid travel. The summary branch and backup checkpoint remain authoritative, and public context rebuild continues.</td>
       </tr>
       <tr>
         <td>user-decided</td>
         <td>Add semantic rebase as a normal-path agent transition, not a new tool.</td>
-        <td>A rebase carries all surviving state in one authoritative snapshot to the earliest safe base, with root as the ideal candidate rather than a default. The existing <code>acm_travel</code> mutation remains the only execution primitive; no <code>acm_rebase</code> tool or decorative travel mode is added.</td>
+        <td>A rebase carries all surviving state in one authoritative snapshot to the earliest safe base, with root as the ideal candidate rather than a default. <code>acm_travel</code> remains the only mutation primitive.</td>
       </tr>
       <tr>
         <td>user-decided</td>
         <td>Use cold start as the hard rebase gate.</td>
-        <td>A fresh agent must be able to execute <code>NEXT</code> from the snapshot and direct evidence pointers without reading archived summaries. Context pressure triggers this check but never lowers it; local fold, live detail, or native compaction remain valid when the gate fails.</td>
+        <td>A fresh agent must be able to execute <code>NEXT</code> from the snapshot and direct evidence pointers without reading archived summaries. Context pressure triggers the check but never lowers it.</td>
       </tr>
       <tr>
         <td>agent-resolved</td>
         <td>Expose summary-depth evidence without runtime safety verdicts.</td>
-        <td>Timeline counts active <code>branch_summary</code> nodes separately from native compaction, exposes root as a structural candidate, and projects post-travel depth. Travel reports before/after/delta facts. Runtime never labels a candidate safe or claims that a completed mutation passed cold start.</td>
-      </tr>
-      <tr>
-        <td>agent-resolved</td>
-        <td>Complete the consumer sync surface for live AgentSession synchronization.</td>
-        <td>Consumer synchronization exposed that runtime files referenced the pinned adapter while the manifest omitted the adapter and its runtime/real-host regression tests. The canonical mapping now includes all four artifacts so transactional sync cannot publish an uncompilable partial live-sync surface.</td>
+        <td>Timeline counts active <code>branch_summary</code> nodes separately from native compaction, exposes root as a structural candidate, and projects post-travel depth. Travel reports before/after/delta facts but never labels a candidate safe.</td>
       </tr>
     </tbody>
   </table>
 
-  <h2>Specifications</h2>
-  <ul>
-    <li><code>.scratch/acm-agent-guidance-delivery/spec.md</code></li>
-    <li><code>.scratch/acm-host-bridge-runtime/spec.md</code></li>
-    <li><code>.scratch/acm-agent-tool-contract/spec.md</code></li>
-    <li><code>.scratch/acm-sync-version-contract/spec.md</code></li>
-  </ul>
-
   <h2>Open Decisions</h2>
-  <p>None. The production adapter decision and its pinned-host acceptance matrix are complete; future host-version changes must reopen the compatibility decision.</p>
+  <p>None. A failed local-host cold candidate or a new official OMP navigation API must reopen the pinned adapter decision.</p>
 </body>
 </html>

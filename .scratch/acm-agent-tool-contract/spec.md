@@ -118,5 +118,5 @@ Make every tool result progressively disclosed: concise facts and one next cue o
 - "Preview" in agent guidance should mean inspecting timeline candidate evidence, not invoking a separate travel state.
 - Boundary decides whether a fold is semantically valid; timeline measures available structural/context evidence.
 - The implementation should preserve unknown values as unknown. Missing context usage must not be classified as no saving.
-- The single-view cutover requires simultaneous updates to CORE, the advanced Skill, examples, tool descriptions, tests, README maintenance notes, and the integrated repository copy.
+- The single-view cutover requires simultaneous updates to CORE, the advanced Skill, examples, tool descriptions, tests, and product documentation.
 - The implementation must record the user-decided interface cutover and evidence-only result policy in the repository implementation notes before code changes begin.

@@ -1,113 +1,116 @@
 # omp-context
 
-`omp-context` 是由 KorenKrita 独立维护的第三方 OMP Agentic Context Management（ACM）插件，不是 OMP 官方组件。它注册 `acm_checkpoint`、`acm_timeline`、`acm_travel`，并通过公开的 `before_agent_start` hook 交付 always-on CORE。
+让 OMP agent 主动维护自己的上下文，而不是等窗口耗尽后被动压缩。
 
-## 仓库关系
+`omp-context` 是由 KorenKrita 独立维护的第三方 OMP 插件。它让 agent 能够：
 
-- 在 KorenKrita 维护的 `omp-context` / `magic-acm-context` 两个仓库之间，`omp-context` 是 ACM 实现与 guidance 的唯一同步源；Host Bridge、CORE、advanced Skill 与生成产物都从这里维护。
-- `magic-acm-context` 是 consumer，只能通过本仓库的 `bun run sync:acm` 手动接收已声明的 ACM surface；同步方向不可逆。
-- standalone extension 直接注册 CORE prompt hook；integrated consumer 禁用该 hook，并由唯一的 consumer prompt orchestrator 调用 canonical `ensureAcmCoreSegment` 后组合 Magic Context-owned segments。两者共享同一 CORE producer，不形成 functional fork。
+- 在任务、阶段和高风险操作前建立可恢复的语义锚点；
+- 查看当前会话 spine、历史分支、checkpoint 与上下文占用；
+- 把已经完成的过程折叠成可执行 handoff；
+- 在安全时将累计 summary chain **rebase** 到更早的基底，重新获得浅层、低负载的 working set；
+- 在 travel 后同步持久会话树、下一轮模型上下文与 live AgentSession。
 
-## 架构与 guidance 所有权
+## 为什么需要它
 
-| 区域 | 责任 |
+长任务的问题不只是 token 数量。
+
+即使每个阶段都做了局部摘要，summary 仍可能一层层堆在 active spine 上：
+
+```text
+root → summary A → summary B → summary C → current work
+```
+
+这些历史 handoff 会持续占用上下文和注意力。`omp-context` 不把压缩当作单纯的 token 操作，而是按**语义边界**管理 working set：保留下一步真正需要的内容，把已完成过程移到可恢复的 archive。
+
+## 三个工具
+
+| Tool | 作用 |
 |---|---|
-| `src/index.ts` | 短 composition root；只组装 runtime、工具和 lifecycle |
-| `src/checkpoint-tool.ts` / `src/timeline-tool.ts` / `src/travel-tool.ts` | 各工具独立的 schema、执行流与结果契约 |
-| `src/travel-coordinator.ts` | 单次 travel mutation transaction、compensation 与 refresh obligation |
-| `src/host-bridge.ts` | typed guarded mutation ports；区分 `not_applied`、`applied`、`indeterminate` |
-| `src/runtime-lifecycle.ts` / `src/runtime.ts` | context rebuild、live AgentSession sync、compaction、usage 与 session-scoped state |
-| `src/live-agent-session-adapter.ts` | OMP 16.4.5 专用的窄 live-state adapter；按 SessionManager identity 捕获并同步 AgentSession |
-| `src/label-journal.ts` / `src/lib.ts` | dependency-free label replay 与纯领域逻辑 |
-| [`skills/context-management/CORE.md`](skills/context-management/CORE.md) | normal-path agent contract 的唯一来源 |
-| [`skills/context-management/SKILL.md`](skills/context-management/SKILL.md) | 只路由 non-obvious target、archive round trip 与 exceptional recovery |
-| `src/generated-guidance.ts` | 由 CORE marker 生成；禁止手改 |
+| `acm_checkpoint` | 给会话节点建立唯一、可恢复的语义 checkpoint |
+| `acm_timeline` | 查看 active spine、checkpoint catalog、全文搜索、完整树和 summary depth |
+| `acm_travel` | 将一个 boundary 折叠为七槽 handoff，或把累计 summaries rebase 到最早安全基底 |
 
-七槽 handoff 是 agent completion criterion，不是 runtime 对语义正确性的证明。插件只能校验可观察结构，不能证明 target 位于正确的 semantic boundary 之前、rebase snapshot 通过 cold start、raw detail 足够可恢复，或 `NEXT` 真正可执行。高 context pressure 只触发 rebase check，不会降低 cold start gate 或自动授权 travel。
+插件会通过 OMP 的公开 prompt hook 注入精简的 always-on CORE。复杂的 target selection、archive round trip 和异常恢复按需从 advanced Skill 加载，不会把整套 playbook 常驻在上下文里。
+
+## Semantic rebase
+
+普通 fold 压缩一个局部阶段；rebase 处理长期累积的 summary depth。
+
+agent 会在以下时机主动检查 rebase：
+
+- 下一次 fold 会继续叠加 summary；
+- 一个稳定 chain 或 subchain 已结束；
+- 同一 session 即将开始新目标；
+- context pressure 上升。
+
+rebase 不等于强制跳到 `root`。agent 会从最早候选开始执行 **cold start** 检查：如果一个全新的 agent 只依赖当前 snapshot 和直接 evidence pointers 就能执行 `NEXT`，该基底才安全。root 是理想候选，不是默认答案。
+
+Timeline 会提供事实证据：
+
+- 当前 active summary depth；
+- root structural candidate；
+- 每个 checkpoint travel 后的 projected summary depth；
+- usage、message count 与 branch topology。
+
+Runtime 不会伪装成能判断语义完整性，也不会自动批准或执行 rebase。
 
 ## 安装
 
+### 本地安装
+
 ```bash
-# 本地
 omp install .
+```
 
-# GitHub
+### GitHub
+
+```bash
 omp install github:KorenKrita/omp-context
+```
 
-# marketplace
+### Marketplace
+
+```text
 /marketplace add KorenKrita/omp-context
 /marketplace install omp-context@omp-context
 ```
 
-## 支持的 OMP 版本
+安装后无需手动调用命令。Agent 会根据 CORE 在任务边界主动使用三个 ACM tools；你也可以直接要求它创建 checkpoint、查看 timeline 或恢复某个 archive。
 
-支持的 OMP 版本：`16.4.5`。`@oh-my-pi/pi-coding-agent`、`@oh-my-pi/pi-agent-core` 和 `@oh-my-pi/pi-ai` 的 peer、development、lock 与本地安装版本必须完全一致；项目不声明兼容范围，也不维护多版本 shim。
+## 可观察性与恢复
 
-未来升级必须先把候选版本作为 **isolated candidate** 放进 `test/host-fixture`，在不启动模型或使用 API key 的前提下验证 real SessionManager 与 captured extension handlers。候选验证至少审查：
+每次操作都会返回可核对的结构事实：
 
-- `extension events`
-- `public context APIs`
-- `Host Bridge capabilities`
-- `session-context construction`
-- `tool registration`
-- `token estimation`
-- `compaction events`
-- `changelog review`
+- resolved target 与 entry ID；
+- checkpoint aliases；
+- branch summary leaf；
+- backup checkpoint outcome；
+- message、token、percentage-point 与 summary-depth delta；
+- persistent context rebuild 和 live AgentSession sync 状态。
 
-运行 `bun run test:host`、相关 focused tests 和 `bun run typecheck` 后，才可在一个原子变更中 **atomically replace every exact OMP version**：同时更新根 peer/development 声明、lock、已安装依赖、支持文档与隔离 fixture。不得扩大版本范围。
+Checkpoint 名称在整棵会话树中大小写敏感且必须唯一；同一节点可以拥有多个 alias。异常 mutation 明确区分 `not_applied`、`applied` 和 `indeterminate`，避免把未知状态伪装成成功或失败。
 
-`16.4.2 → 16.4.5` 审查结论：`SessionManager`、session entry、token estimation 与 ACM 使用的 tool registration/event contract 未发生破坏性变化；`session-context` 只新增 transcript 专用的 `keepDanglingToolCalls` 选项，默认 provider-context 重建行为不变。OMP 16.4.5 的 task tool wire schema 发生 breaking change，但 ACM extension 不调用或封装该 tool，因此无需兼容代码。
+## 安全边界
 
-## 手动同步到 consumer
-
-canonical 与 consumer root 都是必填绝对或可解析路径：
-
-```bash
-bun run sync:acm -- \
-  --canonical-root /path/to/omp-context \
-  --consumer-root /path/to/magic-acm-context
-```
-
-同步命令读取 `scripts/acm-sync-manifest.json`。它先校验 package identity、consumer layout、source、destination、transform match cardinality 与 preserved wrapper；随后在 consumer 内的 staging tree 生成并独立验证全部产物。发布阶段为所有目标建立 rollback journal，任一 rename 或最终验证失败都会恢复本次已替换的全部文件，不留下 partial consumer state。
-
-Manifest 当前声明 46 个 canonical mappings，并额外生成带 canonical version、exact host version、manifest hash 与每个产物 SHA-256 的 `acm-provenance.json`。映射包含 pinned live AgentSession adapter、runtime regression tests 与对应 real-host fixtures，避免 consumer 接收引用却缺少实现。输出逐行 `changed <path>`；重复运行输出 `no changes`。
-
-```bash
-bun run sync:acm -- \
-  --canonical-root /path/to/omp-context \
-  --consumer-root /path/to/magic-acm-context \
-  --verify-only
-```
-
-命令不会执行任何 Git 操作：不 stage、commit、fetch、merge、rebase 或 push。canonical 与 consumer 的结果必须在各自仓库分别提交。
-
-## 已知 host 限制
-
-- OMP 16.4.5 未向普通 tool context 暴露原子的 tree-navigation/state-sync API。Typed host mutation ports 因而观察 mutation 前后状态，并返回 `not_applied`、`applied` 或 `indeterminate`；只要 branch mutation 已发生或无法排除，travel coordinator 就保留恢复标签并安排 context refresh。
-- 成功 travel 会在对应 `acm_travel` 的 `tool_execution_end` 后，通过精确版本检查的窄 adapter 从当前 SessionManager leaf 重建消息并调用 live AgentSession 的公开 `agent.replaceMessages()`。关联只按 SessionManager 对象 identity 建立，使用弱引用，不猜测其他私有字段，也不复制 synthetic tool call 或 compaction entry。
-- adapter 依赖 OMP 16.4.5 的 `AgentSession.getContextUsage` lifecycle seam 来捕获 live session。host 版本或 shape 不匹配、association 缺失或 replacement 失败时，持久 SessionManager branch 与公开 `context` event rebuild 仍然有效；HUD 会报告 `unavailable`、`failed` 或 `skipped` 并给出 reload guidance。
-- 成功 live sync 后，native stored-context accounting 使用 traveled branch，不会因 pre-travel message array 立即触发 stale auto-compaction。插件仍不取消、延迟或替换真实的 OMP compaction。
-- timeline 报告 active summary depth，并在 checkpoint catalog 中显示 root structural candidate 与 travel 后的 projected summary depth；这些都是 target-selection evidence，不是 rebase safety verdict。
-- travel 只改变会话树与后续 model context；不会回滚文件、进程、浏览器、commit 或远端副作用。成功结果会报告 factual summary-depth delta，但不会声称 runtime 已证明 cold start completeness。
-
-## Guidance 维护
-
-人类文档只记录架构、支持与维护事实；agent normal path 以 [CORE](skills/context-management/CORE.md) 为准，advanced branches 以 [Skill package](skills/context-management/SKILL.md) 为准。不要把 agent operating discipline 复制回 README。
-
-真实会话观察记录在 [`docs/agents/acm-dogfooding.md`](docs/agents/acm-dogfooding.md)。未来 guidance 变更必须由一条带证据的 **observed failure** 或 **changed host contract** 驱动；不要为假设中的弱模型行为追加规则。
+- Travel 只改变 OMP 会话树和后续模型上下文。
+- 它不会回滚文件、进程、浏览器、Git commit 或远端服务。
+- 插件不会取消、替换或延迟 OMP 原生 compaction。
+- 如果当前任务仍依赖不可压缩的中间推理，agent 会保留 working set 或接受 native compaction，而不是为了降低数字强行 rebase。
+- Host 不支持 live synchronization 时，持久 branch 和公开 context rebuild 仍然保留；结果会给出明确恢复指引。
 
 ## 验证
 
 ```bash
-# 非写入式 canonical gate：generated guidance、exact version、fixture 和 provenance contracts
-bun run verify:acm
-
-bun run typecheck
 bun test
-bun run test:host
+bun run typecheck
+bun run verify:acm
 ```
 
-## 参考
+开发架构、host compatibility、Git hook、版本提升流程和维护契约见 [`AGENTS.md`](AGENTS.md)。
+
+## 致谢
 
 - [pi-context](https://github.com/ttttmr/pi-context) — 原始项目 by ttttmr
 - [让 AI 主动管理自己的上下文](https://blog.xlab.app/p/6a966aeb/) — 设计思路
+
+MIT License

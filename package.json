@@ -12,10 +12,12 @@
     ".omp-plugin"
   ],
   "scripts": {
+    "prepare": "bun scripts/install-git-hooks.mjs",
     "generate:guidance": "bun scripts/generate-guidance.mjs",
-    "sync:acm": "bun scripts/sync-acm.mjs",
+    "host:check-local": "bun scripts/precommit-host-contract.mjs --check-only",
+    "host:promote-local": "bun scripts/precommit-host-contract.mjs",
     "test:host": "bun run --cwd test/host-fixture verify",
-    "verify:acm": "bun scripts/verify-acm.mjs && bun test scripts/generate-guidance.test.mjs src/version-contract.test.ts && bun run test:host",
+    "verify:acm": "bun scripts/verify-acm.mjs && bun test scripts/generate-guidance.test.mjs scripts/host-version.test.mjs src/version-contract.test.ts && bun run test:host",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
@@ -23,17 +25,17 @@
     "bun": ">=1.0.0"
   },
   "devDependencies": {
-    "@oh-my-pi/pi-agent-core": "16.4.5",
-    "@oh-my-pi/pi-ai": "16.4.5",
-    "@oh-my-pi/pi-coding-agent": "16.4.5",
+    "@oh-my-pi/pi-agent-core": "16.4.6",
+    "@oh-my-pi/pi-ai": "16.4.6",
+    "@oh-my-pi/pi-coding-agent": "16.4.6",
     "bun-types": "^1.3.14",
     "typescript": "^5.7.2",
     "zod": "^3.25.0"
   },
   "peerDependencies": {
-    "@oh-my-pi/pi-agent-core": "16.4.5",
-    "@oh-my-pi/pi-ai": "16.4.5",
-    "@oh-my-pi/pi-coding-agent": "16.4.5"
+    "@oh-my-pi/pi-agent-core": "16.4.6",
+    "@oh-my-pi/pi-ai": "16.4.6",
+    "@oh-my-pi/pi-coding-agent": "16.4.6"
   },
   "omp": {
     "extensions": [

@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { ACM_CORE, ACM_CORE_MARKER } from "./generated-guidance.js";
 
-/** Pure canonical CORE producer used by standalone ACM and consumer orchestration. */
+/** Pure canonical CORE producer used by the extension prompt hook and composition tests. */
 export function ensureAcmCoreSegment(systemPrompt: string[]): string[] {
   if (systemPrompt.some((segment) => segment.includes(ACM_CORE_MARKER))) return systemPrompt;
   return [...systemPrompt, `${ACM_CORE_MARKER}\n${ACM_CORE}`];
