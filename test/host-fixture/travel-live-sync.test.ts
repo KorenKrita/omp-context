@@ -300,6 +300,94 @@ describe("successful travel synchronizes the pinned live AgentSession", () => {
     expect(harness.session.getEntries().some((entry) => entry.id === firstSummaryLeaf)).toBe(true);
   });
 
+  test("isolates concurrent parent and subagent sessions by SessionManager identity", async () => {
+    const parentHarness = createHarness();
+    const parentRootId = parentHarness.session.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "shared working directory parent root" }],
+      timestamp: Date.now(),
+    });
+    parentHarness.session.appendMessage(assistantText("parent abandoned path"));
+    const parentFixture = createLiveExtensionFixture(
+      parentHarness,
+      parentHarness.session.buildSessionContext().messages as AgentMessage[],
+    );
+
+    const subagentHarness = createHarness();
+    const subagentRootId = subagentHarness.session.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "shared working directory subagent root" }],
+      timestamp: Date.now(),
+    });
+    subagentHarness.session.appendMessage(assistantText("subagent abandoned path"));
+    const subagentFixture = createLiveExtensionFixture(
+      subagentHarness,
+      subagentHarness.session.buildSessionContext().messages as AgentMessage[],
+    );
+    const subagentMessagesBeforeTravel = [...subagentFixture.agent.state.messages];
+
+    await parentFixture.travelTool.execute(
+      "parent-travel",
+      {
+        target: parentRootId,
+        summary: HANDOFF.replace("travel completed", "parent travel completed"),
+        backupCurrentHeadAs: "parent-session-archive",
+      },
+      undefined,
+      undefined,
+      parentFixture.context,
+    );
+    await subagentFixture.travelTool.execute(
+      "subagent-travel",
+      {
+        target: subagentRootId,
+        summary: HANDOFF.replace("travel completed", "subagent travel completed"),
+        backupCurrentHeadAs: "subagent-session-archive",
+      },
+      undefined,
+      undefined,
+      subagentFixture.context,
+    );
+
+    await emitToolEnd(parentFixture.handlers, parentFixture.context, "parent-travel");
+    const rebuiltParent = fixOrphanedToolUse(
+      parentHarness.session.buildSessionContext().messages as AgentMessage[],
+    );
+    expect(parentFixture.agent.state.messages).toEqual(rebuiltParent);
+    expect(JSON.stringify(parentFixture.agent.state.messages)).toContain("parent travel completed");
+    expect(JSON.stringify(parentFixture.agent.state.messages)).not.toContain("subagent travel completed");
+    expect(subagentFixture.agent.state.messages).toEqual(subagentMessagesBeforeTravel);
+
+    const subagentTimelinePending = await subagentFixture.timelineTool.execute(
+      "subagent-timeline-pending",
+      { view: "active" },
+      undefined,
+      undefined,
+      subagentFixture.context,
+    );
+    expect(subagentTimelinePending.content.map((part) => part.type === "text" ? part.text : "").join("\n"))
+      .toContain("Live Agent Sync:  pending");
+
+    await emitToolEnd(subagentFixture.handlers, subagentFixture.context, "subagent-travel");
+    const rebuiltSubagent = fixOrphanedToolUse(
+      subagentHarness.session.buildSessionContext().messages as AgentMessage[],
+    );
+    expect(subagentFixture.agent.state.messages).toEqual(rebuiltSubagent);
+    expect(JSON.stringify(subagentFixture.agent.state.messages)).toContain("subagent travel completed");
+    expect(JSON.stringify(subagentFixture.agent.state.messages)).not.toContain("parent travel completed");
+    expect(parentFixture.agent.state.messages).toEqual(rebuiltParent);
+
+    const parentTimelineApplied = await parentFixture.timelineTool.execute(
+      "parent-timeline-applied",
+      { view: "active" },
+      undefined,
+      undefined,
+      parentFixture.context,
+    );
+    expect(parentTimelineApplied.content.map((part) => part.type === "text" ? part.text : "").join("\n"))
+      .toContain("Live Agent Sync:  applied");
+  });
+
   test("restores an off-path checkpoint and expands live state to that branch", async () => {
     const harness = createHarness();
     const rootId = harness.session.appendMessage({
