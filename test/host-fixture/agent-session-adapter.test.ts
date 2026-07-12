@@ -43,6 +43,7 @@ describe("live AgentSession adapter against pinned OMP", () => {
     const { agent, session } = createSession(harness.session, [{ role: "user", content: "stale", timestamp: Date.now() }]);
     const adapter = createLiveAgentSessionAdapter();
 
+    expect(adapter.installation).toEqual({ status: "ready" });
     session.getContextUsage();
     expect(adapter.schedule(harness.session, harness.session.getLeafId() ?? undefined)).toMatchObject({ status: "pending" });
     expect(adapter.apply(harness.session)).toMatchObject({ status: "applied", messageCount: 1 });

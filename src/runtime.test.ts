@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type {
+  AgentSessionAdapterInstallationOutcome,
   AgentSessionSyncOutcome,
   LiveAgentSessionAdapter,
 } from "./live-agent-session-adapter.js";
@@ -8,11 +9,7 @@ import { registerAcmLifecycle } from "./runtime-lifecycle.js";
 import { AcmSessionRuntime } from "./runtime.js";
 
 class RecordingAdapter implements LiveAgentSessionAdapter {
-  readonly installation: AgentSessionSyncOutcome = {
-    status: "skipped",
-    reason: "not_pending",
-    message: "idle",
-  };
+  readonly installation: AgentSessionAdapterInstallationOutcome = { status: "ready" };
   readonly pending = new WeakMap<object, string | undefined>();
   readonly outcomes = new WeakMap<object, AgentSessionSyncOutcome>();
   failNext = false;
@@ -40,7 +37,7 @@ class RecordingAdapter implements LiveAgentSessionAdapter {
   }
 
   getStatus(session: object): AgentSessionSyncOutcome {
-    return this.outcomes.get(session) ?? this.installation;
+    return this.outcomes.get(session) ?? { status: "skipped", reason: "not_pending", message: "idle" };
   }
 
   clear(session: object): void {

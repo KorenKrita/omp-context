@@ -27,7 +27,10 @@ import {
 } from "./host-bridge.js";
 import { findLastMeaningfulEntry } from "./entry-resolution.js";
 import { executeTravelMutation } from "./travel-coordinator.js";
-import { getLiveAgentSyncRecoveryGuidance } from "./live-agent-session-adapter.js";
+import {
+  getLiveAgentSyncRecoveryGuidance,
+  type AgentSessionSyncOutcome,
+} from "./live-agent-session-adapter.js";
 import type { AcmSessionRuntime } from "./runtime.js";
 import { GUIDANCE_CUES, RECOVERY_GUIDANCE, TOOL_DESCRIPTIONS } from "./generated-guidance.js";
 
@@ -266,6 +269,11 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
         const prefix = mutation.error === "backup_label_failed"
           ? `Error: archive bookmark '${params.backupCurrentHeadAs}' could not be set`
           : "Error: branchWithSummary failed";
+        const liveAgentSessionSync: AgentSessionSyncOutcome = {
+          status: "skipped",
+          reason: "branch_not_applied",
+          message: "Live AgentSession synchronization was not scheduled because travel did not definitively succeed",
+        };
         return {
           content: [{ type: "text" as const, text: `${prefix}: ${mutation.message}.${backupNote} ${recoveryAction}${refreshNote}` }],
           details: {
@@ -285,11 +293,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
             contextRefreshPending: mutation.refreshRequired,
             contextRefreshState: mutation.refreshRequired ? "pending" : "not_scheduled",
             liveAgentSessionSyncState: "skipped",
-            liveAgentSessionSync: {
-              status: "skipped",
-              reason: "branch_not_applied",
-              message: "Live AgentSession synchronization was not scheduled because travel did not definitively succeed",
-            },
+            liveAgentSessionSync,
             recoveryAction,
           },
         };

@@ -328,13 +328,14 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
         hudParts.push(`• Context Sync:     persistent rebuild active${runtime.contextRefresh.hasRebuilt(sessionManager) ? "" : " (travel pending)"}${attempt > 0 ? ` (retry ${attempt}/${ContextRefreshRegistry.MAX_ATTEMPTS})` : ""}`);
       }
       const liveSync = runtime.getLiveAgentSyncStatus(sessionManager);
-      const liveSyncDetail = liveSync.status === "applied"
-        ? ` — ${liveSync.messageCount} message(s) at ${liveSync.leafId ?? "no leaf"}`
-        : liveSync.status === "pending" && liveSync.preferredLeafId
-          ? ` — awaiting tool completion for ${liveSync.preferredLeafId}`
-          : "message" in liveSync
-            ? ` — ${liveSync.message}`
-            : "";
+      let liveSyncDetail = "";
+      if (liveSync.status === "applied") {
+        liveSyncDetail = ` — ${liveSync.messageCount} message(s) at ${liveSync.leafId ?? "no leaf"}`;
+      } else if (liveSync.status === "pending" && liveSync.preferredLeafId) {
+        liveSyncDetail = ` — awaiting tool completion for ${liveSync.preferredLeafId}`;
+      } else if ("message" in liveSync) {
+        liveSyncDetail = ` — ${liveSync.message}`;
+      }
       const liveSyncRecovery = getLiveAgentSyncRecoveryGuidance(liveSync);
       hudParts.push(`• Live Agent Sync:  ${liveSync.status}${liveSyncDetail}${liveSyncRecovery ? ` ${liveSyncRecovery}` : ""}`);
       const cue = params.view === "active"

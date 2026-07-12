@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { buildSessionMessages } from "./host-bridge.js";
 import { fixOrphanedToolUse } from "./message-sanitizer.js";
 
@@ -9,7 +10,7 @@ export const SUPPORTED_AGENT_SESSION_HOST_VERSION = "16.4.5";
 const INSTALLATION_SYMBOL = Symbol.for("omp-context.live-agent-session-adapter.v1");
 
 interface LiveAgentSession {
-  readonly sessionManager: object;
+  readonly sessionManager: ReadonlySessionManager;
   readonly agent: {
     replaceMessages(messages: AgentMessage[]): void;
   };
@@ -27,9 +28,16 @@ export type AgentSessionSyncOutcome =
   | { status: "pending"; preferredLeafId?: string }
   | { status: "applied"; leafId: string | null; messageCount: number }
   | { status: "failed"; reason: "build_messages_failed" | "replace_messages_failed"; message: string }
-  | { status: "skipped"; reason: "missing_association" | "not_pending" | "stale_leaf"; message: string };
+  | { status: "skipped"; reason: "branch_not_applied" | "missing_association" | "not_pending" | "stale_leaf"; message: string };
+
+type AgentSessionUnavailableOutcome = Extract<AgentSessionSyncOutcome, { status: "unavailable" }>;
+
+export type AgentSessionAdapterInstallationOutcome =
+  | { status: "ready" }
+  | AgentSessionUnavailableOutcome;
 
 interface InstallationState {
+  readonly kind: "installed";
   readonly originalGetContextUsage: AgentSessionHostClass["prototype"]["getContextUsage"];
   readonly sessions: WeakMap<object, WeakRef<LiveAgentSession>>;
   readonly pending: WeakMap<object, string | undefined>;
@@ -37,7 +45,7 @@ interface InstallationState {
 }
 
 export interface LiveAgentSessionAdapter {
-  readonly installation: AgentSessionSyncOutcome;
+  readonly installation: AgentSessionAdapterInstallationOutcome;
   schedule(sessionManager: object, preferredLeafId?: string): AgentSessionSyncOutcome;
   apply(sessionManager: object): AgentSessionSyncOutcome;
   getStatus(sessionManager: object): AgentSessionSyncOutcome;
@@ -73,13 +81,13 @@ export function readInstalledAgentSessionHostVersion(): string | undefined {
 }
 
 function unavailable(
-  reason: Extract<AgentSessionSyncOutcome, { status: "unavailable" }>["reason"],
+  reason: AgentSessionUnavailableOutcome["reason"],
   message: string,
-): AgentSessionSyncOutcome {
+): AgentSessionUnavailableOutcome {
   return { status: "unavailable", reason, message };
 }
 
-function install(HostClass: AgentSessionHostClass): InstallationState | AgentSessionSyncOutcome {
+function install(HostClass: AgentSessionHostClass): InstallationState | AgentSessionUnavailableOutcome {
   const prototype = HostClass?.prototype;
   if (!prototype || typeof prototype.getContextUsage !== "function") {
     return unavailable("unsupported_host_shape", "AgentSession.getContextUsage is unavailable");
@@ -92,6 +100,7 @@ function install(HostClass: AgentSessionHostClass): InstallationState | AgentSes
 
   const originalGetContextUsage = prototype.getContextUsage;
   const state: InstallationState = {
+    kind: "installed",
     originalGetContextUsage,
     sessions: new WeakMap(),
     pending: new WeakMap(),
@@ -110,6 +119,12 @@ function install(HostClass: AgentSessionHostClass): InstallationState | AgentSes
   return state;
 }
 
+function isInstallationState(
+  installation: InstallationState | AgentSessionUnavailableOutcome,
+): installation is InstallationState {
+  return "kind" in installation && installation.kind === "installed";
+}
+
 function readLeafId(sessionManager: object): string | null {
   const candidate = sessionManager as { getLeafId?: () => string | null };
   return typeof candidate.getLeafId === "function" ? candidate.getLeafId() : null;
@@ -124,7 +139,7 @@ export function createLiveAgentSessionAdapter(
 ): LiveAgentSessionAdapter {
   const hostVersion = options.hostVersion ?? readInstalledAgentSessionHostVersion();
   const HostClass = options.AgentSessionClass ?? AgentSession as unknown as AgentSessionHostClass;
-  let installation: InstallationState | AgentSessionSyncOutcome;
+  let installation: InstallationState | AgentSessionUnavailableOutcome;
   if (!hostVersion) {
     installation = unavailable("host_version_unreadable", "Could not determine the installed OMP host version");
   } else if (hostVersion !== SUPPORTED_AGENT_SESSION_HOST_VERSION) {
@@ -136,12 +151,12 @@ export function createLiveAgentSessionAdapter(
     installation = install(HostClass);
   }
 
-  if (!("originalGetContextUsage" in installation)) {
+  if (!isInstallationState(installation)) {
     return {
       installation,
-      schedule: () => installation as AgentSessionSyncOutcome,
-      apply: () => installation as AgentSessionSyncOutcome,
-      getStatus: () => installation as AgentSessionSyncOutcome,
+      schedule: () => installation,
+      apply: () => installation,
+      getStatus: () => installation,
       clear: () => undefined,
     };
   }
@@ -153,7 +168,7 @@ export function createLiveAgentSessionAdapter(
     message: "No AgentSession synchronization is pending",
   };
   return {
-    installation: initialStatus,
+    installation: { status: "ready" },
     schedule(sessionManager, preferredLeafId) {
       const session = state.sessions.get(sessionManager)?.deref();
       if (!session) {
@@ -204,9 +219,7 @@ export function createLiveAgentSessionAdapter(
         state.outcomes.set(sessionManager, outcome);
         return outcome;
       }
-      const messagesResult = buildSessionMessages(
-        sessionManager as Parameters<typeof buildSessionMessages>[0],
-      );
+      const messagesResult = buildSessionMessages(session.sessionManager);
       if (!messagesResult.ok) {
         const outcome: AgentSessionSyncOutcome = {
           status: "failed",
