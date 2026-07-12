@@ -20,7 +20,9 @@ describe("maintainer documentation contract", () => {
       "分别提交",
       "支持的 OMP 版本：`16.4.5`",
       "Typed host mutation ports",
-      "agent.state.messages",
+      "src/live-agent-session-adapter.ts",
+      "agent.replaceMessages()",
+      "公开 `context` event rebuild 仍然有效",
     ]) {
       expect(readme).toContain(fact);
     }

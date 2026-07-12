@@ -41,8 +41,8 @@
       </tr>
       <tr>
         <td>user-decided</td>
-        <td>Remain plugin-only.</td>
-        <td><code>branchWithSummary()</code> updates the SessionManager tree before OMP's host-owned in-memory message array is necessarily synchronized. The plugin never mutates that private array; it rebuilds outbound context through the public hook. The remaining risk is an unnecessary early native compaction, not inevitable data loss.</td>
+        <td>Remain extension-only and synchronize live AgentSession state through one pinned adapter.</td>
+        <td><code>branchWithSummary()</code> remains the persistent tree mutation. After a definitively successful travel, the exact OMP 16.4.5 adapter rebuilds the active branch and calls the associated AgentSession's <code>agent.replaceMessages()</code> at the matching <code>tool_execution_end</code>. No OMP source patch or command-only navigation API is required.</td>
       </tr>
       <tr>
         <td>user-decided</td>
@@ -144,6 +144,26 @@
         <td>Split runtime behavior by ownership rather than file size.</td>
         <td><code>src/index.ts</code> is a short composition root. Checkpoint, timeline, travel, transaction coordination, lifecycle, message sanitation, entry resolution, and label replay each have one owning module.</td>
       </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>Use a version-checked, identity-scoped live AgentSession adapter.</td>
+        <td><code>src/live-agent-session-adapter.ts</code> supports exactly OMP 16.4.5. It installs one idempotent wrapper at <code>AgentSession.getContextUsage()</code>, associates <code>SessionManager → WeakRef&lt;AgentSession&gt;</code> by object identity, and exposes only structured synchronization outcomes. Host Bridge remains the sole owner of label and branch mutations.</td>
+      </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>Apply live replacement only after the matching successful travel tool execution.</td>
+        <td>Only a definitively applied branch mutation schedules work for its resulting leaf. The matching <code>tool_execution_end</code> rebuilds and sanitizes messages from that leaf, preserving the host-owned in-flight tool call/result pair while making the next provider context and native stored-context accounting reflect the traveled branch. Repeated travel is leaf-checked so obsolete work cannot overwrite a newer branch.</td>
+      </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>Preserve persistent recovery when live synchronization is unavailable or fails.</td>
+        <td>Unsupported host version/shape, missing association, stale work, message-build failure, or replacement failure never rolls back an otherwise valid travel. The branch summary and backup checkpoint remain authoritative; public context rebuild continues, diagnostics expose the exact state, and terminal failures include reload guidance.</td>
+      </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>Treat the private lifecycle seam as a replaceable compatibility boundary.</td>
+        <td>The pinned-host matrix verifies successful shrinking travel, complete in-flight tool pairing, native accounting, repeated travel, off-path restoration, persistence/resume, failure recovery, lifecycle cleanup, and multi-session/subagent isolation. Future OMP upgrades must revalidate this seam. If OMP exposes an official AgentSession refresh or tree-navigation API to extensions, replace and remove the private adapter rather than maintaining both paths.</td>
+      </tr>
     </tbody>
   </table>
 
@@ -156,6 +176,6 @@
   </ul>
 
   <h2>Open Decisions</h2>
-  <p>None. Implementation details that preserve the decisions above may be resolved by the implementing agent using repository conventions.</p>
+  <p>None. The production adapter decision and its pinned-host acceptance matrix are complete; future host-version changes must reopen the compatibility decision.</p>
 </body>
 </html>

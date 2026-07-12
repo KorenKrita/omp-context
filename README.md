@@ -16,7 +16,8 @@
 | `src/checkpoint-tool.ts` / `src/timeline-tool.ts` / `src/travel-tool.ts` | 各工具独立的 schema、执行流与结果契约 |
 | `src/travel-coordinator.ts` | 单次 travel mutation transaction、compensation 与 refresh obligation |
 | `src/host-bridge.ts` | typed guarded mutation ports；区分 `not_applied`、`applied`、`indeterminate` |
-| `src/runtime-lifecycle.ts` / `src/runtime.ts` | context rebuild、compaction、usage 与 session-scoped state |
+| `src/runtime-lifecycle.ts` / `src/runtime.ts` | context rebuild、live AgentSession sync、compaction、usage 与 session-scoped state |
+| `src/live-agent-session-adapter.ts` | OMP 16.4.5 专用的窄 live-state adapter；按 SessionManager identity 捕获并同步 AgentSession |
 | `src/label-journal.ts` / `src/lib.ts` | dependency-free label replay 与纯领域逻辑 |
 | [`skills/context-management/CORE.md`](skills/context-management/CORE.md) | normal-path agent contract 的唯一来源 |
 | [`skills/context-management/SKILL.md`](skills/context-management/SKILL.md) | 只路由 non-obvious target、archive round trip 与 exceptional recovery |
@@ -83,8 +84,9 @@ bun run sync:acm -- \
 ## 已知 host 限制
 
 - OMP 16.4.5 未向普通 tool context 暴露原子的 tree-navigation/state-sync API。Typed host mutation ports 因而观察 mutation 前后状态，并返回 `not_applied`、`applied` 或 `indeterminate`；只要 branch mutation 已发生或无法排除，travel coordinator 就保留恢复标签并安排 context refresh。
-- `branchWithSummary()` 更新 SessionManager tree，但不会同步 host 私有的 `agent.state.messages`。插件不修改该私有数组，而是在每次公开 `context` event 中从当前 leaf 持续重建 provider context。
-- native pre-prompt compaction 依据 host-owned message state 估算，因此 travel 后可能发生一次不必要的提前 compaction。插件不取消、延迟或替换 OMP compaction。
+- 成功 travel 会在对应 `acm_travel` 的 `tool_execution_end` 后，通过精确版本检查的窄 adapter 从当前 SessionManager leaf 重建消息并调用 live AgentSession 的公开 `agent.replaceMessages()`。关联只按 SessionManager 对象 identity 建立，使用弱引用，不猜测其他私有字段，也不复制 synthetic tool call 或 compaction entry。
+- adapter 依赖 OMP 16.4.5 的 `AgentSession.getContextUsage` lifecycle seam 来捕获 live session。host 版本或 shape 不匹配、association 缺失或 replacement 失败时，持久 SessionManager branch 与公开 `context` event rebuild 仍然有效；HUD 会报告 `unavailable`、`failed` 或 `skipped` 并给出 reload guidance。
+- 成功 live sync 后，native stored-context accounting 使用 traveled branch，不会因 pre-travel message array 立即触发 stale auto-compaction。插件仍不取消、延迟或替换真实的 OMP compaction。
 - travel 只改变会话树与后续 model context；不会回滚文件、进程、浏览器、commit 或远端副作用。
 
 ## Guidance 维护

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent, estimateTokens } from "@oh-my-pi/pi-agent-core";
+import { shouldCompact } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AgentMessage, AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-agent-core/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -178,10 +179,15 @@ describe("successful travel synchronizes the pinned live AgentSession", () => {
       },
     } as unknown as ExtensionRunner;
     const agent = new Agent({ initialState: { messages: staleMessages } });
+    const settings = Settings.isolated({
+      "compaction.enabled": true,
+      "compaction.strategy": "summary",
+      "compaction.thresholdTokens": 1_000,
+    });
     const session = new AgentSession({
       agent,
       sessionManager: harness.session,
-      settings: Settings.isolated({ "compaction.enabled": false }),
+      settings,
       modelRegistry: {} as ModelRegistry,
       extensionRunner,
     });
@@ -192,6 +198,9 @@ describe("successful travel synchronizes the pinned live AgentSession", () => {
     } as unknown as ExtensionContext;
 
     const usageBefore = session.getContextUsage();
+    const storedTokensBefore = agent.state.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+    expect(usageBefore).not.toBeNull();
+    expect(shouldCompact(storedTokensBefore, 100_000, settings.getGroup("compaction"))).toBe(true);
     expect(travelTool).toBeDefined();
     const result = await travelTool!.execute(
       TOOL_CALL_ID,
@@ -240,7 +249,13 @@ describe("successful travel synchronizes the pinned live AgentSession", () => {
     }
     expect(providerContext).toEqual(rebuilt);
     const usageAfter = session.getContextUsage();
+    const storedTokensAfter = agent.state.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
     expect(usageAfter?.tokens ?? Number.POSITIVE_INFINITY).toBeLessThan(usageBefore?.tokens ?? 0);
+    expect(storedTokensAfter).toBeLessThan(storedTokensBefore);
+    expect(shouldCompact(storedTokensAfter, 100_000, settings.getGroup("compaction"))).toBe(false);
+    expect(harness.session.getEntries().some(
+      (entry) => entry.type === "label" && entry.label?.startsWith("pre-compact-"),
+    )).toBe(false);
 
     expect(timelineTool).toBeDefined();
     const timeline = await timelineTool!.execute(
