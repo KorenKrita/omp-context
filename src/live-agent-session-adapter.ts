@@ -89,7 +89,8 @@ function observeSessionAssociation(state: InstallationState, value: unknown): vo
     if (!value || typeof value !== "object") return;
     const sessionManager = (value as { sessionManager?: unknown }).sessionManager;
     if (!sessionManager || typeof sessionManager !== "object") return;
-    state.sessions.set(sessionManager, new WeakRef(value));
+    const existing = state.sessions.get(sessionManager)?.deref();
+    if (existing !== value) state.sessions.set(sessionManager, new WeakRef(value));
   } catch {
     // Capability observation must never change host getContextUsage behavior.
   }
@@ -158,16 +159,17 @@ function install(HostClass: AgentSessionHostClass): InstallationState | AgentSes
   const existing = current[INSTALLATION_SYMBOL];
   if (existing) return existing;
 
+  const originalGetContextUsage = current;
   const state: InstallationState = {
     kind: "installed",
-    originalGetContextUsage: current,
+    originalGetContextUsage,
     sessions: new WeakMap(),
     pending: new WeakMap(),
     outcomes: new WeakMap(),
   };
   const replacement: InstalledGetContextUsage = function (this: LiveAgentSession, ...args: unknown[]) {
     observeSessionAssociation(state, this);
-    return current.apply(this, args);
+    return originalGetContextUsage.apply(this, args);
   };
   Object.defineProperty(replacement, INSTALLATION_SYMBOL, { value: state });
   return replacePrototypeMethod(prototype, replacement) ?? state;
