@@ -8,6 +8,7 @@ const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
   timeout: 10_000,
 });
 if (inside.error) {
+  if (inside.error.code === "ENOENT") process.exit(0);
   process.stderr.write(`Could not inspect Git repository: ${inside.error.message}\n`);
   process.exit(1);
 }

@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join, parse } from "node:path";
 
 export const OMP_HOST_PACKAGES = [
@@ -104,8 +104,33 @@ export function readDeclaredHostVersion(repoRoot) {
   return versions[0];
 }
 
-function writeJson(path, value) {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+function replaceFilesTransactionally(files) {
+  const transaction = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const snapshots = new Map(files.map(({ path }) => [path, readFileSync(path)]));
+  const prepared = files.map(({ path, content }) => ({
+    path,
+    temporaryPath: `${path}.omp-context-${transaction}.tmp`,
+    content,
+  }));
+  try {
+    for (const file of prepared) writeFileSync(file.temporaryPath, file.content);
+    for (const file of prepared) renameSync(file.temporaryPath, file.path);
+  } catch (cause) {
+    const restorationFailures = [];
+    for (const [path, bytes] of snapshots) {
+      try {
+        writeFileSync(path, bytes);
+      } catch (restoreError) {
+        restorationFailures.push(`${path}: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+      }
+    }
+    const restorationDetail = restorationFailures.length > 0
+      ? `; restoration also failed for ${restorationFailures.join(", ")}`
+      : "";
+    throw new Error(`Failed to update exact host version files transactionally${restorationDetail}`, { cause });
+  } finally {
+    for (const file of prepared) rmSync(file.temporaryPath, { force: true });
+  }
 }
 
 export function updateExactHostVersion(repoRoot, version) {
@@ -134,7 +159,9 @@ export function updateExactHostVersion(repoRoot, version) {
   }
   for (const packageName of OMP_HOST_PACKAGES) fixture.dependencies[packageName] = version;
 
-  writeJson(packagePath, metadata);
-  writeJson(fixturePath, fixture);
-  writeFileSync(adapterPath, adapter.replace(pattern, `export const SUPPORTED_AGENT_SESSION_HOST_VERSION = "${version}";`));
+  replaceFilesTransactionally([
+    { path: packagePath, content: `${JSON.stringify(metadata, null, 2)}\n` },
+    { path: fixturePath, content: `${JSON.stringify(fixture, null, 2)}\n` },
+    { path: adapterPath, content: adapter.replace(pattern, `export const SUPPORTED_AGENT_SESSION_HOST_VERSION = "${version}";`) },
+  ]);
 }

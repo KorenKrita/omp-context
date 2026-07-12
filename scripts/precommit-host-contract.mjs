@@ -12,6 +12,7 @@ import {
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const checkOnly = process.argv.includes("--check-only");
+// Exit 0: verified. Exit 1: failed. Exit 2: compatible version promoted; review generated changes before committing.
 const deadline = Date.now() + 15 * 60_000;
 const promotionTargets = [
   "package.json",
@@ -21,9 +22,14 @@ const promotionTargets = [
   "test/host-fixture/bun.lock",
 ];
 
-function run(command, args, cwd, options = {}) {
+function remainingTime() {
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw new Error("Host contract exceeded the 15-minute overall deadline");
+  return remaining;
+}
+
+function run(command, args, cwd, options = {}) {
+  const remaining = remainingTime();
   process.stdout.write(`→ ${command} ${args.join(" ")}\n`);
   const result = spawnSync(command, args, {
     cwd,
@@ -50,21 +56,46 @@ function assertPromotionTargetsClean() {
 }
 
 function capturePromotionTargets() {
-  return new Map(promotionTargets.map((path) => [path, readFileSync(join(repoRoot, path))]));
+  return new Map(promotionTargets.map((path) => {
+    try {
+      return [path, readFileSync(join(repoRoot, path))];
+    } catch (cause) {
+      throw new Error(`Could not snapshot promotion target ${path}; install dependencies so tracked lockfiles exist, then retry`, { cause });
+    }
+  }));
 }
 
 function restorePromotionTargets(snapshot) {
-  for (const [path, bytes] of snapshot) writeFileSync(join(repoRoot, path), bytes);
+  const failures = [];
+  for (const [path, bytes] of snapshot) {
+    try {
+      writeFileSync(join(repoRoot, path), bytes);
+    } catch (error) {
+      failures.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (failures.length > 0) throw new Error(failures.join("; "));
 }
 
 function copyWorkingTree(destination) {
   cpSync(repoRoot, destination, {
     recursive: true,
+    dereference: false,
     filter(source) {
+      remainingTime();
       const path = relative(repoRoot, source);
       if (!path) return true;
       const segments = path.split(/[\\/]/);
-      return !segments.some((segment) => segment === ".git" || segment === "node_modules" || segment === ".acm-build" || segment === "dist");
+      return !segments.some((segment) => [
+        ".git",
+        "node_modules",
+        ".acm-build",
+        "dist",
+        "coverage",
+        ".cache",
+        ".memsearch",
+        ".codegraph",
+      ].includes(segment));
     },
   });
 }
@@ -95,11 +126,14 @@ try {
   }
 
   if (!checkOnly) assertPromotionTargetsClean();
+  process.stdout.write("Host version changed; validating an isolated candidate. This may take several minutes.\n");
 
   const tempRoot = mkdtempSync(join(tmpdir(), "omp-context-host-candidate-"));
   const candidateRoot = join(tempRoot, "repo");
   try {
+    remainingTime();
     copyWorkingTree(candidateRoot);
+    remainingTime();
     updateExactHostVersion(candidateRoot, local.version);
     installAndVerify(candidateRoot);
   } finally {
@@ -111,6 +145,7 @@ try {
     process.exit(1);
   }
 
+  assertPromotionTargetsClean();
   const rollback = capturePromotionTargets();
   try {
     updateExactHostVersion(repoRoot, local.version);
@@ -118,7 +153,13 @@ try {
     run("bun", ["install"], join(repoRoot, "test", "host-fixture"));
     verifyDeclaredHost();
   } catch (promotionError) {
-    restorePromotionTargets(rollback);
+    try {
+      restorePromotionTargets(rollback);
+    } catch (restoreError) {
+      throw new Error(
+        `Local OMP promotion failed: ${promotionError instanceof Error ? promotionError.message : String(promotionError)}; snapshot restoration also failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}. Repository files may be inconsistent and require manual recovery.`,
+      );
+    }
     let recovery = "tracked promotion targets were restored";
     try {
       run("bun", ["install", "--frozen-lockfile"], repoRoot, { env: { OMP_CONTEXT_SKIP_HOOK_INSTALL: "1" } });
@@ -132,7 +173,7 @@ try {
   process.stderr.write(
     `Local OMP ${local.version} passed the isolated host contract. Repository version fields and locks were updated from ${declared}; review and stage them, then commit again.\n`,
   );
-  process.exit(1);
+  process.exit(2);
 } catch (error) {
   process.stderr.write(`Host contract check failed: ${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(1);
