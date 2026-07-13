@@ -6,9 +6,9 @@
     "verify": "bun install --frozen-lockfile && bun ./build-source.mjs && bun test ./version.test.ts ./session-manager.test.ts ./host-bridge.test.ts ./agent-session-adapter.test.ts ./travel-live-sync.test.ts ./travel.test.ts ./context-rebuild.test.ts ./compaction-lifecycle.test.ts"
   },
   "dependencies": {
-    "@oh-my-pi/pi-agent-core": "16.4.6",
-    "@oh-my-pi/pi-ai": "16.4.6",
-    "@oh-my-pi/pi-coding-agent": "16.4.6",
+    "@oh-my-pi/pi-agent-core": "16.4.8",
+    "@oh-my-pi/pi-ai": "16.4.8",
+    "@oh-my-pi/pi-coding-agent": "16.4.8",
     "zod": "4.4.3"
   }
 }

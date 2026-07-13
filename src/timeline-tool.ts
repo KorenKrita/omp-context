@@ -203,7 +203,11 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
       _onUpdate: unknown,
       ctx: ExtensionContext,
     ) {
-      const params = schema.parse(rawParams);
+      const params = schema.parse(rawParams) as
+        | { view: "active"; limit: number; verbose?: boolean }
+        | { view: "checkpoints"; limit: number; filter?: string }
+        | { view: "search"; limit: number; query: string }
+        | { view: "tree"; limit: number };
       if (params.view === "search" && !params.query) {
         return {
           content: [{ type: "text" as const, text: "Error: 'query' is required when view=search." }],
