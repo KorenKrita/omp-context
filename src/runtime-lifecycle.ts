@@ -6,6 +6,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import { appendCheckpointLabel, buildSessionMessages } from "./host-bridge.js";
 import {
   buildContextUsageNudgeMessage,
+  calculateContextUsagePressure,
   CONTEXT_USAGE_NUDGE_STATE_CUSTOM_TYPE,
   restoreContextUsageNudgeState,
 } from "./context-usage-nudge.js";
@@ -54,7 +55,8 @@ export function registerAcmLifecycle(pi: ExtensionAPI, runtime: AcmSessionRuntim
   pi.on("context", (event, ctx: ExtensionContext) => {
     const sessionManager = ctx.sessionManager;
     const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : undefined;
-    if (typeof usage?.percent === "number") runtime.observeContextUsage(sessionManager, usage.percent);
+    const pressure = calculateContextUsagePressure(usage?.tokens, usage?.contextWindow, usage?.percent);
+    if (pressure) runtime.observeContextUsage(sessionManager, pressure);
     if (!contextRefresh.isPending(sessionManager)) {
       const original = event.messages as AgentMessage[];
       const fixed = fixOrphanedToolUse(original);
@@ -103,14 +105,14 @@ export function registerAcmLifecycle(pi: ExtensionAPI, runtime: AcmSessionRuntim
     const contextWindow = typeof ctx.getContextUsage === "function"
       ? ctx.getContextUsage()?.contextWindow
       : undefined;
-    if (typeof contextWindow === "number" && contextWindow > 0) {
-      const percent = (promptTokens * 100) / contextWindow;
+    const pressure = calculateContextUsagePressure(promptTokens, contextWindow);
+    if (pressure) {
       runtime.setUsage(ctx.sessionManager, {
-        tokens: promptTokens,
-        contextWindow,
-        percent,
+        tokens: pressure.tokens,
+        contextWindow: pressure.contextWindow,
+        percent: pressure.usagePercent,
       });
-      const baseline = runtime.observeContextUsage(ctx.sessionManager, percent, true);
+      const baseline = runtime.observeContextUsage(ctx.sessionManager, pressure, true);
       if (baseline) {
         try {
           pi.appendEntry(CONTEXT_USAGE_NUDGE_STATE_CUSTOM_TYPE, baseline);

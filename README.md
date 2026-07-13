@@ -57,7 +57,14 @@ Runtime 不会伪装成能判断语义完整性，也不会自动批准或执行
 
 ## Context usage reminder
 
-插件通过 OMP 的 `context` 事件观察真实 context usage。当前周期第一次达到 30%、50%、70% 时分别提醒一次；如果一次跨过多个档位，只发送已达到的最高档。70% 是本周期最后一次自动提醒。
+插件通过 OMP 的 `context` 事件观察真实 active tokens，并按 ACM working-budget pressure 判断 30%、50%、70% 档位：
+
+```text
+workingBudgetTokens = min(contextWindow, 400K)
+pressurePercent = activeTokens / workingBudgetTokens × 100
+```
+
+物理窗口不超过 400K 时沿用实际窗口；超过 400K 时统一使用 400K 工作预算。因此 200K、350K 模型的触发节奏不变，1M 模型在 120K / 200K / 280K active tokens 时分别触发 30% / 50% / 70%。真实 hard-window usage 仍单独保留，reminder details 与 `acm_timeline` dashboard 会同时展示 hard usage 和 ACM pressure。当前周期每个档位只提醒一次；如果一次跨过多个档位，只发送已达到的最高档。70% 是本周期最后一次自动提醒。
 
 有工具调用时，reminder 作为隐藏 steering context 注入当前 agent loop；主会话正常结束但没有工具结果可承载时，插件会在 `session_stop` 之后通过隐藏的 OMP `nextTurn` continuation 交付，不会把 reminder 放进可编辑的 pending-message UI。
 

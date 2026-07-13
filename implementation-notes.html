@@ -124,6 +124,11 @@
         <td>Preserve strict per-view timeline validation after the OMP 16.4.8 Zod 4 host promotion.</td>
         <td>The host-compatible root schema remains one object, while a Zod refinement enforces the documented discriminated-view contract: search requires a non-blank query, and fields scoped to active/checkpoints/search are rejected on other views. This restores the existing public contract without reintroducing a root union that conflicts with the host registration surface.</td>
       </tr>
+      <tr>
+        <td>user-decided</td>
+        <td>Classify ACM reminders against a working budget capped at 400K tokens while preserving hard-window usage as a separate metric.</td>
+        <td><code>workingBudgetTokens = min(contextWindow, 400000)</code>: models at or below 400K retain their actual-window 30% / 50% / 70% behavior, while larger windows use 400K and therefore trigger at 120K / 200K / 280K active tokens. Existing persisted levels remain compatible; reminder details, baseline state, and the timeline dashboard expose both hard usage and ACM pressure rather than redefining <code>usagePercent</code>. OMP-native delivery and lifecycle recovery paths remain unchanged.</td>
+      </tr>
     </tbody>
   </table>
 

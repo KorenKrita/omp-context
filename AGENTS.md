@@ -95,7 +95,7 @@ travel 不保证降 token，也不再给出基于 500-token/2-percent 阈值的 
 
 ### Context usage reminder 使用 OMP-native 两条交付路径
 
-`context` handler 读取 `ctx.getContextUsage().percent`，每个 context cycle 只在首次达到 30%、50%、70% 时安排 reminder；一次跨过多档只保留最高新档位，普通 usage 回落不会 rearm。`tool_result` 将 pending reminder 作为 `display: false` 的 `steer` 发送，因此有工具调用的 main agent 与 subagent 都能在当前 loop 收到。
+`context` handler 读取 `ctx.getContextUsage()` 的 active tokens、hard context window 与 hard usage。Reminder 档位按 `workingBudgetTokens = min(contextWindow, 400_000)`、`pressurePercent = tokens / workingBudgetTokens * 100` 分类：400K 及以下使用实际窗口，超过 400K 使用 400K cap。`usagePercent` 始终表示 hard-window usage；message details、baseline state 与 timeline dashboard 分别暴露 `pressurePercent`、`workingBudgetTokens` 和 `policy`。每个 context cycle 只在首次达到 30%、50%、70% 时安排 reminder；一次跨过多档只保留最高新档位，普通 usage 回落不会 rearm。`tool_result` 将 pending reminder 作为 `display: false` 的 `steer` 发送，因此有工具调用的 main agent 与 subagent 都能在当前 loop 收到。
 
 主会话没有 tool-result 交付点时，`session_stop` 只记录“正常终止可交付”状态并始终返回 `undefined`，不创建 continuation、不短路其他 stop hooks，也不丢失其他扩展的 metadata。随后对应的 `agent_end` 使用 `sendMessage(..., { deliverAs: "nextTurn", triggerTurn: true })` 安排隐藏 continuation。OMP 不向 subagent 发 `session_stop`，所以 subagent 只保证 tool-result path。
 
