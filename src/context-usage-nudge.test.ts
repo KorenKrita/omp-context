@@ -1,0 +1,280 @@
+import { describe, expect, test } from "bun:test";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import * as zod from "zod/v4";
+import registerAcmExtension from "./index.js";
+
+type Handler = (event: any, ctx: ExtensionContext) => unknown;
+
+function createFixture(sessionManager: object = {}) {
+  const handlers = new Map<string, Handler[]>();
+  const tools = new Map<string, any>();
+  const sentMessages: Array<{ message: any; options: any }> = [];
+  const appendedEntries: Array<{ customType: string; data: unknown }> = [];
+  const notifications: string[] = [];
+  let usagePercent = 1;
+
+  const pi = {
+    zod,
+    on(event: string, handler: Handler) {
+      const current = handlers.get(event) ?? [];
+      current.push(handler);
+      handlers.set(event, current);
+    },
+    registerTool(tool: any) {
+      tools.set(tool.name, tool);
+    },
+    sendMessage(message: any, options: any) {
+      sentMessages.push({ message, options });
+    },
+    appendEntry(customType: string, data: unknown) {
+      appendedEntries.push({ customType, data });
+      const appendCustomEntry = (sessionManager as { appendCustomEntry?: (type: string, value: unknown) => string })
+        .appendCustomEntry;
+      if (typeof appendCustomEntry === "function") appendCustomEntry.call(sessionManager, customType, data);
+    },
+  } as unknown as ExtensionAPI;
+
+  registerAcmExtension(pi);
+
+  const context = {
+    sessionManager,
+    getContextUsage: () => ({
+      tokens: usagePercent * 1_000,
+      contextWindow: 100_000,
+      percent: usagePercent,
+    }),
+    ui: {
+      notify(message: string) {
+        notifications.push(message);
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  const emit = async (event: string, data: object = {}) => {
+    let result: unknown;
+    for (const handler of handlers.get(event) ?? []) {
+      result = await handler({ type: event, ...data }, context);
+    }
+    return result;
+  };
+
+  return {
+    context,
+    emit,
+    sentMessages,
+    appendedEntries,
+    notifications,
+    tools,
+    setUsagePercent(value: number) {
+      usagePercent = value;
+    },
+  };
+}
+
+const assistantStop = (stopReason = "stop") => ({
+  role: "assistant",
+  stopReason,
+  content: [],
+});
+
+describe("ACM context usage reminders", () => {
+  test("sends only the highest newly reached tier through the tool-result steering path", async () => {
+    const fixture = createFixture();
+
+    fixture.setUsagePercent(30);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-1", content: [], isError: false });
+
+    expect(fixture.sentMessages).toHaveLength(1);
+    expect(fixture.sentMessages[0]).toMatchObject({
+      message: {
+        customType: "acm:context-usage-reminder",
+        display: false,
+        details: { kind: "context-usage-reminder", level: 30 },
+      },
+      options: { deliverAs: "steer" },
+    });
+    expect(fixture.sentMessages[0]?.message.content).toContain("next natural semantic boundary");
+
+    fixture.setUsagePercent(35);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-2", content: [], isError: false });
+    expect(fixture.sentMessages).toHaveLength(1);
+
+    fixture.setUsagePercent(71);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-3", content: [], isError: false });
+
+    expect(fixture.sentMessages).toHaveLength(2);
+    expect(fixture.sentMessages[1]?.message.details).toMatchObject({ level: 70 });
+    expect(fixture.sentMessages[1]?.message.content).toContain("Final reminder");
+    expect(fixture.sentMessages.some(({ message }) => message.details?.level === 50)).toBe(false);
+  });
+
+  test("uses session_stop only as terminal eligibility and continues from normal agent_end", async () => {
+    const fixture = createFixture();
+    fixture.setUsagePercent(50);
+    await fixture.emit("context", { messages: [] });
+
+    expect(await fixture.emit("session_stop", {
+      messages: [assistantStop()],
+      last_assistant_message: assistantStop(),
+    })).toBeUndefined();
+    expect(fixture.sentMessages).toHaveLength(0);
+
+    await fixture.emit("agent_end", { messages: [assistantStop()] });
+    expect(fixture.sentMessages).toHaveLength(1);
+    expect(fixture.sentMessages[0]).toMatchObject({
+      message: {
+        customType: "acm:context-usage-reminder",
+        display: false,
+        details: { level: 50 },
+      },
+      options: { deliverAs: "nextTurn", triggerTurn: true },
+    });
+
+    const failed = createFixture();
+    failed.setUsagePercent(50);
+    await failed.emit("context", { messages: [] });
+    await failed.emit("session_stop", {
+      messages: [assistantStop("error")],
+      last_assistant_message: assistantStop("error"),
+    });
+    await failed.emit("agent_end", { messages: [assistantStop("error")] });
+    expect(failed.sentMessages).toHaveLength(0);
+  });
+
+  test("ordinary usage drops do not rearm tiers while compaction starts a baseline-only cycle", async () => {
+    const fixture = createFixture();
+
+    fixture.setUsagePercent(30);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-1", content: [], isError: false });
+
+    fixture.setUsagePercent(20);
+    await fixture.emit("context", { messages: [] });
+    fixture.setUsagePercent(31);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-2", content: [], isError: false });
+    expect(fixture.sentMessages).toHaveLength(1);
+
+    await fixture.emit("session_compact", {});
+    fixture.setUsagePercent(55);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-3", content: [], isError: false });
+    expect(fixture.sentMessages).toHaveLength(1);
+
+    await fixture.emit("turn_end", {
+      message: { role: "assistant", usage: { input: 55_000, cacheRead: 0, cacheWrite: 0 } },
+    });
+    expect(fixture.appendedEntries).toContainEqual({
+      customType: "acm:context-usage-state",
+      data: { kind: "context-usage-baseline", highestReachedLevel: 50, usagePercent: 55 },
+    });
+
+    fixture.setUsagePercent(71);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-4", content: [], isError: false });
+    expect(fixture.sentMessages).toHaveLength(2);
+    expect(fixture.sentMessages[1]?.message.details).toMatchObject({ level: 70 });
+  });
+
+  test("a successful ACM travel starts a new baseline-only reminder cycle", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const rootId = sessionManager.appendMessage({ role: "user", content: "root", timestamp: Date.now() });
+    sessionManager.appendMessage({ role: "user", content: "work to archive", timestamp: Date.now() });
+    const fixture = createFixture(sessionManager);
+
+    fixture.setUsagePercent(30);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-1", content: [], isError: false });
+    expect(fixture.sentMessages).toHaveLength(1);
+
+    const travelTool = fixture.tools.get("acm_travel");
+    const travelResult = await travelTool.execute(
+      "travel-1",
+      {
+        target: rootId,
+        summary: [
+          "Goal: verify reminder reset after travel",
+          "State: travel completed",
+          "Evidence: lifecycle test",
+          "External: none",
+          "Exclusions: none",
+          "Recover: root",
+          "NEXT: continue testing context reminders",
+        ].join("\n"),
+      },
+      undefined,
+      undefined,
+      fixture.context,
+    );
+    expect(travelResult.details?.error).toBeUndefined();
+
+    fixture.setUsagePercent(75);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-2", content: [], isError: false });
+    expect(fixture.sentMessages).toHaveLength(1);
+
+    await fixture.emit("turn_end", {
+      message: { role: "assistant", usage: { input: 28_000, cacheRead: 0, cacheWrite: 0 } },
+    });
+    fixture.setUsagePercent(31);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-3", content: [], isError: false });
+    expect(fixture.sentMessages).toHaveLength(2);
+    expect(fixture.sentMessages[1]?.message.details).toMatchObject({ level: 30 });
+  });
+
+  test("restores delivered tiers on start, switch, branch, and tree transitions", async () => {
+    for (const event of ["session_start", "session_switch", "session_branch", "session_tree"] as const) {
+      const sessionManager = SessionManager.inMemory();
+      sessionManager.appendMessage({ role: "user", content: "existing work", timestamp: Date.now() });
+      sessionManager.appendCustomMessageEntry(
+        "acm:context-usage-reminder",
+        "persisted 30% reminder",
+        false,
+        { kind: "context-usage-reminder", level: 30, usagePercent: 30 },
+      );
+      const fixture = createFixture(sessionManager);
+
+      await fixture.emit(event, {});
+      fixture.setUsagePercent(35);
+      await fixture.emit("context", { messages: [] });
+      await fixture.emit("tool_result", { toolName: "read", toolCallId: `${event}-1`, content: [], isError: false });
+      expect(fixture.sentMessages).toHaveLength(0);
+
+      fixture.setUsagePercent(50);
+      await fixture.emit("context", { messages: [] });
+      await fixture.emit("tool_result", { toolName: "read", toolCallId: `${event}-2`, content: [], isError: false });
+      expect(fixture.sentMessages).toHaveLength(1);
+      expect(fixture.sentMessages[0]?.message.details).toMatchObject({ level: 50 });
+    }
+  });
+
+  test("persists and restores the first post-transition baseline across reload", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const rootId = sessionManager.appendMessage({ role: "user", content: "root", timestamp: Date.now() });
+    sessionManager.appendCompaction("compacted work", undefined, rootId, 80_000);
+    const beforeReload = createFixture(sessionManager);
+
+    await beforeReload.emit("session_start", {});
+    await beforeReload.emit("turn_end", {
+      message: { role: "assistant", usage: { input: 20_000, cacheRead: 0, cacheWrite: 0 } },
+    });
+    expect(beforeReload.appendedEntries).toContainEqual({
+      customType: "acm:context-usage-state",
+      data: { kind: "context-usage-baseline", highestReachedLevel: 0, usagePercent: 20 },
+    });
+
+    const afterReload = createFixture(sessionManager);
+    await afterReload.emit("session_start", {});
+    afterReload.setUsagePercent(35);
+    await afterReload.emit("context", { messages: [] });
+    await afterReload.emit("tool_result", { toolName: "read", toolCallId: "read-1", content: [], isError: false });
+
+    expect(afterReload.sentMessages).toHaveLength(1);
+    expect(afterReload.sentMessages[0]?.message.details).toMatchObject({ level: 30 });
+  });
+});

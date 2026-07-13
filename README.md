@@ -6,6 +6,7 @@
 
 - 在任务、阶段和高风险操作前建立可恢复的语义锚点；
 - 查看当前会话 spine、历史分支、checkpoint 与上下文占用；
+- 在 context usage 首次跨过 30% / 50% / 70% 时收到分级、隐藏的 ACM reminder；
 - 把已经完成的过程折叠成可执行 handoff；
 - 在安全时将累计 summary chain **rebase** 到更早的基底，重新获得浅层、低负载的 working set；
 - 在 travel 后同步持久会话树、下一轮模型上下文与 live AgentSession。
@@ -54,6 +55,16 @@ Timeline 会提供事实证据：
 
 Runtime 不会伪装成能判断语义完整性，也不会自动批准或执行 rebase。
 
+## Context usage reminder
+
+插件通过 OMP 的 `context` 事件观察真实 context usage。当前周期第一次达到 30%、50%、70% 时分别提醒一次；如果一次跨过多个档位，只发送已达到的最高档。70% 是本周期最后一次自动提醒。
+
+有工具调用时，reminder 作为隐藏 steering context 注入当前 agent loop；主会话正常结束但没有工具结果可承载时，插件会在 `session_stop` 之后通过隐藏的 OMP `nextTurn` continuation 交付，不会把 reminder 放进可编辑的 pending-message UI。
+
+成功 `acm_travel` 或 OMP 原生 compaction 会开始一个 **baseline-only** 新周期：第一条真实 post-transition usage 只建立基线，不会因为刚完成上下文切换而立即提醒。该基线与已发送档位会写入 session，reload、resume、switch、branch 和 tree navigation 后都能恢复。
+
+Reminder 只提示 agent 在下一个安全语义边界检查 fold / rebase；它不会自动执行 travel，也不会降低 cold-start、可恢复性或任务连续性的门槛。
+
 ## 安装
 
 ### 本地安装
@@ -95,6 +106,7 @@ Checkpoint 名称在整棵会话树中大小写敏感且必须唯一；同一节
 - Travel 只改变 OMP 会话树和后续模型上下文。
 - 它不会回滚文件、进程、浏览器、Git commit 或远端服务。
 - 插件不会取消、替换或延迟 OMP 原生 compaction。
+- Context reminder 不会自动执行 travel，也不会把 usage 阈值当作安全批准。
 - 如果当前任务仍依赖不可压缩的中间推理，agent 会保留 working set 或接受 native compaction，而不是为了降低数字强行 rebase。
 - Host 不支持 live synchronization 时，持久 branch 和公开 context rebuild 仍然保留；结果会给出明确恢复指引。
 

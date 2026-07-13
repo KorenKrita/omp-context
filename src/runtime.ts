@@ -1,4 +1,11 @@
 import type { UsageLike } from "./lib.js";
+import {
+  classifyContextUsageNudgeLevel,
+  type ContextUsageNudgeLevel,
+  type PendingContextUsageNudge,
+  type PersistedContextUsageBaselineState,
+  type RestoredContextUsageNudgeState,
+} from "./context-usage-nudge.js";
 import { ContextRefreshRegistry } from "./lib.js";
 import {
   createLiveAgentSessionAdapter,
@@ -12,6 +19,12 @@ export class AcmSessionRuntime {
   readonly liveAgentSessions: LiveAgentSessionAdapter;
   private readonly cachedUsage = new WeakMap<object, UsageLike>();
   private readonly refreshTargets = new WeakMap<object, string>();
+  private readonly contextUsageNudges = new WeakMap<object, {
+    highestReachedLevel: 0 | ContextUsageNudgeLevel;
+    baselinePending?: boolean;
+    pending?: PendingContextUsageNudge;
+  }>();
+  private readonly terminalContextUsageNudgeEligible = new WeakSet<object>();
 
   constructor(liveAgentSessions: LiveAgentSessionAdapter = createLiveAgentSessionAdapter()) {
     this.liveAgentSessions = liveAgentSessions;
@@ -51,10 +64,72 @@ export class AcmSessionRuntime {
     return this.cachedUsage.get(session);
   }
 
+  observeContextUsage(
+    session: object,
+    percent: number,
+    establishBaseline = false,
+  ): PersistedContextUsageBaselineState | undefined {
+    if (!Number.isFinite(percent) || percent < 0) return undefined;
+    const state = this.contextUsageNudges.get(session) ?? { highestReachedLevel: 0 as const };
+    const level = classifyContextUsageNudgeLevel(percent);
+    if (state.baselinePending) {
+      if (!establishBaseline) return undefined;
+      state.highestReachedLevel = level;
+      state.baselinePending = false;
+      delete state.pending;
+      this.contextUsageNudges.set(session, state);
+      return {
+        kind: "context-usage-baseline",
+        highestReachedLevel: level,
+        usagePercent: percent,
+      };
+    }
+    if (level !== 0 && level > state.highestReachedLevel) {
+      state.highestReachedLevel = level;
+      state.pending = { level, usagePercent: percent };
+    }
+    this.contextUsageNudges.set(session, state);
+    return undefined;
+  }
+
+  takePendingContextUsageNudge(session: object): PendingContextUsageNudge | undefined {
+    const state = this.contextUsageNudges.get(session);
+    if (!state?.pending) return undefined;
+    const pending = state.pending;
+    delete state.pending;
+    return pending;
+  }
+
+  setTerminalContextUsageNudgeEligibility(session: object, eligible: boolean): void {
+    if (eligible) this.terminalContextUsageNudgeEligible.add(session);
+    else this.terminalContextUsageNudgeEligible.delete(session);
+  }
+
+  takeTerminalContextUsageNudge(session: object): PendingContextUsageNudge | undefined {
+    if (!this.terminalContextUsageNudgeEligible.has(session)) return undefined;
+    this.terminalContextUsageNudgeEligible.delete(session);
+    return this.takePendingContextUsageNudge(session);
+  }
+
+  restoreContextUsageNudgeState(session: object, state: RestoredContextUsageNudgeState): void {
+    this.terminalContextUsageNudgeEligible.delete(session);
+    this.contextUsageNudges.set(session, { ...state });
+  }
+
+  resetContextUsageNudgeCycle(session: object): void {
+    this.terminalContextUsageNudgeEligible.delete(session);
+    this.contextUsageNudges.set(session, {
+      highestReachedLevel: 0,
+      baselinePending: true,
+    });
+  }
+
   clear(session: object): void {
     this.contextRefresh.clear(session);
     this.refreshTargets.delete(session);
     this.cachedUsage.delete(session);
+    this.contextUsageNudges.delete(session);
+    this.terminalContextUsageNudgeEligible.delete(session);
     this.liveAgentSessions.clear(session);
   }
 }

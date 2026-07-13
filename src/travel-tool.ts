@@ -307,6 +307,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
       const resultingLeafId = mutation.resultingLeafId;
       const activeSummaryDepthAfter = countActiveSummaryDepth(sessionManager.getBranch());
       const activeSummaryDepthDelta = activeSummaryDepthAfter - activeSummaryDepthBefore;
+      runtime.resetContextUsageNudgeCycle(sessionManager);
       runtime.scheduleRefresh(sessionManager, summaryEntryId);
       const liveAgentSessionSync = runtime.scheduleLiveAgentSync(
         sessionManager,

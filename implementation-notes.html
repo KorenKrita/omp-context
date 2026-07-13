@@ -16,7 +16,7 @@
 </head>
 <body>
   <h1>ACM Implementation Notes</h1>
-  <p class="meta">Current implementation decisions, updated 2026-07-12. Superseded cross-repository synchronization decisions were removed when omp-context became independently maintained.</p>
+  <p class="meta">Current implementation decisions, updated 2026-07-13. Superseded cross-repository synchronization decisions were removed when omp-context became independently maintained.</p>
 
   <h2>Decision Record</h2>
   <table>
@@ -108,6 +108,21 @@
         <td>agent-resolved</td>
         <td>Use one advanced reference at a time and reroute when the observable condition changes.</td>
         <td>This preserves progressive disclosure without trapping archive recovery inside the wrong playbook after a failure. Recovery references now distinguish backup-label rollback from indeterminate branch mutation and use factual refresh/live-sync lifecycle states.</td>
+      </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>Deliver 30/50/70 context reminders through OMP-native tool and terminal paths.</td>
+        <td>The <code>context</code> event observes usage. A pending reminder is sent as a hidden <code>steer</code> on <code>tool_result</code>. For a normally settled main session without a tool result, <code>session_stop</code> only records terminal eligibility and always returns <code>undefined</code>; the following <code>agent_end</code> sends a hidden <code>nextTurn</code> message with <code>triggerTurn: true</code>. This preserves other stop-hook results and metadata. OMP does not emit <code>session_stop</code> for subagents, so their fallback guarantee is intentionally limited to the tool-result path.</td>
+      </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>Use a persisted baseline-only cycle after travel and native compaction.</td>
+        <td>A successful <code>acm_travel</code> or <code>session_compact</code> suppresses threshold delivery until the first real post-transition <code>turn_end</code> establishes a baseline. The baseline is stored in a non-context custom entry; hidden reminder custom messages record delivered tiers. Start, switch, branch, and tree events rebuild the current cycle from the active branch so reload and resume do not duplicate reminders.</td>
+      </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>Preserve strict per-view timeline validation after the OMP 16.4.8 Zod 4 host promotion.</td>
+        <td>The host-compatible root schema remains one object, while a Zod refinement enforces the documented discriminated-view contract: search requires a non-blank query, and fields scoped to active/checkpoints/search are rejected on other views. This restores the existing public contract without reintroducing a root union that conflicts with the host registration surface.</td>
       </tr>
     </tbody>
   </table>
