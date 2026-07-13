@@ -182,28 +182,13 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
   const limitSchema = pi.zod.number().int().min(1).max(50).default(50).describe(
     "Maximum recent visible entries (active), sorted aliases (checkpoints), matches (search), or traversal depth per root (tree). Range 1..50; default 50.",
   );
-  const viewSchema = pi.zod.discriminatedUnion("view", [
-    pi.zod.object({
-      view: pi.zod.literal("active"),
-      limit: limitSchema,
-      verbose: pi.zod.boolean().optional().describe("Show all active-path messages, including internal tool traffic and system/custom metadata."),
-    }).strict(),
-    pi.zod.object({
-      view: pi.zod.literal("checkpoints"),
-      limit: limitSchema,
-      filter: pi.zod.string().trim().min(1).max(500).optional().describe("Optional non-blank checkpoint label or entry-ID filter, matched case-insensitively."),
-    }).strict(),
-    pi.zod.object({
-      view: pi.zod.literal("search"),
-      limit: limitSchema,
-      query: pi.zod.string().trim().min(1).max(500).describe("Required non-blank full-tree query matching labels, node IDs, or rendered content case-insensitively."),
-    }).strict(),
-    pi.zod.object({ view: pi.zod.literal("tree"), limit: limitSchema }).strict(),
-  ]);
-  const schema = pi.zod.preprocess((rawParams) => {
-    if (typeof rawParams !== "object" || rawParams === null || Array.isArray(rawParams) || "view" in rawParams) return rawParams;
-    return { ...rawParams, view: "active" };
-  }, viewSchema);
+  const schema = pi.zod.object({
+    view: pi.zod.enum(["active", "checkpoints", "search", "tree"]).optional().default("active").describe("Timeline view mode. Default: active."),
+    limit: limitSchema,
+    verbose: pi.zod.boolean().optional().describe("Show all active-path messages, including internal tool traffic and system/custom metadata. (active view only)"),
+    filter: pi.zod.string().trim().min(1).max(500).optional().describe("Optional non-blank checkpoint label or entry-ID filter, matched case-insensitively. (checkpoints view only)"),
+    query: pi.zod.string().trim().min(1).max(500).optional().describe("Full-tree query matching labels, node IDs, or rendered content case-insensitively. Required when view=search."),
+  }).strict();
 
   registerTool({
     name: "acm_timeline",
@@ -219,6 +204,12 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
       ctx: ExtensionContext,
     ) {
       const params = schema.parse(rawParams);
+      if (params.view === "search" && !params.query) {
+        return {
+          content: [{ type: "text" as const, text: "Error: 'query' is required when view=search." }],
+          details: { error: "missing_query" },
+        };
+      }
       const sessionManager = ctx.sessionManager;
       const tree = sessionManager.getTree();
       const branch = sessionManager.getBranch();
