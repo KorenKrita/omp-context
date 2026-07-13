@@ -188,7 +188,38 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
     verbose: pi.zod.boolean().optional().describe("Show all active-path messages, including internal tool traffic and system/custom metadata. (active view only)"),
     filter: pi.zod.string().trim().min(1).max(500).optional().describe("Optional non-blank checkpoint label or entry-ID filter, matched case-insensitively. (checkpoints view only)"),
     query: pi.zod.string().trim().min(1).max(500).optional().describe("Full-tree query matching labels, node IDs, or rendered content case-insensitively. Required when view=search."),
-  }).strict();
+  }).strict().superRefine((params, ctx) => {
+    const reject = (field: "verbose" | "filter" | "query") => {
+      if (params[field] === undefined) return;
+      ctx.addIssue({
+        code: "custom",
+        path: [field],
+        message: `'${field}' is not valid when view=${params.view}.`,
+      });
+    };
+
+    if (params.view === "active") {
+      reject("filter");
+      reject("query");
+      return;
+    }
+    if (params.view === "checkpoints") {
+      reject("verbose");
+      reject("query");
+      return;
+    }
+    if (params.view === "search") {
+      reject("verbose");
+      reject("filter");
+      if (!params.query) {
+        ctx.addIssue({ code: "custom", path: ["query"], message: "'query' is required when view=search." });
+      }
+      return;
+    }
+    reject("verbose");
+    reject("filter");
+    reject("query");
+  });
 
   registerTool({
     name: "acm_timeline",

@@ -10,12 +10,12 @@ import { AcmSessionRuntime } from "./runtime.js";
 
 class RecordingAdapter implements LiveAgentSessionAdapter {
   readonly installation: AgentSessionAdapterInstallationOutcome = { status: "ready" };
-  readonly pending = new WeakMap<object, string | undefined>();
+  readonly pending = new WeakMap<object, { toolCallId: string; preferredLeafId?: string }>();
   readonly outcomes = new WeakMap<object, AgentSessionSyncOutcome>();
   failNext = false;
 
-  schedule(session: object, preferredLeafId?: string): AgentSessionSyncOutcome {
-    this.pending.set(session, preferredLeafId);
+  schedule(session: object, toolCallId: string, preferredLeafId?: string): AgentSessionSyncOutcome {
+    this.pending.set(session, { toolCallId, preferredLeafId });
     const outcome: AgentSessionSyncOutcome = preferredLeafId
       ? { status: "pending", preferredLeafId }
       : { status: "pending" };
@@ -23,8 +23,9 @@ class RecordingAdapter implements LiveAgentSessionAdapter {
     return outcome;
   }
 
-  apply(session: object): AgentSessionSyncOutcome {
-    if (!this.pending.has(session)) {
+  apply(session: object, toolCallId: string): AgentSessionSyncOutcome {
+    const pending = this.pending.get(session);
+    if (!pending || pending.toolCallId !== toolCallId) {
       return { status: "skipped", reason: "not_pending", message: "idle" };
     }
     this.pending.delete(session);

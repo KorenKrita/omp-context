@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -67,7 +67,7 @@ describe("local OMP host version promotion", () => {
       process.env.OMP_EXECUTABLE = localFixture.executable;
       const local = readLocalOmpInstallation();
       expect(local.version).toBe("3.4.5");
-      expect(local.resolvedExecutable).toBe(localFixture.executable);
+      expect(local.resolvedExecutable).toBe(realpathSync(localFixture.executable));
       expect([...local.versions.values()]).toEqual(OMP_HOST_PACKAGES.map(() => "3.4.5"));
     } finally {
       if (previous === undefined) delete process.env.OMP_EXECUTABLE;
