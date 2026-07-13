@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Agentic Context Management for OMP — checkpoint, timeline, travel",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "pluginRoot": "."
   },
   "plugins": [
@@ -14,7 +14,7 @@
       "name": "omp-context",
       "description": "让 AI agent 主动管理上下文：打语义锚点、查看会话结构图、穿越时间线续接。回到过去可减负，前往未来可恢复 raw history。",
       "source": "./",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "KorenKrita"
       },
