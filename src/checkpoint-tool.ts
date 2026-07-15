@@ -7,8 +7,10 @@ import type { TSchema } from "@oh-my-pi/pi-ai/types";
 import {
   buildLabelMaps,
   formatContextUsage,
+  isReservedTargetName,
   isValidEntryId,
   resolveTargetId,
+  sanitizeTerminalText,
   type MeaningfulResolveResult,
 } from "./lib.js";
 import {
@@ -27,7 +29,7 @@ export function registerCheckpointTool(pi: ExtensionAPI): void {
   const registerTool = (tool: Parameters<ExtensionAPI["registerTool"]>[0] & { strict?: boolean }) => pi.registerTool(tool);
   const schema = pi.zod.object({
     name: pi.zod.string().min(1).max(64).regex(/^[\w\-\.]+$/).describe(
-      "Unique semantic anchor name. Use '<name>-start' for the beginning of a boundary you may later compress: task chain, phase, burst, or risky attempt. Use '<name>-done' for a milestone/archive pointer after results are in hand. E.g. parser-fix-start, timeout-investigation-start, root-cause-done. Avoid generic names like start, checkpoint-1. Only letters, digits, hyphens, underscores, and dots. Max 64 chars.",
+      "Unique semantic anchor name. The structural target keyword 'root' is reserved in every letter case. Use '<name>-start' for the beginning of a boundary you may later compress: task chain, phase, burst, or risky attempt. Use '<name>-done' for a milestone/archive pointer after results are in hand. E.g. parser-fix-start, timeout-investigation-start, root-cause-done. Avoid generic names like start, checkpoint-1. Only letters, digits, hyphens, underscores, and dots. Max 64 chars.",
     ),
     target: pi.zod.string().min(1).max(256).optional().describe(
       "History node ID or checkpoint name to label. Defaults to current meaningful position near HEAD.",
@@ -48,6 +50,12 @@ export function registerCheckpointTool(pi: ExtensionAPI): void {
       ctx: ExtensionContext,
     ) {
       const params = schema.parse(rawParams);
+      if (isReservedTargetName(params.name)) {
+        return {
+          content: [{ type: "text" as const, text: `Error: Checkpoint name '${sanitizeTerminalText(params.name)}' is reserved for the structural root target. Choose a different semantic name.` }],
+          details: { error: "reserved_name", name: params.name },
+        };
+      }
       const sessionManager = ctx.sessionManager;
       const tree = sessionManager.getTree();
       const labelMaps = buildLabelMaps(sessionManager.getEntries());
@@ -146,19 +154,19 @@ export function registerCheckpointTool(pi: ExtensionAPI): void {
 
       const { status, aliases, labelEntryId } = append.value;
       const resolvedEntry = targetEntry ?? findEntryInTree(tree, entryId);
-      const role = autoResolved?.role ?? (resolvedEntry ? getMessageRoleLabel(resolvedEntry) : undefined) ?? resolvedEntry?.type.toUpperCase() ?? "NODE";
+      const role = sanitizeTerminalText(autoResolved?.role ?? (resolvedEntry ? getMessageRoleLabel(resolvedEntry) : undefined) ?? resolvedEntry?.type.toUpperCase() ?? "NODE");
       const usage = ctx.getContextUsage();
       const usageText = usage ? formatContextUsage(usage, true) : "unknown";
       const cue = params.name.endsWith("-done") ? GUIDANCE_CUES.checkpointDone : GUIDANCE_CUES.checkpointStart;
       const skippedCount = autoResolved?.skipped.length;
       const placement = autoResolved
         ? `${role}${skippedCount ? `; skipped ${skippedCount} nearer transient/non-meaningful entr${skippedCount === 1 ? "y" : "ies"}` : ""}`
-        : `${role}; explicit target '${params.target}'`;
+        : `${role}; explicit target '${sanitizeTerminalText(params.target ?? "")}'`;
       const action = status === "already_present" ? "Reused" : "Created";
       return {
         content: [{
           type: "text" as const,
-          text: `${action} checkpoint '${params.name}' at ${entryId} via label entry ${labelEntryId} (${placement}). Aliases: ${aliases.join(", ")}. Context usage: ${usageText}. ${cue}`,
+          text: `${action} checkpoint '${sanitizeTerminalText(params.name)}' at ${sanitizeTerminalText(entryId)} via label entry ${sanitizeTerminalText(labelEntryId)} (${placement}). Aliases: ${aliases.map(sanitizeTerminalText).join(", ")}. Context usage: ${usageText}. ${cue}`,
         }],
         details: {
           status,

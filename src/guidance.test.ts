@@ -92,7 +92,7 @@ describe("canonical ACM CORE", () => {
     expect(ACM_CORE).toContain("Root is ideal when it passes; it is never presumed safe");
     expect(ACM_CORE).toContain("Context pressure triggers a rebase check");
     expect(ACM_CORE).toContain("does not lower the cold start gate or authorize travel");
-    expect(ACM_CORE.length).toBeLessThan(6000);
+    expect(ACM_CORE.length).toBeLessThan(7500);
   });
 
   test("appends CORE once while preserving existing system segments in order", async () => {

@@ -138,4 +138,19 @@ describe("registered acm_checkpoint progressive results", () => {
   expect(result.content[0].text).toContain(GUIDANCE_CUES.checkpointDone);
   expect(result.content[0].text).not.toContain(GUIDANCE_CUES.checkpointStart);
  });
+
+ test("rejects the structural root keyword as a checkpoint name before mutation", async () => {
+  const user = message("u1", null, "user", "begin");
+  const ctx = makeContext({ entries: [user] });
+  for (const name of ["root", "ROOT", "Root"]) {
+   const result = await execute(tool, { name }, ctx);
+   expect(result.details).toMatchObject({ error: "reserved_name", name });
+   expect(result.content[0].text).toContain("reserved for the structural root target");
+  }
+  const sm = ctx.sessionManager;
+  if (typeof sm === "object" && sm !== null && "getEntries" in sm) {
+   const entries = (sm as { getEntries: () => SessionEntry[] }).getEntries();
+   expect(entries.every((entry) => entry.type !== "label")).toBe(true);
+  }
+ });
 });

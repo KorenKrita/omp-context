@@ -15,8 +15,10 @@ import {
   formatContextUsage,
   formatEntryLabels,
   HANDOFF_SLOT_HINT,
+  isReservedTargetName,
   isValidEntryId,
   resolveTargetId,
+  sanitizeTerminalText,
   validateHandoffStructure,
 } from "./lib.js";
 import {
@@ -46,8 +48,18 @@ interface TravelSummaryDetails {
 function formatBackupText(name: string | undefined, entryId: string | undefined, resolvedFromHead: string | undefined): string {
   if (!name || !entryId) return "none";
   return resolvedFromHead
-    ? `${name}@${entryId} (resolved from HEAD ${resolvedFromHead})`
-    : `${name}@${entryId}`;
+    ? `${sanitizeTerminalText(name)}@${sanitizeTerminalText(entryId)} (resolved from HEAD ${sanitizeTerminalText(resolvedFromHead)})`
+    : `${sanitizeTerminalText(name)}@${sanitizeTerminalText(entryId)}`;
+}
+
+function countContainingToolBatch(branch: SessionEntry[], toolCallId: string): number | null {
+  for (let index = branch.length - 1; index >= 0; index--) {
+    const entry = branch[index];
+    if (entry?.type !== "message" || entry.message.role !== "assistant" || !Array.isArray(entry.message.content)) continue;
+    const toolCalls = entry.message.content.filter((part) => part.type === "toolCall");
+    if (toolCalls.some((part) => part.id === toolCallId)) return toolCalls.length;
+  }
+  return null;
 }
 
 function formatNumericValue(value: number | null, fractionDigits = 0): string {
@@ -69,7 +81,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
       `Handoff summary — the working state after travel. It must make the next action executable without rereading the folded trail. A rebase snapshot must pass cold start: a fresh agent can execute NEXT from this handoff and direct evidence pointers without reading archived summaries. Fill every slot, write 'none' rather than dropping one: ${HANDOFF_SLOT_HINT}. Include recovery pointers; pointers over dumps. Max 10000 chars.`,
     ),
     backupCurrentHeadAs: pi.zod.string().min(1).max(64).regex(/^[\w\-\.]+$/).optional().describe(
-      "Optional archive bookmark for the raw path being folded away. At task end, use '<task>-done' when the preview shows meaningful structural saving and the path does not already carry a suitable '-done' checkpoint. If the preview shows almost no saving, create a unique '-done' checkpoint and answer directly instead of calling travel merely to set this field. This is a recovery pointer, never the travel target or a substitute for a self-contained handoff.",
+      "Optional archive bookmark for the raw path being folded away. The structural target keyword 'root' is reserved in every letter case. At task end, use '<task>-done' when the preview shows meaningful structural saving and the path does not already carry a suitable '-done' checkpoint. If the preview shows almost no saving, create a unique '-done' checkpoint and answer directly instead of calling travel merely to set this field. This is a recovery pointer, never the travel target or a substitute for a self-contained handoff.",
     ),
   });
 
@@ -87,6 +99,12 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
       ctx: ExtensionContext,
     ) {
       const params = schema.parse(rawParams);
+      if (params.backupCurrentHeadAs && isReservedTargetName(params.backupCurrentHeadAs)) {
+        return {
+          content: [{ type: "text" as const, text: `Error: Archive bookmark name '${sanitizeTerminalText(params.backupCurrentHeadAs)}' is reserved for the structural root target. Travel aborted before mutation.` }],
+          details: { error: "reserved_backup_name", name: params.backupCurrentHeadAs },
+        };
+      }
       const handoffValidation = validateHandoffStructure(params.summary);
       if (!handoffValidation.ok) {
         return {
@@ -194,6 +212,14 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
         }
       }
 
+      const containingToolCallCount = countContainingToolBatch(branch, toolCallId);
+      if (containingToolCallCount !== null && containingToolCallCount > 1) {
+        return {
+          content: [{ type: "text" as const, text: `Error: acm_travel must run alone in its assistant tool batch; found ${containingToolCallCount} tool calls in the containing assistant message. Travel aborted before mutation. Reissue acm_travel in a new assistant message without sibling tools.` }],
+          details: { error: "mixed_tool_batch", toolCallId, toolCallCount: containingToolCallCount },
+        };
+      }
+
       const branchPrevalidation = prevalidateBranchWithSummary(sessionManager, targetId);
       if (!branchPrevalidation.ok) {
         return {
@@ -253,25 +279,42 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
 
       if (!mutation.ok) {
         if (mutation.refreshRequired) runtime.scheduleRefresh(sessionManager, mutation.refreshLeafId);
-        const recoveryAction = mutation.backupRollbackFailed
-          ? RECOVERY_GUIDANCE.rollbackFailed
-          : mutation.backupRollbackSkipped || mutation.branchState === "indeterminate"
-            ? RECOVERY_GUIDANCE.rollbackSkipped
-            : mutation.backupRolledBack
-              ? RECOVERY_GUIDANCE.branchRolledBack
-              : RECOVERY_GUIDANCE.hostCapability;
-        const backupNote = mutation.backupRollbackFailed
-          ? ` Backup label '${params.backupCurrentHeadAs}' remains at ${backupEntryId}; rollback failed.`
-          : mutation.backupRollbackSkipped && mutation.backupRollbackSkipReason === "branch_mutation_observed"
-            ? ` Backup label '${params.backupCurrentHeadAs}' remains because branch mutation was observed or cannot be excluded.`
-            : mutation.backupRollbackSkipped
-              ? ` Backup label '${params.backupCurrentHeadAs}' may remain because its mutation state is indeterminate.`
-              : mutation.backupRolledBack
-                ? ` Backup label '${params.backupCurrentHeadAs}' was rolled back.`
-                : "";
+        const backupRecoveryNode = backupEntryId ? `history node ${backupEntryId}` : "the reported history node";
+        let recoveryAction: string;
+        if (mutation.backupRollbackFailed || mutation.backupRollbackSkipped) {
+          recoveryAction = mutation.remainingBackupLabelState === "present"
+            ? (mutation.backupRollbackFailed ? RECOVERY_GUIDANCE.rollbackFailed : RECOVERY_GUIDANCE.rollbackSkipped)
+            : mutation.remainingBackupLabelState === "unknown"
+              ? `Backup alias presence could not be verified. Use ${backupRecoveryNode} as the recovery pointer and inspect the active leaf before retrying.`
+              : `The backup alias is absent. Use ${backupRecoveryNode} as the recovery pointer and inspect the active leaf before retrying.`;
+        } else if (mutation.branchState === "indeterminate") {
+          recoveryAction = "Branch mutation cannot be excluded. Inspect the active leaf and reported summary entry before retrying.";
+        } else {
+          recoveryAction = mutation.backupRolledBack
+            ? RECOVERY_GUIDANCE.branchRolledBack
+            : RECOVERY_GUIDANCE.hostCapability;
+        }
+        let backupNote = "";
+        if (mutation.backupRollbackFailed) {
+          backupNote = mutation.remainingBackupLabelState === "present"
+            ? ` Backup label '${sanitizeTerminalText(params.backupCurrentHeadAs)}' remains at ${backupEntryId}; rollback failed.`
+            : mutation.remainingBackupLabelState === "unknown"
+              ? ` Backup label '${sanitizeTerminalText(params.backupCurrentHeadAs)}' may remain; rollback failed and label verification was unavailable.`
+              : ` Rollback failed, but backup label '${sanitizeTerminalText(params.backupCurrentHeadAs)}' is not currently present.`;
+        } else if (mutation.backupRollbackSkipped && mutation.backupRollbackSkipReason === "branch_mutation_observed") {
+          backupNote = mutation.remainingBackupLabelState === "present"
+            ? ` Backup label '${sanitizeTerminalText(params.backupCurrentHeadAs)}' remains because branch mutation was observed or cannot be excluded.`
+            : mutation.remainingBackupLabelState === "unknown"
+              ? ` Backup label '${sanitizeTerminalText(params.backupCurrentHeadAs)}' may remain because branch mutation was observed and label verification was unavailable.`
+              : ` Backup label '${sanitizeTerminalText(params.backupCurrentHeadAs)}' is not currently present; preserve ${backupRecoveryNode} instead.`;
+        } else if (mutation.backupRollbackSkipped) {
+          backupNote = ` Backup label '${sanitizeTerminalText(params.backupCurrentHeadAs)}' may remain because its mutation state is indeterminate.`;
+        } else if (mutation.backupRolledBack) {
+          backupNote = ` Backup label '${sanitizeTerminalText(params.backupCurrentHeadAs)}' was rolled back.`;
+        }
         const refreshNote = mutation.refreshRequired ? ` ${RECOVERY_GUIDANCE.refreshPending}` : "";
         const prefix = mutation.error === "backup_label_failed"
-          ? `Error: archive bookmark '${params.backupCurrentHeadAs}' could not be set`
+          ? `Error: archive bookmark '${sanitizeTerminalText(params.backupCurrentHeadAs)}' could not be set`
           : "Error: branchWithSummary failed";
         const liveAgentSessionSync: AgentSessionSyncOutcome = {
           status: "skipped",
@@ -294,6 +337,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
             backupRollbackSkipped: mutation.backupRollbackSkipped,
             backupRollbackSkipReason: mutation.backupRollbackSkipReason,
             remainingBackupLabel: mutation.remainingBackupLabel,
+            remainingBackupLabelState: mutation.remainingBackupLabelState,
             contextRefreshPending: mutation.refreshRequired,
             contextRefreshState: mutation.refreshRequired ? "pending" : "not_scheduled",
             liveAgentSessionSyncState: "skipped",
@@ -347,7 +391,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
       const structuralMessageDirection = classifyStructuralMessageDirection(messagesBefore, messagesAfter);
       const backupText = formatBackupText(params.backupCurrentHeadAs, backupEntryId, backupResolvedFromHead);
       const backupOutcome = mutation.backupOutcome;
-      const messageDelta = `${messagesBefore} → ${messagesAfter} (${formatSignedDelta(structuralMessageDelta)}, ${structuralMessageDirection})`;
+      const messageDelta = `${messagesBefore} → ${messagesAfter} (${formatSignedDelta(structuralMessageDelta)}, ${sanitizeTerminalText(structuralMessageDirection)})`;
       const usageBeforeTokens = usageBefore?.tokens ?? null;
       const usageBeforePercent = usageBefore?.percent ?? null;
       const usageContextWindow = usageBefore?.contextWindow ?? estimatedUsageAfter?.contextWindow ?? null;
@@ -366,7 +410,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
         content: [{
           type: "text" as const,
           text: [
-            `Travel complete. target=${params.target} (${targetId}); origin=${originLabel ? `${originLabel}@${originId}` : originId}; summaryEntryId=${summaryEntryId}; resultingLeafId=${resultingLeafId}; backup=${backupText} (${backupOutcome}); contextTokens=${formatNumericValue(usageBeforeTokens)} → ${formatNumericValue(estimatedUsageAfterTokens)} est. (delta=${formatSignedDelta(usageDelta.tokenDelta)}); contextPercent=${usageBeforePercentText} → ${estimatedUsageAfterPercentText} est. (delta=${formatSignedDelta(usageDelta.percentagePointDelta, 1, " pp")}); sessionMessages=${messageDelta}; summaryDepth=${activeSummaryDepthBefore} → ${activeSummaryDepthAfter} (delta=${formatSignedDelta(activeSummaryDepthDelta)}); contextRefresh=pending; liveAgentSessionSync=${liveAgentSessionSync.status}.`,
+            `Travel complete. target=${sanitizeTerminalText(params.target)} (${targetId}); origin=${originLabel ? `${sanitizeTerminalText(originLabel)}@${originId}` : originId}; summaryEntryId=${summaryEntryId}; resultingLeafId=${resultingLeafId}; backup=${backupText} (${backupOutcome}); contextTokens=${formatNumericValue(usageBeforeTokens)} → ${formatNumericValue(estimatedUsageAfterTokens)} est. (delta=${formatSignedDelta(usageDelta.tokenDelta)}); contextPercent=${usageBeforePercentText} → ${estimatedUsageAfterPercentText} est. (delta=${formatSignedDelta(usageDelta.percentagePointDelta, 1, " pp")}); sessionMessages=${messageDelta}; summaryDepth=${activeSummaryDepthBefore} → ${activeSummaryDepthAfter} (delta=${formatSignedDelta(activeSummaryDepthDelta)}); contextRefresh=pending; liveAgentSessionSync=${liveAgentSessionSync.status}.`,
             summaryDepthNote,
             liveAgentSessionSyncRecovery,
             resolved.fromOffPath ? RECOVERY_GUIDANCE.restoredHistory : null,

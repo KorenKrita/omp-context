@@ -723,4 +723,39 @@ describe("acm_travel with real OMP SessionManager", () => {
     expect(resultDetails(run).fromOffPath).toBe(true);
     expect(text).toContain(RECOVERY_GUIDANCE.restoredHistory);
   });
+
+  test("rejects the structural root keyword as an archive bookmark before mutation", async () => {
+    const harness = createHarness();
+    const { userId } = appendUserAssistantPair(harness.session);
+    for (const backupCurrentHeadAs of ["root", "ROOT", "Root"]) {
+      const run = await runTravel(harness.session, { target: userId, summary: VALID_HANDOFF, backupCurrentHeadAs });
+      const details = resultDetails(run);
+      expect(details.error).toBe("reserved_backup_name");
+      expect(details.name).toBe(backupCurrentHeadAs);
+      expect(resultText(run)).toContain("reserved for the structural root target");
+    }
+  });
+
+  test("rejects travel when it shares an assistant tool batch with sibling tool calls", async () => {
+    const harness = createHarness();
+    const { userId } = appendUserAssistantPair(harness.session);
+    harness.session.appendMessage({
+      role: "assistant",
+      content: [
+        { type: "toolCall" as const, id: "travel-fixture", name: "acm_travel", arguments: { target: userId, summary: VALID_HANDOFF } },
+        { type: "toolCall" as const, id: "call-sibling", name: "read", arguments: { path: "sibling.ts" } },
+      ],
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: 0 },
+      stopReason: "endTurn",
+      timestamp: Date.now(),
+    });
+    const run = await runTravel(harness.session, { target: userId, summary: VALID_HANDOFF });
+    const details = resultDetails(run);
+    expect(details.error).toBe("mixed_tool_batch");
+    expect(details.toolCallCount).toBe(2);
+    expect(resultText(run)).toContain("must run alone in its assistant tool batch");
+  });
 });

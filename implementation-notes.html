@@ -16,7 +16,7 @@
 </head>
 <body>
   <h1>ACM Implementation Notes</h1>
-  <p class="meta">Current implementation decisions, updated 2026-07-13. Superseded cross-repository synchronization decisions were removed when omp-context became independently maintained.</p>
+  <p class="meta">Current implementation decisions, updated 2026-07-15. Superseded cross-repository synchronization decisions were removed when omp-context became independently maintained.</p>
 
   <h2>Decision Record</h2>
   <table>
@@ -83,6 +83,11 @@
         <td>agent-resolved</td>
         <td>Preserve persistent recovery when live synchronization is unavailable or fails.</td>
         <td>Unsupported host shape, missing association, stale work, build failure, or replacement failure never rolls back an otherwise valid travel. The summary branch and backup checkpoint remain authoritative, and public context rebuild continues.</td>
+      </tr>
+      <tr>
+        <td>agent-resolved</td>
+        <td>Port Pi 2026-07-15 robustness and safety changes into OMP extension form.</td>
+        <td>Host Bridge snapshots and observes mutation state before/after each append and rollback; branch verification requires an observable leaf change; reserved target names are rejected before mutation; travel refuses mixed assistant tool batches. Pi-only TUI renderers, prompt metadata, and the <code>src/context.ts</code> command surface have no OMP equivalent, so terminal-control neutralization is applied to plain-text tool results instead.</td>
       </tr>
       <tr>
         <td>user-decided</td>
