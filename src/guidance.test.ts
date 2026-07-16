@@ -5,6 +5,7 @@ import registerACMExtension from "./index.js";
 import {
   ACM_CORE,
   ACM_CORE_MARKER,
+  GUIDANCE_CUES,
   RECOVERY_GUIDANCE,
   TOOL_DESCRIPTIONS,
 } from "./generated-guidance.js";
@@ -24,6 +25,8 @@ interface RegisteredTool {
   name: string;
   description: string;
 }
+
+const skillFile = (path: string) => Bun.file(new URL(`../skills/context-management/${path}`, import.meta.url)).text();
 
 function captureBeforeAgentStart(): BeforeAgentStartHandler {
   const handlers: Array<{ name: string; handler: BeforeAgentStartHandler }> = [];
@@ -62,37 +65,73 @@ function captureRegisteredTools(): RegisteredTool[] {
   return tools;
 }
 
-describe("canonical ACM CORE", () => {
-  test("preserves the base workflow while adding a bounded rebase gate", () => {
-    for (const word of ["working set", "boundary", "handoff", "archive", "chain", "burst", "anchor gravity", "rebase", "cold start"]) {
-      expect(ACM_CORE.toLowerCase()).toContain(word);
+describe("ACM guidance quality", () => {
+  test("grounds the doctrine in compression-as-intelligence and agent autonomy", () => {
+    expect(ACM_CORE).toContain("Compression is intelligence");
+    expect(ACM_CORE).toContain("**working set**, not a transcript");
+    expect(ACM_CORE).toContain("as ordinary as reading a file");
+    expect(ACM_CORE).toContain("only an explicit user request to hold travel");
+    expect(ACM_CORE).toContain("**hot set**");
+    expect(ACM_CORE).toContain("Honest uncertainty");
+    expect(ACM_CORE).toContain("Removing it deletes nothing");
+  });
+
+  test("offers the full move set including forward travel", () => {
+    for (const move of ["**Save**", "**Orient**", "**Fold**", "**Rebase**", "**Rehydrate**", "**Fork**"]) {
+      expect(ACM_CORE).toContain(move);
     }
-    const slotPositions = ["Goal:", "State:", "Evidence:", "External:", "Exclusions:", "Recover:", "NEXT:"]
-      .map((slot) => ACM_CORE.indexOf(slot));
-    expect(slotPositions.every((position) => position >= 0)).toBe(true);
-    expect([...slotPositions].sort((a, b) => a - b)).toEqual(slotPositions);
-    for (const baseBehavior of [
-      "New chain starts",
-      "Phase, attempt, or batch item starts",
-      "Unbounded burst or risky step is next",
-      "Findings are distilled",
-      "Direction is rejected or superseded",
-      "Final answer is next",
-    ]) {
-      expect(ACM_CORE).toContain(baseBehavior);
+    expect(ACM_CORE).toContain("cold start");
+    expect(ACM_CORE).toContain("anchor gravity");
+    expect(ACM_CORE).toContain("Folding mid-investigation is fine");
+    expect(ACM_CORE).toContain("Root is a candidate, never a default");
+    expect(ACM_CORE).toContain("travel back carrying the extract");
+  });
+
+  test("frames cadence as a band between sediment and thrash with a cruise preference", () => {
+    expect(ACM_CORE).toContain("Compress continuously");
+    expect(ACM_CORE).toContain("Fold in batches");
+    expect(ACM_CORE).toContain("**Sediment**");
+    expect(ACM_CORE).toContain("**Thrash**");
+    expect(ACM_CORE).toContain("around a third of the working budget");
+    expect(ACM_CORE).toContain("That is a preference, never an override");
+    expect(ACM_CORE).toContain("the weighing, not the fold");
+    expect(ACM_CORE).toContain("different models legitimately choose different batch sizes");
+  });
+
+  test("keeps one cold-start handoff example carrying live cognition", () => {
+    for (const slot of ["Goal:", "State:", "Evidence:", "External:", "Exclusions:", "Recover:", "NEXT:"]) {
+      expect(ACM_CORE).toContain(slot);
     }
-    expect(ACM_CORE).toContain("Local fold example");
-    expect(ACM_CORE).not.toContain("Failed-direction example");
-    expect(ACM_CORE).toContain("Finished-chain rebase example");
-    expect(ACM_CORE).toContain("### Rebase gate");
-    expect(ACM_CORE).toContain("Structural reset passes only when");
-    expect(ACM_CORE).toContain("projected summary depth does not grow");
-    expect(ACM_CORE).toContain("Cold start passes only when");
-    expect(ACM_CORE).toContain("evaluate candidate bases from earliest to latest");
-    expect(ACM_CORE).toContain("Root is ideal when it passes; it is never presumed safe");
-    expect(ACM_CORE).toContain("Context pressure triggers a rebase check");
-    expect(ACM_CORE).toContain("does not lower the cold start gate or authorize travel");
-    expect(ACM_CORE.length).toBeLessThan(7500);
+    expect(ACM_CORE).toContain("each starting its own line");
+    expect(ACM_CORE).toContain("one concrete action a fresh agent could execute immediately");
+    expect(ACM_CORE).toContain("Two hypotheses");
+    expect(ACM_CORE).toContain("Hot:");
+    expect(ACM_CORE.split("```text").length - 1).toBe(1);
+  });
+
+  test("each result cue points at the concrete next move", () => {
+    expect(GUIDANCE_CUES.checkpoint).toContain("acm_travel");
+    expect(GUIDANCE_CUES.travel).toContain("execute NEXT");
+    expect(GUIDANCE_CUES.rebaseCheck).toContain("the next fold would stack another");
+  });
+
+  test("never reintroduces mandatory workflow machinery", () => {
+    expect(ACM_CORE).not.toContain("preflight");
+    expect(ACM_CORE).not.toContain("Normal state transitions");
+    expect(ACM_CORE).not.toContain("Required transition");
+    expect(ACM_CORE).not.toContain("Fold gate");
+    expect(ACM_CORE).not.toContain("-paused");
+    expect(ACM_CORE).not.toContain("`<chain>-start`");
+    expect(ACM_CORE).not.toContain("first action");
+    expect(ACM_CORE.length).toBeLessThan(6000);
+  });
+
+  test("keeps receipt discipline and external-state honesty", () => {
+    expect(ACM_CORE).toContain("only its matching result is fact");
+    expect(ACM_CORE).toContain("applied, not applied, or indeterminate");
+    expect(ACM_CORE).toContain("Travel rewrites conversation context only");
+    expect(TOOL_DESCRIPTIONS.travel).toContain("alone in its assistant tool batch");
+    expect(TOOL_DESCRIPTIONS.travel).toContain("The result is the only fact");
   });
 
   test("appends CORE once while preserving existing system segments in order", async () => {
@@ -126,8 +165,8 @@ describe("canonical ACM CORE", () => {
 });
 
 describe("generated travel recovery guidance", () => {
-  test("matches every canonical CORE recovery marker", async () => {
-    const core = await Bun.file(new URL("../skills/context-management/CORE.md", import.meta.url)).text();
+  test("matches every canonical TOOL-CONTRACTS recovery marker", async () => {
+    const contracts = await skillFile("TOOL-CONTRACTS.md");
     const markers = {
       nameCollision: "RECOVERY_NAME_COLLISION",
       hostCapability: "RECOVERY_HOST_CAPABILITY",
@@ -143,53 +182,48 @@ describe("generated travel recovery guidance", () => {
     for (const [key, marker] of Object.entries(markers)) {
       const start = `<!-- ACM:${marker}:START -->`;
       const end = `<!-- ACM:${marker}:END -->`;
-      expect(core.split(start)).toHaveLength(2);
-      expect(core.split(end)).toHaveLength(2);
-      const canonical = core.slice(core.indexOf(start) + start.length, core.indexOf(end)).trim();
+      expect(contracts.split(start)).toHaveLength(2);
+      expect(contracts.split(end)).toHaveLength(2);
+      const canonical = contracts.slice(contracts.indexOf(start) + start.length, contracts.indexOf(end)).trim();
       expect(String(RECOVERY_GUIDANCE[key as keyof typeof RECOVERY_GUIDANCE])).toBe(canonical);
     }
   });
 });
 
 describe("advanced context-management routing", () => {
-  test("keeps the model-invoked Skill compact and outside the CORE normal path", async () => {
-    const skill = await Bun.file(new URL("../skills/context-management/SKILL.md", import.meta.url)).text();
-
+  test("routes one advanced condition at a time and reroutes on state change", async () => {
+    const skill = await skillFile("SKILL.md");
     expect(skill).toContain("CORE owns the normal path");
-    expect(skill).not.toContain("## Fold gate");
-    expect(skill).not.toContain("Goal: <");
-    expect(skill).not.toContain("Local fold example");
-    expect(skill).not.toContain("Use continuously");
-    for (const ordinaryCase of [
-      "ordinary checkpointing",
-      "clear phase folds",
-      "clear burst folds",
-      "pressure checks",
-      "task-end handling",
-    ]) {
-      expect(skill.toLowerCase()).toContain(ordinaryCase);
-    }
+    expect(skill).toContain("Advanced Target Selection");
+    expect(skill).toContain("Archive Recovery");
+    expect(skill).toContain("Exceptional Recovery");
+    expect(skill).toContain("Load one reference at a time");
+    expect(skill).toContain("observable condition changes");
+    expect(skill).toContain("replace the active reference");
   });
 
-  test("keeps advanced completion criteria factual and checkable", async () => {
-    const target = await Bun.file(new URL("../skills/context-management/references/target-selection.md", import.meta.url)).text();
-    const archive = await Bun.file(new URL("../skills/context-management/references/archive-recovery.md", import.meta.url)).text();
-    const exceptional = await Bun.file(new URL("../skills/context-management/references/exceptional-recovery.md", import.meta.url)).text();
+  test("keeps target and recovery criteria factual and checkable", async () => {
+    const target = await skillFile("references/target-selection.md");
+    const archive = await skillFile("references/archive-recovery.md");
+    const exceptional = await skillFile("references/exceptional-recovery.md");
 
     expect(target).toContain("tree topology orders them");
     expect(target).toContain("must precede at least one active `branch_summary`");
     expect(target).toContain("projected summary depth must not grow");
     expect(target).toContain("every surviving item has one authoritative home");
+    expect(archive).toContain("Rehydration round trip");
     expect(archive).toContain("Pending is scheduled work, not success");
     expect(archive).toContain("return to the Skill router and replace this reference");
-    expect(archive).not.toContain("structural effect");
+    expect(exceptional).toContain("Backup rollback failure");
     expect(exceptional).toContain("branch creation was not applied");
+    expect(exceptional).toContain("Indeterminate branch mutation");
     expect(exceptional).toContain("mutation may have landed");
-    expect(exceptional).not.toContain("failed travel rollback means branch mutation may be partial");
+    expect(exceptional).toContain("Low-yield fold");
+    expect(exceptional).toContain("travel is never required merely to record completion");
   });
 
   test("routes each advanced branch through an independently loadable reference", async () => {
-    const skill = await Bun.file(new URL("../skills/context-management/SKILL.md", import.meta.url)).text();
+    const skill = await skillFile("SKILL.md");
     const references = {
       "target-selection.md": [
         "Interleaved fronts",
@@ -198,14 +232,14 @@ describe("advanced context-management routing", () => {
         "Raw node fallback",
         "Checkpoint-name collisions",
       ],
-      "archive-recovery.md": ["Archive recovery round trip", "<front>-resume", "Archive drift"],
+      "archive-recovery.md": ["Rehydration round trip", "Archive drift"],
       "exceptional-recovery.md": [
         "Travel failure",
         "Backup rollback failure",
         "Indeterminate branch mutation",
         "Context-refresh exhaustion",
         "Restored history",
-        "No-saving recovery",
+        "Low-yield fold",
       ],
     } as const;
 
@@ -217,7 +251,7 @@ describe("advanced context-management routing", () => {
       expect(skill).toContain(`references/${file}`);
       expect(skill).toMatch(new RegExp(`Load \\[[^\\]]+\\]\\(references/${file.replace(".", "\\.")}\\) when `));
 
-      const content = await Bun.file(new URL(`../skills/context-management/references/${file}`, import.meta.url)).text();
+      const content = await skillFile(`references/${file}`);
       for (const heading of branchHeadings) expect(content).toContain(heading);
       for (const otherFile of Object.keys(references)) {
         if (otherFile !== file) expect(content).not.toContain(otherFile);

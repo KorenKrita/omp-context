@@ -15,9 +15,10 @@ const repoRoot = join(scriptDir, "..");
 const metadata = readJson(join(repoRoot, "package.json"), "package metadata");
 if (metadata.name !== "omp-context") throw new Error(`Expected omp-context package, found ${String(metadata.name)}`);
 
-const sourcePath = join(repoRoot, "skills", "context-management", "CORE.md");
+const corePath = join(repoRoot, "skills", "context-management", "CORE.md");
+const contractsPath = join(repoRoot, "skills", "context-management", "TOOL-CONTRACTS.md");
 const outputPath = join(repoRoot, "src", "generated-guidance.ts");
-const expectedGuidance = renderGuidance(readFileSync(sourcePath, "utf8"));
+const expectedGuidance = renderGuidance(readFileSync(corePath, "utf8"), readFileSync(contractsPath, "utf8"));
 if (readFileSync(outputPath, "utf8") !== expectedGuidance) {
   throw new Error(`Generated guidance is stale: ${outputPath}`);
 }

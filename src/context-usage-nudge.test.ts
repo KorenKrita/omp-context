@@ -111,7 +111,8 @@ describe("ACM context usage reminders", () => {
       },
       options: { deliverAs: "steer" },
     });
-    expect(fixture.sentMessages[0]?.message.content).toContain("next natural semantic boundary");
+    expect(fixture.sentMessages[0]?.message.content).toContain("acm_checkpoint");
+    expect(fixture.sentMessages[0]?.message.content).toContain("comfortable cruise range");
 
     fixture.setUsagePercent(35);
     await fixture.emit("context", { messages: [] });
@@ -125,6 +126,7 @@ describe("ACM context usage reminders", () => {
     expect(fixture.sentMessages).toHaveLength(2);
     expect(fixture.sentMessages[1]?.message.details).toMatchObject({ level: 70 });
     expect(fixture.sentMessages[1]?.message.content).toContain("Final reminder");
+    expect(fixture.sentMessages[1]?.message.content).toContain("acm_travel");
     expect(fixture.sentMessages.some(({ message }) => message.details?.level === 50)).toBe(false);
   });
 
@@ -331,8 +333,8 @@ describe("ACM context usage reminders", () => {
     expect(fixture.sentMessages[1]?.message.details).toMatchObject({ level: 30 });
   });
 
-  test("restores delivered tiers on start, switch, branch, and tree transitions", async () => {
-    for (const event of ["session_start", "session_switch", "session_branch", "session_tree"] as const) {
+  test("restores delivered tiers on start, switch, and branch transitions", async () => {
+    for (const event of ["session_start", "session_switch", "session_branch"] as const) {
       const sessionManager = SessionManager.inMemory();
       sessionManager.appendMessage({ role: "user", content: "existing work", timestamp: Date.now() });
       sessionManager.appendCustomMessageEntry(
@@ -354,7 +356,68 @@ describe("ACM context usage reminders", () => {
       await fixture.emit("tool_result", { toolName: "read", toolCallId: `${event}-2`, content: [], isError: false });
       expect(fixture.sentMessages).toHaveLength(1);
       expect(fixture.sentMessages[0]?.message.details).toMatchObject({ level: 50 });
+      expect(fixture.sentMessages[0]?.message.content).toContain("acm_timeline");
     }
+  });
+
+  test("manual tree navigation clears pending reminders and starts a baseline-only cycle", async () => {
+    const fixture = createFixture();
+
+    fixture.setUsagePercent(50);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("session_tree", { newLeafId: "node-1", oldLeafId: "node-9" });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-1", content: [], isError: false });
+    expect(fixture.sentMessages).toHaveLength(0);
+
+    fixture.setUsagePercent(65);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-2", content: [], isError: false });
+    expect(fixture.sentMessages).toHaveLength(0);
+
+    await fixture.emit("turn_end", {
+      message: {
+        role: "assistant",
+        usage: { input: 20_000, cacheRead: 0, cacheWrite: 0 },
+      },
+    });
+    fixture.setUsagePercent(31);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-3", content: [], isError: false });
+    expect(fixture.sentMessages).toHaveLength(1);
+    expect(fixture.sentMessages[0]?.message.details).toMatchObject({ level: 30 });
+  });
+
+  test("a native tree-navigation summary is a cycle boundary on restore", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const rootId = sessionManager.appendMessage({ role: "user", content: "root", timestamp: Date.now() });
+    sessionManager.appendMessage({ role: "user", content: "abandoned work", timestamp: Date.now() });
+    sessionManager.appendCustomMessageEntry(
+      "acm:context-usage-reminder",
+      "stale 50% reminder from the abandoned branch",
+      false,
+      { kind: "context-usage-reminder", level: 50, usagePercent: 55 },
+    );
+    // Native /tree navigation with summarize: branch summary without ACM details.
+    sessionManager.branchWithSummary(rootId, "Goal: retry from root", { readFiles: [], modifiedFiles: [] });
+    const fixture = createFixture(sessionManager);
+
+    await fixture.emit("session_start", {});
+    fixture.setUsagePercent(55);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-1", content: [], isError: false });
+    expect(fixture.sentMessages).toHaveLength(0);
+
+    await fixture.emit("turn_end", {
+      message: {
+        role: "assistant",
+        usage: { input: 20_000, cacheRead: 0, cacheWrite: 0 },
+      },
+    });
+    fixture.setUsagePercent(31);
+    await fixture.emit("context", { messages: [] });
+    await fixture.emit("tool_result", { toolName: "read", toolCallId: "read-2", content: [], isError: false });
+    expect(fixture.sentMessages).toHaveLength(1);
+    expect(fixture.sentMessages[0]?.message.details).toMatchObject({ level: 30 });
   });
 
   test("persists and restores the first post-transition baseline across reload", async () => {

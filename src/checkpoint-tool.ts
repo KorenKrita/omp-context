@@ -29,10 +29,10 @@ export function registerCheckpointTool(pi: ExtensionAPI): void {
   const registerTool = (tool: Parameters<ExtensionAPI["registerTool"]>[0] & { strict?: boolean }) => pi.registerTool(tool);
   const schema = pi.zod.object({
     name: pi.zod.string().min(1).max(64).regex(/^[\w\-\.]+$/).describe(
-      "Unique semantic anchor name. The structural target keyword 'root' is reserved in every letter case. Use '<name>-start' for the beginning of a boundary you may later compress: task chain, phase, burst, or risky attempt. Use '<name>-done' for a milestone/archive pointer after results are in hand. E.g. parser-fix-start, timeout-investigation-start, root-cause-done. Avoid generic names like start, checkpoint-1. Only letters, digits, hyphens, underscores, and dots. Max 64 chars.",
+      "Semantic save-point name; unique and case-sensitive across the session tree. The structural target keyword 'root' is reserved in every letter case. Name the state a future search should find, e.g. payments-retry-baseline, flaky-test-attempt-2, latency-hunt-scan. Suffixes are naming convention only; they never classify workflow state. Avoid generic names like checkpoint-1 or temp. Only letters, digits, hyphens, underscores, and dots. Max 64 chars.",
     ),
     target: pi.zod.string().min(1).max(256).optional().describe(
-      "History node ID or checkpoint name to label. Defaults to current meaningful position near HEAD.",
+      "History node ID or checkpoint name to label. Defaults to the nearest meaningful USER/AI turn; use an explicit target to label an older return state.",
     ),
   });
 
@@ -157,7 +157,7 @@ export function registerCheckpointTool(pi: ExtensionAPI): void {
       const role = sanitizeTerminalText(autoResolved?.role ?? (resolvedEntry ? getMessageRoleLabel(resolvedEntry) : undefined) ?? resolvedEntry?.type.toUpperCase() ?? "NODE");
       const usage = ctx.getContextUsage();
       const usageText = usage ? formatContextUsage(usage, true) : "unknown";
-      const cue = params.name.endsWith("-done") ? GUIDANCE_CUES.checkpointDone : GUIDANCE_CUES.checkpointStart;
+      const cue = GUIDANCE_CUES.checkpoint;
       const skippedCount = autoResolved?.skipped.length;
       const placement = autoResolved
         ? `${role}${skippedCount ? `; skipped ${skippedCount} nearer transient/non-meaningful entr${skippedCount === 1 ? "y" : "ies"}` : ""}`

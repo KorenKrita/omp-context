@@ -2,14 +2,16 @@
 
 让 OMP agent 主动维护自己的上下文，而不是等窗口耗尽后被动压缩。
 
-`omp-context` 是由 KorenKrita 独立维护的第三方 OMP 插件。它让 agent 能够：
+`omp-context` 是由 KorenKrita 独立维护的第三方 OMP 插件。核心理念是**压缩即智能**：理解一段过程，就是能把它说得更短而不丢失关键信息。扩展让 agent 能够：
 
-- 在任务、阶段和高风险操作前建立可恢复的语义锚点；
-- 查看当前会话 spine、历史分支、checkpoint 与上下文占用；
-- 在 context usage 首次跨过 30% / 50% / 70% 时收到分级、隐藏的 ACM reminder；
-- 把已经完成的过程折叠成可执行 handoff；
-- 在安全时将累计 summary chain **rebase** 到更早的基底，重新获得浅层、低负载的 working set；
+- **Save** — 在高风险操作、验证过的 baseline、策略分叉前建立可恢复的语义 save point；
+- **Orient** — 查看当前会话 spine、历史分支、checkpoint 与上下文占用；
+- **Fold** — 把已经提炼完的过程折叠成可通过 cold start 检验的 handoff；
+- **Rebase** — 在 summary 堆叠或竞争时合并到更早的安全基底，重新获得浅层、低负载的 working set；
+- **Rehydrate / Fork** — travel 到归档分支取回精确细节再返回，或从 save point 分叉探索后折回；
 - 在 travel 后同步持久会话树、下一轮模型上下文与 live AgentSession。
+
+Guidance 采用道/术/度分层：always-on CORE 注入判断力与 cadence 偏好，工具描述和 result cue 携带机制，advanced Skill 只在复杂场景按需加载。没有强制 preflight、固定 transition 表或后缀状态机——agent 自主判断何时压缩。
 
 ## 为什么需要它
 
@@ -27,9 +29,9 @@ root → summary A → summary B → summary C → current work
 
 | Tool | 作用 |
 |---|---|
-| `acm_checkpoint` | 给会话节点建立唯一、可恢复的语义 checkpoint |
+| `acm_checkpoint` | 给会话节点建立唯一、可恢复的语义 save point |
 | `acm_timeline` | 查看 active spine、checkpoint catalog、全文搜索、完整树和 summary depth |
-| `acm_travel` | 将一个 boundary 折叠为七槽 handoff，或把累计 summaries rebase 到最早安全基底 |
+| `acm_travel` | 将已提炼的过程折叠为七槽 handoff、把累计 summaries rebase 到最早安全基底，或 rehydrate 归档分支 |
 
 插件会通过 OMP 的公开 prompt hook 注入精简的 always-on CORE。复杂的 target selection、archive round trip 和异常恢复按需从 advanced Skill 加载，不会把整套 playbook 常驻在上下文里。
 
@@ -64,13 +66,16 @@ workingBudgetTokens = min(contextWindow, 400K)
 pressurePercent = activeTokens / workingBudgetTokens × 100
 ```
 
-物理窗口不超过 400K 时沿用实际窗口；超过 400K 时统一使用 400K 工作预算。因此 200K、350K 模型的触发节奏不变，1M 模型在 120K / 200K / 280K active tokens 时分别触发 30% / 50% / 70%。真实 hard-window usage 仍单独保留，reminder details 与 `acm_timeline` dashboard 会同时展示 hard usage 和 ACM pressure。当前周期每个档位只提醒一次；如果一次跨过多个档位，只发送已达到的最高档。70% 是本周期最后一次自动提醒。
+物理窗口不超过 400K 时沿用实际窗口；超过 400K 时统一使用 400K 工作预算。因此 200K、350K 模型的触发节奏不变，1M 模型在 120K / 200K / 280K active tokens 时分别触发 30% / 50% / 70%。真实 hard-window usage 仍单独保留，reminder details 与 `acm_timeline` dashboard 会同时展示 hard usage 和 ACM pressure，避免把工作预算误读成模型窗口容量。
+- **30%**：离开舒适巡航区，留意下一个已提炼完、可干净折叠的语义批次——现在在边界打一个 `acm_checkpoint` 会让之后的 fold 更便宜；
+- **50%**：主动寻找下一个值得 fold 或 rebase 的表示增益，按批次提交而不是逐步支付；批次不明确时用 `acm_timeline`（active 视图）查看 spine 上还承载着什么；
+- **70%**：当前周期最后一次提醒，构造能通过 cold start 的最小 handoff，在最近的安全时机 `acm_travel`。
 
 有工具调用时，reminder 作为隐藏 steering context 注入当前 agent loop；主会话正常结束但没有工具结果可承载时，插件会在 `session_stop` 之后通过隐藏的 OMP `nextTurn` continuation 交付，不会把 reminder 放进可编辑的 pending-message UI。
 
-成功 `acm_travel` 或 OMP 原生 compaction 会开始一个 **baseline-only** 新周期：第一条真实 post-transition usage 只建立基线，不会因为刚完成上下文切换而立即提醒。该基线与已发送档位会写入 session，reload、resume、switch、branch 和 tree navigation 后都能恢复。
+成功 `acm_travel`、OMP 原生 compaction 或手动 `/tree` 导航会开始一个 **baseline-only** 新周期：第一条真实 post-transition usage 只建立基线，不会因为刚完成上下文切换而立即提醒。该基线与已发送档位会写入 session；reload、resume、switch、branch 从 journal 恢复，tree navigation 则强制开新周期。
 
-Reminder 只提示 agent 在下一个安全语义边界检查 fold / rebase；它不会自动执行 travel，也不会降低 cold-start、可恢复性或任务连续性的门槛。
+Reminder 只建议根据当前任务要求判断 travel 是否合适，不自动执行 summary、fold、rebase 或 travel。正确性、任务连续性和可恢复性优先；真正的长任务继续增长并进入 OMP 原生 compaction 是可接受的。
 
 ## 安装
 

@@ -35,22 +35,26 @@ describe("ACM tool description contract", () => {
   });
 
   test("describes timeline through the strict view discriminator", () => {
-    expect(TOOL_DESCRIPTIONS.timeline).toContain("one view: `active`, `checkpoints`, `search`, or `tree`");
-    expect(TOOL_DESCRIPTIONS.timeline).toContain("Omit view for `active`");
-    expect(TOOL_DESCRIPTIONS.timeline).toContain("active summary depth and projected depth");
+    expect(TOOL_DESCRIPTIONS.timeline).toContain("one view");
+    expect(TOOL_DESCRIPTIONS.timeline).toContain("`active`");
+    expect(TOOL_DESCRIPTIONS.timeline).toContain("`checkpoints`");
+    expect(TOOL_DESCRIPTIONS.timeline).toContain("`search`");
+    expect(TOOL_DESCRIPTIONS.timeline).toContain("`tree`");
+    expect(TOOL_DESCRIPTIONS.timeline).toContain("projected post-travel summary depth");
     expect(TOOL_DESCRIPTIONS.timeline).not.toMatch(/list_checkpoints|full_tree|active_path/);
   });
 
-  test("keeps the rebase target schema aligned with structural reset and cold start", () => {
-    expect(travelToolSource).toContain("retires an active summary without growing projected depth");
-    expect(travelToolSource).toContain("whose snapshot passes cold start");
+  test("keeps the rebase target schema aligned with cold start and projected depth", () => {
+    expect(travelToolSource).toContain("projected summary depth does not grow");
+    expect(travelToolSource).toContain("whose handoff passes cold start");
     expect(travelToolSource).toContain("root is a candidate, not a default");
   });
 
-  test("keeps checkpoint and travel descriptions concise and evidence-oriented", () => {
-    expect(TOOL_DESCRIPTIONS.checkpoint).toContain("Checkpoint does not branch or fold the active context");
-    expect(TOOL_DESCRIPTIONS.travel).toContain("fold a named boundary or rebase accumulated summaries");
-    expect(TOOL_DESCRIPTIONS.travel).toContain("cannot prove boundary quality or cold start completeness");
+  test("keeps checkpoint and travel descriptions concise and judgment-oriented", () => {
+    expect(TOOL_DESCRIPTIONS.checkpoint).toContain("Never blocks or folds anything");
+    expect(TOOL_DESCRIPTIONS.travel).toContain("fold finished process into its handoff");
+    expect(TOOL_DESCRIPTIONS.travel).toContain("alone in its assistant tool batch");
+    expect(TOOL_DESCRIPTIONS.travel).toContain("The result is the only fact");
     expect(TOOL_DESCRIPTIONS.travel).not.toContain("preview");
   });
 });

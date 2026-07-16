@@ -525,7 +525,7 @@ describe("acm_travel with real OMP SessionManager", () => {
     expect(["decreased", "increased", "equal"]).toContain(details.structuralMessageDirection);
     expect(details).not.toHaveProperty("estimatedEffect");
     expect(details).not.toHaveProperty("structuralEffect");
-    expect(text).toContain(GUIDANCE_CUES.travelPhase);
+    expect(text).toContain(GUIDANCE_CUES.travel);
     expect(text).toContain("summaryDepth=0 → 1 (delta=+1)");
     expect(text).not.toContain("estimatedEffect");
     expect(text).not.toMatch(/\b(shrunk|restored|unchanged)\b/);
@@ -590,13 +590,13 @@ describe("acm_travel with real OMP SessionManager", () => {
     expect(text).not.toMatch(/no saving|unchanged/i);
   });
 
-  test("selects one canonical suffix-sensitive next cue", async () => {
+  test("selects one canonical travel cue regardless of backup suffix", async () => {
     const phaseHarness = createHarness();
     const phasePair = appendUserAssistantPair(phaseHarness.session);
     const phaseRun = await runTravel(phaseHarness.session, { target: phasePair.userId, summary: VALID_HANDOFF });
     const phaseText = phaseRun.result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
-    expect(phaseText).toContain(GUIDANCE_CUES.travelPhase);
-    expect(phaseText).not.toContain(GUIDANCE_CUES.travelTask);
+    expect(phaseText).toContain(GUIDANCE_CUES.travel);
+    expect(phaseText).toContain("execute NEXT");
 
     const taskHarness = createHarness();
     const taskPair = appendUserAssistantPair(taskHarness.session);
@@ -606,8 +606,8 @@ describe("acm_travel with real OMP SessionManager", () => {
       backupCurrentHeadAs: "travel-contract-done",
     });
     const taskText = taskRun.result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
-    expect(taskText).toContain(GUIDANCE_CUES.travelTask);
-    expect(taskText).not.toContain(GUIDANCE_CUES.travelPhase);
+    expect(taskText).toContain(GUIDANCE_CUES.travel);
+    expect(taskText).toContain("execute NEXT");
   });
 
   test("uses canonical progressive recovery for collisions and host failures", async () => {

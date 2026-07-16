@@ -8,12 +8,12 @@ describe("product documentation contract", () => {
 
     for (const claim of [
       "让 OMP agent 主动维护自己的上下文",
-      "summary chain",
+      "压缩即智能",
       "Semantic rebase",
       "cold start",
       "30% / 50% / 70%",
       "baseline-only",
-      "不会自动执行 travel",
+      "不自动执行 summary、fold、rebase 或 travel",
       "acm_checkpoint",
       "acm_timeline",
       "acm_travel",
@@ -88,7 +88,8 @@ describe("repository agent guidance contract", () => {
 
   test("keeps AGENTS focused on implementation contracts instead of restating CORE", async () => {
     const agents = await repoFile("AGENTS.md");
-    expect(agents).toContain("normal-path agent guidance 的唯一可编辑来源");
+    expect(agents).toContain("CORE.md` 拥有 always-on 判断力与 cadence");
+    expect(agents).toContain("TOOL-CONTRACTS.md` 拥有工具描述");
     for (const duplicatedGuidance of [
       "Goal/State/Evidence/External/Exclusions/Recover/NEXT",
       'target: "<task-chain-start>"',

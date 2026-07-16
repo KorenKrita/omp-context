@@ -163,6 +163,12 @@ export function registerAcmLifecycle(pi: ExtensionAPI, runtime: AcmSessionRuntim
   pi.on("session_start", (_event, ctx: ExtensionContext) => restoreSessionRuntime(ctx));
   pi.on("session_switch", (_event, ctx: ExtensionContext) => restoreSessionRuntime(ctx));
   pi.on("session_branch", (_event, ctx: ExtensionContext) => restoreSessionRuntime(ctx));
-  pi.on("session_tree", (_event, ctx: ExtensionContext) => restoreSessionRuntime(ctx));
+  // Manual /tree navigation bypasses acm_travel: the host already rebuilds live
+  // messages itself, so stale refresh targets, sync tickets, and usage baselines
+  // must not survive onto the newly selected branch.
+  pi.on("session_tree", (_event, ctx: ExtensionContext) => {
+    runtime.clear(ctx.sessionManager);
+    runtime.resetContextUsageNudgeCycle(ctx.sessionManager);
+  });
   pi.on("session_shutdown", (_event, ctx: ExtensionContext) => runtime.clear(ctx.sessionManager));
 }

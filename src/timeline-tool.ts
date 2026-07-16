@@ -389,7 +389,7 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
         `• Summary Depth:    ${activeSummaryDepth} active handoff summary layer(s) on the current spine`,
         `• Off-path Summaries: ${countOffPathSummaries(branch, tree, activeIds)} branch point(s) with abandoned summaries`,
         `• Segment Size:     ${stepsSinceCheckpoint} steps since last checkpoint '${nearestCheckpoint ?? "None"}'`,
-        `• Travel Cue:       ${activeSummaryDepth > 0 ? GUIDANCE_CUES.rebaseCheck : formatBoundaryTravelCue(nearestCheckpoint)}`,
+        `• ACM Judgment:     ${activeSummaryDepth > 0 ? GUIDANCE_CUES.rebaseCheck : formatBoundaryTravelCue(nearestCheckpoint)}`,
       ];
       if (refreshFailure) {
         const attempts = runtime.contextRefresh.getAttemptCount(sessionManager);

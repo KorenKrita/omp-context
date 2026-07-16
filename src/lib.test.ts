@@ -12,7 +12,6 @@ import {
  estimateUsageAtTravelTarget,
  findLastMeaningfulEntry,
  formatBoundaryTravelCue,
- formatFoldCandidatePreview,
  formatTokens,
  getMeaningfulSkipReason,
  projectSummaryDepthAfterTravel,
@@ -286,26 +285,13 @@ describe("estimateUsageAtTravelTarget", () => {
 });
 
 describe("runtime guidance text", () => {
- test("fold preview presents candidates and boundary selection", () => {
-  const text = formatFoldCandidatePreview([
-   "nearest anchor 'phase-start' → phase/burst candidate ~5.0% est.",
-   "earliest on-path -start 'task-start' → possible task-chain candidate ~3.0% est.",
-  ]);
-  expect(text).toContain("Fold candidates (+handoff)");
-  expect(text).toContain("candidate");
-  expect(text).toContain("Choose by boundary, not proximity");
-  expect(text).toContain("semantic chain");
- });
-
- test("timeline cue names boundary before target", () => {
-  expect(formatBoundaryTravelCue(null)).toContain("name the boundary first");
+ test("timeline cue names save-point candidates without defaulting to them", () => {
+  expect(formatBoundaryTravelCue(null)).toContain("no save point is on this path");
   const cue = formatBoundaryTravelCue("phase-start");
-  expect(cue).toContain("candidate target");
-  expect(cue).toContain("phase start");
-  expect(cue).toContain("pre-burst node");
-  expect(cue).toContain("attempt start");
-  expect(cue).toContain("method anchor");
-  expect(cue).toContain("semantic chain start");
+  expect(cue).toContain("nearest save point is 'phase-start'");
+  expect(cue).toContain("candidate, not the default");
+  expect(cue).toContain("last clean node before the material being folded");
+  expect(cue).toContain("anchor gravity misleads");
   expect(cue).toContain("Advanced Target Selection");
  });
 

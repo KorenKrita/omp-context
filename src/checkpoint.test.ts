@@ -78,17 +78,17 @@ async function execute(tool: RegisteredTool, params: unknown, ctx: unknown) {
 const tool = captureCheckpointTool();
 
 describe("registered acm_checkpoint progressive results", () => {
- test("automatic target reports placement, skipped transient entries, usage, and one concise start cue", async () => {
+ test("automatic target reports placement, skipped transient entries, usage, and one concise cue", async () => {
   const user = message("u1", null, "user", "begin");
   const assistant = message("a1", "u1", "assistant", "working");
   const transient = custom("c1", "a1");
   const result = await execute(tool, { name: "parser-fix-start" }, makeContext({ entries: [user, assistant, transient], branch: [user, assistant, transient], usage: { percent: 25, tokens: 1000, contextWindow: 4000 } }));
-  expect(result.details).toMatchObject({ status: "created", label: "parser-fix-start", resolvedEntryId: "a1", role: "AI", aliases: ["parser-fix-start"], targetResolution: "automatic", skippedTransientCount: 1, contextUsageAvailable: true, cue: GUIDANCE_CUES.checkpointStart });
+  expect(result.details).toMatchObject({ status: "created", label: "parser-fix-start", resolvedEntryId: "a1", role: "AI", aliases: ["parser-fix-start"], targetResolution: "automatic", skippedTransientCount: 1, contextUsageAvailable: true, cue: GUIDANCE_CUES.checkpoint });
   const text = result.content[0].text;
   expect(text).toContain("label entry label-1");
   expect(text).toContain("skipped 1 nearer transient/non-meaningful entry");
   expect(text).toContain("25.0%");
-  expect(text.split(GUIDANCE_CUES.checkpointStart)).toHaveLength(2);
+  expect(text.split(GUIDANCE_CUES.checkpoint)).toHaveLength(2);
   expect(text).not.toContain(ACM_CORE.slice(0, 40));
   expect(text).not.toMatch(/fold gate|Goal:|State:|Evidence:|External:|Exclusions:|Recover:|NEXT:/);
  });
@@ -128,15 +128,15 @@ describe("registered acm_checkpoint progressive results", () => {
   expect(result.details).toMatchObject({ error: "missing_capability", label: "missing-start", resolvedEntryId: "u1" });
   expect(result.content[0].text).toContain(RECOVERY_GUIDANCE.hostCapability);
   expect(result.content[0].text).not.toContain(RECOVERY_GUIDANCE.nameCollision);
-  expect(result.content[0].text).not.toContain(GUIDANCE_CUES.checkpointStart);
+  expect(result.content[0].text).not.toContain(GUIDANCE_CUES.checkpoint);
  });
 
- test("done suffix selects exactly the milestone retreat cue", async () => {
+ test("uses one checkpoint cue regardless of name suffix", async () => {
   const user = message("u1", null, "user", "done");
   const result = await execute(tool, { name: "root-cause-done" }, makeContext({ entries: [user] }));
-  expect(result.details.cue).toBe(GUIDANCE_CUES.checkpointDone);
-  expect(result.content[0].text).toContain(GUIDANCE_CUES.checkpointDone);
-  expect(result.content[0].text).not.toContain(GUIDANCE_CUES.checkpointStart);
+  expect(result.details.cue).toBe(GUIDANCE_CUES.checkpoint);
+  expect(result.content[0].text).toContain(GUIDANCE_CUES.checkpoint);
+  expect(result.content[0].text).toContain("acm_travel");
  });
 
  test("rejects the structural root keyword as a checkpoint name before mutation", async () => {
