@@ -1,13 +1,16 @@
-import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterEach, expect, test } from "bun:test";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createAgentSession, DefaultResourceLoader } from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-coding-agent-shim";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { cleanupHostTempDirs, createHostAgentDir, createHostTempDir, createInMemoryAuthStorage } from "./host-temp.ts";
+
+afterEach(cleanupHostTempDirs);
 
 test("exact OMP Skills system prompt lists an absolute SKILL.md and keeps Skill bodies on demand", async () => {
-  const tempDir = mkdtempSync(join(tmpdir(), "pi-context-skills-prompt-host-"));
-  let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+  const tempDir = createHostTempDir("pi-context-skills-prompt-host-");
+  let session: AgentSession | undefined;
   try {
     const skillDir = join(tempDir, "skill-pack", "context-management");
     const skillPath = join(skillDir, "SKILL.md");
@@ -23,7 +26,10 @@ test("exact OMP Skills system prompt lists an absolute SKILL.md and keeps Skill 
       "SKILL_BODY_MUST_STAY_ON_DEMAND",
     ].join("\n"));
 
-    const agentDir = join(tempDir, "agent");
+    // `createAgentSession` opens `<agentDir>/agent.db` and never releases it
+    // (see host-temp.ts), so the agent dir MUST stay outside `tempDir` —
+    // otherwise strict cleanup fails with EBUSY on Windows.
+    const agentDir = createHostAgentDir("pi-context-skills-prompt-agent-");
     const resourceLoader = new DefaultResourceLoader({
       cwd: tempDir,
       agentDir,
@@ -43,6 +49,7 @@ test("exact OMP Skills system prompt lists an absolute SKILL.md and keeps Skill 
     const created = await createAgentSession({
       cwd: tempDir,
       agentDir,
+      authStorage: createInMemoryAuthStorage(),
       resourceLoader,
       sessionManager: SessionManager.inMemory(join(tempDir, "session.jsonl")),
       tools: ["read"],
@@ -56,7 +63,6 @@ test("exact OMP Skills system prompt lists an absolute SKILL.md and keeps Skill 
     expect(prompt).toContain("Skills are specialized knowledge. If one matches your task, you MUST read `skill://<name>` before proceeding.");
     expect(prompt).not.toContain("SKILL_BODY_MUST_STAY_ON_DEMAND");
   } finally {
-    session?.dispose();
-    rmSync(tempDir, { recursive: true, force: true });
+    await session?.dispose();
   }
 });

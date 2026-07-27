@@ -53,6 +53,11 @@
         </tr>
         <tr>
           <td>agent-resolved</td>
+          <td>Host-fixture temp dirs never contain an OMP credential database; <code>test/host-fixture/host-temp.ts</code> owns creation and cleanup.</td>
+          <td>Windows-only CI failure: five host tests passed their assertions then failed cleanup with <code>EBUSY</code>. Root cause is upstream — <code>SqliteAuthCredentialStore.close()</code> (<code>@oh-my-pi/pi-ai</code> 17.1.5, <code>src/auth-storage.ts:7897</code>) finalizes 26 of its 34 prepared statements, leaving <code>#updateIfMatchesStmt</code>, <code>#deleteCachePrefixStmt</code>, <code>#updateIfMatchesWithLeaseStmt</code>, <code>#deleteIfMatchesWithLeaseStmt</code> and the four <code>*CredentialRefreshLease*</code> statements live, so the trailing <code>#db.close()</code> silently no-ops and <code>agent.db</code>/<code>-wal</code>/<code>-shm</code> stay open for the process lifetime. <code>AuthStorage.close()</code> and <code>AgentStorage.resetInstance()</code> both delegate there, so no public API releases the handles; only GC does, and not while the owner is still referenced. POSIX unlinks open files, which is why Linux and macOS never saw it. Fix avoids the leak instead of closing it: runner tests build the registry over <code>new Database(":memory:")</code>, and the Skills test — where <code>createAgentSession</code> opens <code>&lt;agentDir&gt;/agent.db</code> itself — puts <code>agentDir</code> in a separate best-effort temp dir. Strict cleanup still throws on <code>EBUSY</code> so a reintroduced handle fails the suite.</td>
+        </tr>
+        <tr>
+          <td>agent-resolved</td>
           <td>Preserve provider/native delivery separation with OMP public session-tree APIs and a capability-probed AgentSession adapter.</td>
           <td>Finalized applied receipts authorize provider Context Packet delivery. Native message replacement waits for idle <code>session_stop</code>; failures retain the persisted branch and actionable reload recovery rather than rolling back verified travel.</td>
         </tr>
