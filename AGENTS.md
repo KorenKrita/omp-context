@@ -12,7 +12,7 @@
 
 ## 精确宿主契约
 
-当前唯一支持的 OMP 版本是 **17.1.4**。根 package、peer dependencies、host fixture 与 lockfile 必须保持精确一致：
+当前唯一支持的 OMP 版本是 **17.1.5**。根 package、peer dependencies、host fixture 与 lockfile 必须保持精确一致：
 
 - `@oh-my-pi/pi-agent-core`
 - `@oh-my-pi/pi-ai`
@@ -72,7 +72,7 @@ bun run verify:acm
 1. generated guidance 与 exact host version 契约；
 2. 根测试套件；
 3. production TypeScript typecheck；
-4. `test/host-fixture` 在真实 OMP 17.1.4 上的 source build 与 host tests。
+4. `test/host-fixture` 在真实 OMP 17.1.5 上的 source build 与 host tests。
 
 Host fixture 至少覆盖 strict schema、CORE/tool-cue prompt 注入、OMP Skills prompt、automatic checkpoint anchor、current/target protocol validation、finalized receipt ordering、provider cutover、idle `session_stop` native replacement、replacement failure recovery、cache fallback/exhaustion、repeat travel、off-path restore、resume 与 SessionManager 隔离。
 

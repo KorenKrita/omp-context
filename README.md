@@ -71,7 +71,7 @@ omp install .
 
 ## OMP 兼容契约
 
-当前精确支持并测试 OMP **17.1.4**：
+当前精确支持并测试 OMP **17.1.5**：
 
 - `@oh-my-pi/pi-agent-core`
 - `@oh-my-pi/pi-ai`
@@ -87,7 +87,7 @@ bun install --frozen-lockfile
 bun run verify:acm
 ```
 
-完整 gate 包含 guidance 一致性、根测试、TypeScript 类型检查，以及真实 OMP 17.1.4 host fixture。架构与维护契约见 [`AGENTS.md`](AGENTS.md)，判断语义正典见 [`docs/acm-judgment-contract.md`](docs/acm-judgment-contract.md)。
+完整 gate 包含 guidance 一致性、根测试、TypeScript 类型检查，以及真实 OMP 17.1.5 host fixture。架构与维护契约见 [`AGENTS.md`](AGENTS.md)，判断语义正典见 [`docs/acm-judgment-contract.md`](docs/acm-judgment-contract.md)。
 
 ## 来源
 

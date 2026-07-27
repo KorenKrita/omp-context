@@ -3,17 +3,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  discoverAndLoadExtensions,
+  loadExtensions,
   ExtensionRunner,
   SessionManager,
 } from "@oh-my-pi/pi-coding-agent";
 import { createModelRegistry } from "./model-registry.ts";
 
 async function createRunner(tempDir: string, sessionManager: SessionManager) {
-  const loaded = await discoverAndLoadExtensions(
-    ["./.acm-build/index.js"],
+  const loaded = await loadExtensions(
+    [join(import.meta.dir, ".acm-build/index.js")],
     import.meta.dir,
-    join(tempDir, "empty-agent-dir"),
   );
   expect(loaded.errors).toEqual([]);
   const modelRegistry = await createModelRegistry(tempDir);

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  discoverAndLoadExtensions,
+  loadExtensions,
   ExtensionRunner,
   SessionManager,
 } from "@oh-my-pi/pi-coding-agent";
@@ -14,10 +14,9 @@ import { z } from "zod/v4";
 test("ACM CORE injects once through the exact Pi before_agent_start hook", async () => {
   const tempDir = mkdtempSync(join(tmpdir(), "pi-context-prompt-host-"));
   try {
-    const loaded = await discoverAndLoadExtensions(
-      ["./.acm-build/index.js"],
+    const loaded = await loadExtensions(
+      [join(import.meta.dir, ".acm-build/index.js")],
       import.meta.dir,
-      join(tempDir, "empty-agent-dir"),
     );
     expect(loaded.errors).toEqual([]);
 
@@ -65,10 +64,9 @@ test("ACM CORE injects once through the exact Pi before_agent_start hook", async
 test("ACM tools register generated prompt metadata on the exact Pi host", async () => {
   const tempDir = mkdtempSync(join(tmpdir(), "pi-context-tool-host-"));
   try {
-    const loaded = await discoverAndLoadExtensions(
-      ["./.acm-build/index.js"],
+    const loaded = await loadExtensions(
+      [join(import.meta.dir, ".acm-build/index.js")],
       import.meta.dir,
-      join(tempDir, "empty-agent-dir"),
     );
     expect(loaded.errors).toEqual([]);
 
