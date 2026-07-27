@@ -17,6 +17,7 @@ import {
   formatEntryLabels,
   isReservedTargetName,
   isValidEntryId,
+  optionalString,
   resolveTargetId,
   sanitizeTerminalText,
 } from "./lib.js";
@@ -104,15 +105,13 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
     label: "ACM Travel",
     description: TOOL_DESCRIPTIONS.travel,
     parameters: schema,
-    strict: true,
     loadMode: "essential",
     approval: "write",
     concurrency: "exclusive",
     renderCall(rawArgs: Static<typeof schema>, _options: any, theme: any) {
-      const backup = rawArgs.backupCurrentHeadAs
-        ? ` · backup ${sanitizeTerminalText(rawArgs.backupCurrentHeadAs)}`
-        : "";
-      const target = sanitizeTerminalText(rawArgs.target ?? "…");
+      const backupName = optionalString(rawArgs.backupCurrentHeadAs);
+      const backup = backupName ? ` · backup ${sanitizeTerminalText(backupName)}` : "";
+      const target = sanitizeTerminalText(optionalString(rawArgs.target) ?? "…");
       const handoffLength = typeof rawArgs.handoff === "string"
         ? rawArgs.handoff.length
         : rawArgs.handoff && typeof rawArgs.handoff === "object"
@@ -187,15 +186,15 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
         : {};
       const paramDefects: string[] = [];
       const rawTarget = rawRecord.target;
-      const target = typeof rawTarget === "string" ? rawTarget.trim() : "";
+      const target = optionalString(rawTarget) ?? "";
       if (!target) paramDefects.push("target:invalid_type_or_empty");
       const rawBackup = rawRecord.backupCurrentHeadAs;
-      const backupCurrentHeadAs = rawBackup === undefined
-        ? undefined
-        : typeof rawBackup === "string" && /^[A-Za-z0-9._-]+$/.test(rawBackup)
-          ? rawBackup
-          : undefined;
-      if (rawBackup !== undefined && backupCurrentHeadAs === undefined) {
+      const backupCurrentHeadAs = optionalString(rawBackup);
+      if (
+        rawBackup !== undefined
+        && rawBackup !== null
+        && (backupCurrentHeadAs === undefined || !/^[A-Za-z0-9._-]+$/.test(backupCurrentHeadAs))
+      ) {
         paramDefects.push("backupCurrentHeadAs:invalid_type_or_format");
       }
       for (const name of Object.keys(rawRecord)) {

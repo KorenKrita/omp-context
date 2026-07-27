@@ -6,6 +6,7 @@ import {
   collectTrustedAcmTravelTransactions,
   normalizeExistingAcmPacket,
   normalizeExistingAcmPacketForSession,
+  rebuildAcmContextPacket,
 } from "../src/context-packet";
 
 describe("ACM context packet", () => {
@@ -537,4 +538,65 @@ describe("ACM context packet", () => {
     const duplicateReceipt = { ...receipt, id: "receipt-transaction-duplicate" } as SessionEntry;
     expect(collectTrustedAcmTravelTransactions([summary, receipt, duplicateReceipt])).toEqual([]);
   });
+  test("uses the host packet instead of an orphaned post-compaction persisted slice", () => {
+    const entries = [
+      {
+        type: "message",
+        id: "root",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: { role: "user", content: "start", timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "tool-call",
+        parentId: "root",
+        timestamp: new Date(2).toISOString(),
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "compacted-call", name: "read", arguments: {} }],
+          stopReason: "toolUse",
+          api: "test",
+          provider: "test",
+          model: "test",
+          timestamp: 2,
+        },
+      },
+      {
+        type: "compaction",
+        id: "compaction",
+        parentId: "tool-call",
+        timestamp: new Date(3).toISOString(),
+        summary: "Compacted prior history",
+        firstKeptEntryId: "root",
+        tokensBefore: 10,
+      },
+      {
+        type: "message",
+        id: "tool-result",
+        parentId: "compaction",
+        timestamp: new Date(4).toISOString(),
+        message: {
+          role: "toolResult",
+          toolCallId: "compacted-call",
+          toolName: "read",
+          content: [],
+          timestamp: 4,
+        },
+      },
+    ] as SessionEntry[];
+    const sessionManager = {
+      getLeafId: () => "tool-result",
+      getEntry: (id: string) => entries.find((entry) => entry.id === id),
+      getEntries: () => entries,
+      getBranch: () => entries,
+    };
+
+    const result = rebuildAcmContextPacket(sessionManager);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.message);
+    expect(result.value.protocol).toMatchObject({ status: "complete", repairs: [] });
+  });
+
 });

@@ -297,27 +297,57 @@ describe("deferred live synchronization fallback", () => {
     sessionManager.appendMessage(finalizedTravelResult("invalid-persisted-packet", receipt));
     await emit(handlers, "session_stop", {}, context);
 
+    const invalidToolCallId = "duplicate-persisted-tool";
     const originalGetEntries = sessionManager.getEntries.bind(sessionManager);
     Object.defineProperty(sessionManager, "getEntries", {
       configurable: true,
       value: () => {
         const entries = originalGetEntries();
         const root = entries.find((entry) => entry.id === rootId);
-        if (!root) throw new Error("missing test root");
+        const receiptEntry = entries.find(
+          (entry) => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === "invalid-persisted-packet",
+        );
+        if (!root || root.type !== "message") throw new Error("missing test root");
+        if (!receiptEntry || receiptEntry.type !== "message" || receiptEntry.message.role !== "toolResult") {
+          throw new Error("missing test travel receipt");
+        }
         const invalidRoot = {
           ...root,
           message: {
-            role: "assistant",
-            content: [{ type: "toolCall", id: "", name: "broken-tool", arguments: {} }],
+            role: "assistant" as const,
+            content: [
+              { type: "toolCall" as const, id: invalidToolCallId, name: "broken-tool", arguments: {} },
+              { type: "toolCall" as const, id: invalidToolCallId, name: "broken-tool", arguments: {} },
+            ],
             api: "test",
             provider: "test",
             model: "test",
-            stopReason: "toolUse",
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: 0 },
+            stopReason: "toolUse" as const,
             timestamp: Date.now(),
           },
         };
-        return [invalidRoot, ...entries.filter((entry) => entry.id !== rootId)];
+        const pairedReceipt = {
+          ...receiptEntry,
+          message: {
+            ...receiptEntry.message,
+            toolCallId: invalidToolCallId,
+            toolName: "broken-tool",
+          },
+        };
+        return entries.map((entry) => entry.id === rootId
+          ? invalidRoot
+          : entry.id === receiptEntry.id
+            ? pairedReceipt
+            : entry);
       },
+    });
+    const invalidPacket = rebuildAcmContextPacket(sessionManager);
+    expect(invalidPacket.ok).toBe(true);
+    if (!invalidPacket.ok) throw new Error(invalidPacket.message);
+    expect(invalidPacket.value.protocol).toMatchObject({
+      status: "invalid",
+      defects: [expect.objectContaining({ kind: "duplicate_tool_call_id", toolCallId: invalidToolCallId })],
     });
     const retained = [{ role: "user", content: "retain exact-host live messages" }] as AgentMessage[];
 
@@ -327,7 +357,7 @@ describe("deferred live synchronization fallback", () => {
     expect(runtime.contextRefresh.isPending(sessionManager)).toBe(true);
     expect(runtime.getContextDeliveryPhase(sessionManager)).toBe("fallback");
     expect(notifications.at(-1)).toContain("invalid tool protocol");
-    expect(notifications.at(-1)).toContain("invalid_tool_call_id");
+    expect(notifications.at(-1)).toContain("duplicate_tool_call_id");
 
     await emit(handlers, "turn_end", {
       message: {

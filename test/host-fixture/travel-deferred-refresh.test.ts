@@ -244,9 +244,9 @@ describe("checkpoint recovery anchoring", () => {
     expect(JSON.stringify(restored.value.messages)).not.toContain("Interrupted by context travel");
   });
 
-  test("auto checkpoint skips a newer incomplete tool batch instead of labeling it", async () => {
+  test("auto checkpoint labels a newer host-stripped unfinished tool batch as protocol-complete", async () => {
     const sessionManager = SessionManager.inMemory();
-    const rootId = sessionManager.appendMessage({ role: "user", content: "known-good baseline", timestamp: Date.now() });
+    sessionManager.appendMessage({ role: "user", content: "known-good baseline", timestamp: Date.now() });
     const incompleteId = sessionManager.appendMessage({
       role: "assistant",
       content: [{ type: "toolCall", id: "unfinished-checkpoint-read", name: "read", arguments: { path: "missing.ts" } }],
@@ -274,24 +274,24 @@ describe("checkpoint recovery anchoring", () => {
 
     expect(result.details).toMatchObject({
       status: "created",
-      entryId: rootId,
+      entryId: incompleteId,
+      resolvedEntryId: incompleteId,
+      targetResolution: "automatic_protocol_complete",
       protocolStatus: "complete",
-      autoResolved: {
-        skipped: [expect.objectContaining({
-          id: incompleteId,
-          reason: "protocol_repaired",
-          repairs: [expect.objectContaining({
-            kind: "synthesized_missing_result",
-            toolCallId: "unfinished-checkpoint-read",
-          })],
-        })],
-      },
+      autoResolved: { skipped: [] },
     });
     expect(sessionManager.getEntries()).toContainEqual(expect.objectContaining({
       type: "label",
-      targetId: rootId,
+      targetId: incompleteId,
       label: "safe-before-incomplete",
     }));
+    const anchored = rebuildAcmContextPacket(sessionManager, incompleteId);
+    expect(anchored.ok).toBe(true);
+    if (!anchored.ok) throw new Error(anchored.message);
+    expect(anchored.value.protocol).toMatchObject({ status: "complete", repairs: [] });
+    expect(anchored.value.messages.some(
+      (message) => message.role === "toolResult" && message.toolCallId === "unfinished-checkpoint-read",
+    )).toBe(false);
   });
 });
 
@@ -629,12 +629,27 @@ describe("successful travel synchronizes a capability-compatible live AgentSessi
   test("rejects an invalid target packet before any mutation", async () => {
     const sessionManager = SessionManager.inMemory();
     const rootId = sessionManager.appendMessage({ role: "user", content: "old request", timestamp: Date.now() });
-    const targetId = sessionManager.appendMessage({
+    sessionManager.appendMessage({
       ...travelToolCall(),
       content: [
         { type: "toolCall", id: "duplicate-target", name: "read", arguments: { path: "a.md" } },
         { type: "toolCall", id: "duplicate-target", name: "read", arguments: { path: "b.md" } },
       ],
+    });
+    const targetId = sessionManager.appendMessage({
+      role: "toolResult",
+      toolCallId: "duplicate-target",
+      toolName: "read",
+      content: [{ type: "text", text: "host-delivered duplicate target result" }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+    const targetPacket = rebuildAcmContextPacket(sessionManager, targetId);
+    expect(targetPacket.ok).toBe(true);
+    if (!targetPacket.ok) throw new Error(targetPacket.message);
+    expect(targetPacket.value.protocol).toMatchObject({
+      status: "invalid",
+      defects: [expect.objectContaining({ kind: "duplicate_tool_call_id", toolCallId: "duplicate-target" })],
     });
     sessionManager.branchWithSummary(rootId, "safe active branch", { kind: "test-fixture" }, true);
     sessionManager.appendMessage({ role: "user", content: "new continuation", timestamp: Date.now() });
@@ -673,7 +688,22 @@ describe("successful travel synchronizes a capability-compatible live AgentSessi
         { type: "toolCall", id: "duplicate-current", name: "read", arguments: { path: "b.md" } },
       ],
     });
+    sessionManager.appendMessage({
+      role: "toolResult",
+      toolCallId: "duplicate-current",
+      toolName: "read",
+      content: [{ type: "text", text: "host-delivered duplicate current result" }],
+      isError: false,
+      timestamp: Date.now(),
+    });
     const headId = sessionManager.appendMessage(travelToolCall());
+    const currentPacket = rebuildAcmContextPacket(sessionManager);
+    expect(currentPacket.ok).toBe(true);
+    if (!currentPacket.ok) throw new Error(currentPacket.message);
+    expect(currentPacket.value.protocol).toMatchObject({
+      status: "invalid",
+      defects: [expect.objectContaining({ kind: "duplicate_tool_call_id", toolCallId: "duplicate-current" })],
+    });
     const entriesBefore = sessionManager.getEntries();
     const { context, timelineTool, travelTool } = createExtensionFixture(sessionManager);
 
@@ -713,9 +743,39 @@ describe("successful travel synchronizes a capability-compatible live AgentSessi
   test("allows a repaired target with explicit structural warnings", async () => {
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage({ role: "user", content: "old request", timestamp: Date.now() });
-    const targetId = sessionManager.appendMessage({
+    sessionManager.appendMessage({
       ...travelToolCall(),
-      content: [{ type: "toolCall", id: "unfinished-target-read", name: "read", arguments: { path: "OLD_TASK.md" } }],
+      content: [
+        { type: "toolCall", id: "target-read-a", name: "read", arguments: { path: "FIRST.md" } },
+        { type: "toolCall", id: "target-read-b", name: "read", arguments: { path: "SECOND.md" } },
+      ],
+    });
+    sessionManager.appendMessage({
+      role: "toolResult",
+      toolCallId: "target-read-b",
+      toolName: "read",
+      content: [{ type: "text", text: "second target result" }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+    const targetId = sessionManager.appendMessage({
+      role: "toolResult",
+      toolCallId: "target-read-a",
+      toolName: "read",
+      content: [{ type: "text", text: "first target result" }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+    const targetPacket = rebuildAcmContextPacket(sessionManager, targetId);
+    expect(targetPacket.ok).toBe(true);
+    if (!targetPacket.ok) throw new Error(targetPacket.message);
+    expect(targetPacket.value.protocol).toMatchObject({
+      status: "repaired",
+      repairs: [expect.objectContaining({
+        kind: "reordered_results",
+        before: ["target-read-b", "target-read-a"],
+        after: ["target-read-a", "target-read-b"],
+      })],
     });
     sessionManager.appendMessage({ role: "user", content: "fold the old branch", timestamp: Date.now() });
     sessionManager.appendMessage(travelToolCall());
@@ -733,30 +793,54 @@ describe("successful travel synchronizes a capability-compatible live AgentSessi
     expect(result.details).toMatchObject({
       targetFacts: {
         protocolStatus: "repaired",
-        survivingLatestUserTurnOpen: true,
-        targetAssistantHasToolCalls: true,
+        protocolRepairs: [expect.objectContaining({
+          kind: "reordered_results",
+          before: ["target-read-b", "target-read-a"],
+          after: ["target-read-a", "target-read-b"],
+        })],
       },
-      targetWarnings: [
-        "target_packet_repaired",
-        "target_prefix_open_user_turn",
-        "target_is_assistant_tool_batch",
-      ],
+      targetWarnings: expect.arrayContaining(["target_packet_repaired"]),
     });
-    expect((result.content[0] as { text: string }).text).toContain("Target warnings: target_packet_repaired, target_prefix_open_user_turn, target_is_assistant_tool_batch");
+    const resultText = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(resultText).toContain("Target warnings: target_packet_repaired");
   });
 
   test("rejects a raw backup whose immediate pre-travel packet needs protocol repair", async () => {
     const sessionManager = SessionManager.inMemory();
     const rootId = sessionManager.appendMessage({ role: "user", content: "inspect the parser", timestamp: Date.now() });
     sessionManager.appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "unfinished-read", name: "read", arguments: { path: "src/parser.ts" } }],
-      api: "test",
-      provider: "test",
-      model: "test",
-      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: 0 },
-      stopReason: "toolUse",
+      ...travelToolCall(),
+      content: [
+        { type: "toolCall", id: "backup-read-a", name: "read", arguments: { path: "src/parser.ts" } },
+        { type: "toolCall", id: "backup-read-b", name: "read", arguments: { path: "src/lexer.ts" } },
+      ],
+    });
+    sessionManager.appendMessage({
+      role: "toolResult",
+      toolCallId: "backup-read-b",
+      toolName: "read",
+      content: [{ type: "text", text: "lexer source" }],
+      isError: false,
       timestamp: Date.now(),
+    });
+    const backupCandidateId = sessionManager.appendMessage({
+      role: "toolResult",
+      toolCallId: "backup-read-a",
+      toolName: "read",
+      content: [{ type: "text", text: "parser source" }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+    const backupPacket = rebuildAcmContextPacket(sessionManager, backupCandidateId);
+    expect(backupPacket.ok).toBe(true);
+    if (!backupPacket.ok) throw new Error(backupPacket.message);
+    expect(backupPacket.value.protocol).toMatchObject({
+      status: "repaired",
+      repairs: [expect.objectContaining({
+        kind: "reordered_results",
+        before: ["backup-read-b", "backup-read-a"],
+        after: ["backup-read-a", "backup-read-b"],
+      })],
     });
     const travelCallId = sessionManager.appendMessage(travelToolCall());
     const { context, travelTool } = createExtensionFixture(sessionManager);
@@ -771,9 +855,11 @@ describe("successful travel synchronizes a capability-compatible live AgentSessi
 
     expect(result.details).toMatchObject({
       error: "backup_protocol_incomplete",
+      candidateId: backupCandidateId,
       repairs: [expect.objectContaining({
-        kind: "synthesized_missing_result",
-        toolCallId: "unfinished-read",
+        kind: "reordered_results",
+        before: ["backup-read-b", "backup-read-a"],
+        after: ["backup-read-a", "backup-read-b"],
       })],
     });
     expect(sessionManager.getLeafId()).toBe(travelCallId);

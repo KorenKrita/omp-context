@@ -77,11 +77,11 @@ describe("ACM tool OMP metadata", () => {
     expect(tool.renderShell).toBeUndefined();
   });
 
-  test.each([checkpoint, timeline, travel])("$name opts into provider-side strict tool schemas", (tool: CapturedTool) => {
-    expect(tool.strict).toBe(true);
+  test.each([checkpoint, timeline, travel])("$name does not register provider-side strict tool schemas", (tool: CapturedTool) => {
+    expect(tool.strict).toBeUndefined();
   });
 
-  test.each([checkpoint, timeline, travel])("$name stays top-level so its strict schema reaches the provider", (tool: CapturedTool) => {
+  test.each([checkpoint, timeline, travel])("$name stays top-level on the OMP tool surface", (tool: CapturedTool) => {
     expect(tool.loadMode).toBe("essential");
   });
 

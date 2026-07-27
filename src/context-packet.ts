@@ -393,31 +393,5 @@ export function rebuildAcmContextPacket(
       details: { leafId: leafId ?? null, cause },
     };
   }
-  const normalized = normalizeExistingAcmPacket(result.value, activeEntries);
-  let lastProjectionBoundary = -1;
-  for (let index = activeEntries.length - 1; index >= 0; index--) {
-    if (activeEntries[index]?.type === "compaction") {
-      lastProjectionBoundary = index;
-      break;
-    }
-  }
-  const persistedMessages = activeEntries
-    .slice(lastProjectionBoundary + 1)
-    .filter((entry): entry is Extract<SessionEntry, { type: "message" }> => entry.type === "message")
-    .map((entry) => entry.message);
-  const persistedProtocol = normalizeExistingAcmPacket(persistedMessages, activeEntries).protocol;
-  if (persistedProtocol.status === "invalid") {
-    normalized.protocol = {
-      ...normalized.protocol,
-      status: "invalid",
-      defects: persistedProtocol.defects,
-    };
-  } else if (persistedProtocol.status === "repaired" && normalized.protocol.status === "complete") {
-    normalized.protocol = {
-      ...normalized.protocol,
-      status: "repaired",
-      repairs: persistedProtocol.repairs,
-    };
-  }
-  return { ok: true as const, value: normalized };
+  return { ok: true as const, value: normalizeExistingAcmPacket(result.value, activeEntries) };
 }

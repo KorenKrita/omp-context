@@ -86,7 +86,7 @@ test("ACM tools register generated prompt metadata on the exact Pi host", async 
   const wrapped = new Map(wrapRegisteredTools(registered, runner).map((tool) => [tool.name, tool]));
   expect([...tools.keys()].sort()).toEqual(["acm_checkpoint", "acm_timeline", "acm_travel"]);
   for (const tool of wrapped.values()) {
-    expect(tool.strict).toBe(true);
+    expect(tool.strict).not.toBe(true);
     expect(tool.loadMode).toBe("essential");
     expect(isMountableUnderXdev(tool)).toBe(false);
   }

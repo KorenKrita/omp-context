@@ -6,6 +6,7 @@ import {
   getLiveAgentSyncRecoveryGuidance,
   type AgentSessionHostClass,
 } from "./.acm-build/live-agent-session-adapter.js";
+import { rebuildAcmContextPacket } from "./.acm-build/context-packet.js";
 
 function createHostClass(counter = { calls: 0 }): AgentSessionHostClass {
   class TestAgentSession {
@@ -154,20 +155,46 @@ describe("live AgentSession capability adapter", () => {
 
   test("refuses an invalid rebuilt packet, keeps native messages intact, and retains the ticket for recovery", () => {
     const sessionManager = SessionManager.inMemory();
+    const invalidToolCallId = "duplicate-invalid-packet";
     sessionManager.appendMessage({ role: "user", content: "valid root", timestamp: Date.now() });
     sessionManager.appendMessage({
       role: "assistant",
-      content: [{ type: "toolCall", id: "", name: "broken-tool", arguments: {} }],
+      content: [
+        { type: "toolCall", id: invalidToolCallId, name: "broken-tool", arguments: {} },
+        { type: "toolCall", id: invalidToolCallId, name: "broken-tool", arguments: {} },
+      ],
       api: "test",
       provider: "test",
       model: "test",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: 0 },
       stopReason: "toolUse",
       timestamp: Date.now(),
-    } as never);
+    });
+    sessionManager.appendMessage({
+      role: "toolResult",
+      toolCallId: invalidToolCallId,
+      toolName: "broken-tool",
+      content: [{ type: "text", text: "host-delivered duplicate result" }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+    const packet = rebuildAcmContextPacket(sessionManager);
+    expect(packet.ok).toBe(true);
+    if (!packet.ok) throw new Error(packet.message);
+    expect(packet.value.protocol).toMatchObject({
+      status: "invalid",
+      defects: [expect.objectContaining({ kind: "duplicate_tool_call_id", toolCallId: invalidToolCallId })],
+    });
     const stale = [{ role: "user", content: "retain this native context", timestamp: Date.now() }] as AgentMessage[];
     const agent = { state: { messages: stale } };
     const HostClass = createHostClass();
-    const session = new (HostClass as any)(sessionManager, agent);
+    // The test host exposes the runtime constructor shape the adapter observes.
+    const HostSession = HostClass as unknown as new (
+      sessionManager: SessionManager,
+      agent: typeof agent,
+    ) => { getContextUsage(): unknown };
+    const session = new HostSession(sessionManager, agent);
+
     const adapter = createLiveAgentSessionAdapter({ AgentSessionClass: HostClass });
     session.getContextUsage();
 
@@ -177,10 +204,10 @@ describe("live AgentSession capability adapter", () => {
     expect(first).toMatchObject({
       status: "failed",
       reason: "invalid_protocol",
-      defects: [{ kind: "invalid_tool_call_id" }],
+      defects: [expect.objectContaining({ kind: "duplicate_tool_call_id", toolCallId: invalidToolCallId })],
     });
     if (first.status !== "failed") throw new Error("invalid packet unexpectedly replaced native messages");
-    expect(first.message).toContain("invalid_tool_call_id");
+    expect(first.message).toContain("duplicate_tool_call_id");
     expect(agent.state.messages).toBe(stale);
     // A later repair/reload can retry the same verified travel ticket instead
     // of silently treating the refusal as an applied native replacement.

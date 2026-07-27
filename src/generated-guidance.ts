@@ -39,7 +39,7 @@ export const TREE_SUMMARY_INSTRUCTIONS = "Summarize this abandoned conversation 
 
 export const RECOVERY_GUIDANCE = {
   "nameCollision": "Search existing checkpoints, preserve the semantic base, and add the smallest useful scope, ordinal, or date. Do not overwrite the existing recovery target.",
-  "hostCapability": "The supported Host Bridge capability is unavailable or malformed. Stop mutation and report the named capability error; verify the exact supported Pi version before retrying.",
+  "hostCapability": "The supported Host Bridge capability is unavailable or malformed. Stop mutation and report the named capability error; verify the exact supported OMP version before retrying.",
   "rollbackFailed": "The backup label remains in the tree. Record its label and entry ID as a recovery pointer before any retry.",
   "branchRolledBack": "Branch creation failed before mutation; the new backup label was rolled back. Correct the reported host failure before retrying.",
   "rollbackSkipped": "Branch mutation or prior aliases make automatic backup rollback unsafe. Keep the reported backup pointer and inspect the active leaf before retrying.",

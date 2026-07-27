@@ -7,8 +7,8 @@ import { appendCheckpointLabel } from "./host-bridge.js";
 import { normalizeExistingAcmPacketForSession, rebuildAcmContextPacket } from "./context-packet.js";
 import { analyzeToolProtocol, formatToolProtocolDefects } from "./tool-protocol.js";
 import { calculateContextUsagePressure } from "./context-pressure.js";
-import { buildLabelMaps, ContextRefreshRegistry } from "./lib.js";
-import { GUIDANCE_CUES, RECOVERY_GUIDANCE, TREE_SUMMARY_INSTRUCTIONS } from "./generated-guidance.js";
+import { ANCHOR_SEARCH_WINDOW, buildLabelMaps, ContextRefreshRegistry } from "./lib.js";
+import { GUIDANCE_CUES, RECOVERY_GUIDANCE } from "./generated-guidance.js";
 import { getLiveAgentSyncRecoveryGuidance } from "./live-agent-session-adapter.js";
 import type { AcmSessionRuntime } from "./runtime.js";
 import { withAvailableAdvancedGuidance } from "./advanced-guidance.js";
@@ -115,15 +115,6 @@ function buildSafeCurrentProviderFallback(messages: readonly AgentMessage[]): Ag
     : [protocolRecoveryMessage()];
 }
 
-/**
- * The summarizer model cannot see session node IDs, so the abandoned branch tip
- * is handed to it as a concrete fact: a Recover pointer that acm_travel can
- * rehydrate directly.
- */
-export function buildTreeSummaryInstructions(oldLeafId: string | null): string {
-  if (!oldLeafId) return TREE_SUMMARY_INSTRUCTIONS;
-  return `${TREE_SUMMARY_INSTRUCTIONS}\n\nThe abandoned branch tip is node ${oldLeafId}. Name it in the Recover slot unless the branch contains a more specific save point.`;
-}
 
 export function registerAcmLifecycle(pi: ExtensionAPI, runtime: AcmSessionRuntime): void {
   const contextRefresh = runtime.contextRefresh;
@@ -156,13 +147,8 @@ export function registerAcmLifecycle(pi: ExtensionAPI, runtime: AcmSessionRuntim
   const currentGaugePressure = (ctx: ExtensionContext) => {
     const session = ctx.sessionManager;
     runtime.syncUsageModel(session, currentModelIdentity(ctx));
-    if (!runtime.shouldObserveNativeContextUsage(session)) {
-      const cached = runtime.getUsage(session);
-      const providerPressure = calculateContextUsagePressure(cached?.tokens, cached?.contextWindow, cached?.percent);
-      if (providerPressure) return providerPressure;
-    }
     const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : undefined;
-    return calculateContextUsagePressure(usage?.tokens, usage?.contextWindow, usage?.percent);
+    return runtime.authoritativeContextPressure(session, usage);
   };
 
   pi.on("tool_result", (event, ctx: ExtensionContext) => {
@@ -423,7 +409,8 @@ export function registerAcmLifecycle(pi: ExtensionAPI, runtime: AcmSessionRuntim
       checkpointName = `${checkpointBase}-${ordinal}`;
     }
     let checkpointTargetId: string | undefined;
-    for (let index = branch.length - 1; index >= 0; index--) {
+    let inspected = 0;
+    for (let index = branch.length - 1; index >= 0 && inspected < ANCHOR_SEARCH_WINDOW; index--, inspected++) {
       if (event.signal?.aborted) return;
       const candidate = branch[index];
       if (!candidate) continue;
@@ -433,7 +420,13 @@ export function registerAcmLifecycle(pi: ExtensionAPI, runtime: AcmSessionRuntim
         break;
       }
     }
-    if (!checkpointTargetId) return;
+    if (!checkpointTargetId) {
+      ctx.ui.notify(
+        `No pre-compaction checkpoint was created because no protocol-complete anchor exists within the last ${ANCHOR_SEARCH_WINDOW} entries of the bounded search window.`,
+        "warning",
+      );
+      return;
+    }
     const append = appendCheckpointLabel(sessionManager, checkpointTargetId, checkpointName);
     if (!append.ok) ctx.ui.notify(`Could not create pre-compaction checkpoint: ${append.message}`, "warning");
   });

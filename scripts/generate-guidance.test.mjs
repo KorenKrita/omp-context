@@ -37,7 +37,7 @@ describe("canonical guidance generation", () => {
     expect(TREE_SUMMARY_INSTRUCTIONS).toBe(derived.treeSummaryInstructions);
     expect(RECOVERY_GUIDANCE).toEqual(derived.recoveryGuidance);
     expect(ACM_CORE_MARKER).toBe("<!-- PI-CONTEXT:ACM-CORE:v1 -->");
-    expect(RECOVERY_GUIDANCE.hostCapability).toContain("supported Pi version");
+    expect(RECOVERY_GUIDANCE.hostCapability).toContain("supported OMP version");
   });
 
   test("keeps manual navigation summaries handoff-shaped and standalone", () => {
