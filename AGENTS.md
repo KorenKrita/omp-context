@@ -59,7 +59,22 @@ Gauge 使用模型窗口与 400K 的较小值作为 working budget。非 ACM、�
 
 针可以报状态，也可以报收益：`% budget` / `% window` 是压力，`fold@turn→X%` / `fold@task→Y%` 是在最近与最早结构参照点折叠后的投影压力（同一 working-budget 口径，`Math.floor`）。四者同为 measurement：回答「折了能省多少」而不回答「是否该折」（**Preview measures; boundary decides**，资格线在 CORE）。合宪标准是三条：不携带动词或评价、不选择出现时机（无下限无档位）、缺参照点时省略而非编造零。收益针恢复自 upstream `7c3bdff7`（2026-07-12）架构拆分中静默丢失的 fold preview——那次只有空白 commit body，随后六次 guidance 修订都在用措辞补偿一个缺失的数字。`test/fold-visibility.test.ts` 是机制清单，任何再次搬走收益针的重构必须让它变红。
 
+参照点语义：`fold@turn` 跳过当前用户轮，取它之前最近的 boundary/label；`fold@task` 取最早的。这是值域选择不是精度选择——fold 只能塌尾巴不能塌中段，「折掉上一段的过程」的 target 必然落在上一个 user boundary；tip-first 取最近 boundary 会在新请求刚到时指向本轮开头，让教义点名的候选位置报出近零收益。跳过无条件，按「产出足够多」前移会让数字决定参照点。收益针计入折叠追加的 handoff 名义成本（`NOMINAL_HANDOFF_TOKENS`），与 `estimateUsageAtTravelTarget` 对齐；不计入会承诺 travel 交付不了的收益。
+
 零距离折叠（FM-15：打点后立刻以该点为 target）在 travel mutation 之前按**结构**拒绝：若替换范围内全部是 ACM 自身的 label 记账条目，则拒绝并说明 target precedes nothing。不按距离也不按投影数字拒绝——前者误伤「打点→批量读取→折回点」这类短距离高收益用法，后者让数字越权决定。
+
+## Boundary ledger
+
+请求边界处的漏折在仓库内不可观测：一个从不折叠的 session 同样从不调用 `acm_timeline`，所以任何呈现面恰好在失效发生处不可见。观测必须被动，否则 n 永不增长。退役的评测装置回答不了这个问题——它构造场景且前提被校准反复推翻；缺的不是场景，是计数。
+
+`src/boundary-ledger.ts` 是一个 append-only writer，默认开启：每个不同的 user-request boundary 一行、每次 applied travel 一行，落在 `<agent-dir>/state/acm-boundary-ledger.jsonl`。它合宪的理由与仪表相同：不注入、不选时机、不渲染。
+
+- **只记计数与百分比**，绝不记消息内容；测试用 allowlist 断言字段集，任何携带文本的新字段必须让它变红；
+- 百分比取 `Math.floor`，与仪表渲染的读数一致；不可用值记 `null` 而非 0；
+- boundary 按 entry id 去重——同一 boundary 会在该轮每个 tool result 上被观测到，按观测计数就变成了统计工具活动而非请求结构；
+- **写失败一律吞掉**，硬要求：账本不许成为新的失败面。`appendLedgerRow` 永不抛出，返回值只作诊断；
+- 无读取路径、无查询层、无轮换，只有 `MAX_LEDGER_BYTES` 上限；超限即停写；
+- `ACM_LEDGER_DISABLED=1` 完全静默，按调用时读取；`test/setup.ts` 通过 bunfig preload 在测试期强制禁用——fixture 的合成压力会污染账本存在的意义。
 
 ## 测试契约
 
