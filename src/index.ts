@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { registerCheckpointTool } from "./checkpoint-tool.js";
 import { registerAcmLifecycle } from "./runtime-lifecycle.js";
 import { registerAcmPrompt } from "./prompt-registration.js";
@@ -6,7 +6,7 @@ import { AcmSessionRuntime } from "./runtime.js";
 import { registerTimelineTool } from "./timeline-tool.js";
 import { registerTravelTool } from "./travel-tool.js";
 
-export { fixOrphanedToolUse } from "./message-sanitizer.js";
+export { fixOrphanedToolUse } from "./tool-protocol.js";
 export { ensureAcmCoreSegment } from "./prompt-registration.js";
 
 /** ACM composition root. Domain behavior lives in behavior-owned modules. */

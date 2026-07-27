@@ -1,4 +1,4 @@
-import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
 
 export interface LabelMaps {
   labelToEntryId: Map<string, string>;

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join, parse } from "node:path";
 
@@ -5,6 +6,7 @@ export const OMP_HOST_PACKAGES = [
   "@oh-my-pi/pi-agent-core",
   "@oh-my-pi/pi-ai",
   "@oh-my-pi/pi-coding-agent",
+  "@oh-my-pi/pi-tui",
 ];
 
 const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
@@ -62,27 +64,46 @@ export function readLocalOmpInstallation() {
   if (!executable) throw new Error("Local OMP executable was not found on PATH");
 
   const resolvedExecutable = realpathSync(executable);
-  const codingAgent = findPackageRoot(dirname(resolvedExecutable), "@oh-my-pi/pi-coding-agent");
-  const scopeRoot = dirname(codingAgent.root);
+  let version;
+  let codingAgentRoot;
+  try {
+    const codingAgent = findPackageRoot(dirname(resolvedExecutable), "@oh-my-pi/pi-coding-agent");
+    codingAgentRoot = codingAgent.root;
+    version = codingAgent.metadata.version;
+  } catch (error) {
+    if (override) throw error;
+    const result = spawnSync(executable, ["--version"], { encoding: "utf8", timeout: 30_000 });
+    if (result.error || result.status !== 0) {
+      throw new Error(`Could not determine local OMP version from ${executable}`);
+    }
+    const match = result.stdout.trim().match(/(?:omp\/)?(\d+\.\d+\.\d+)/);
+    if (!match) throw new Error(`Local OMP returned an invalid version: ${result.stdout.trim()}`);
+    version = match[1];
+  }
+  if (!EXACT_VERSION.test(version)) throw new Error(`Local @oh-my-pi/pi-coding-agent has invalid version ${String(version)}`);
+
   const versions = new Map();
   const packageRoots = new Map();
-  for (const packageName of OMP_HOST_PACKAGES) {
-    const shortName = packageName.slice("@oh-my-pi/".length);
-    const packageRoot = join(scopeRoot, shortName);
-    const metadata = readJson(join(packageRoot, "package.json"), packageName);
-    if (metadata.name !== packageName) throw new Error(`Local package mismatch at ${packageRoot}`);
-    if (typeof metadata.version !== "string" || !EXACT_VERSION.test(metadata.version)) {
-      throw new Error(`Local ${packageName} has invalid version ${String(metadata.version)}`);
+  if (codingAgentRoot) {
+    const scopeRoot = dirname(codingAgentRoot);
+    for (const packageName of OMP_HOST_PACKAGES) {
+      const shortName = packageName.slice("@oh-my-pi/".length);
+      const packageRoot = join(scopeRoot, shortName);
+      const metadata = readJson(join(packageRoot, "package.json"), packageName);
+      if (metadata.name !== packageName) throw new Error(`Local package mismatch at ${packageRoot}`);
+      if (typeof metadata.version !== "string" || !EXACT_VERSION.test(metadata.version)) {
+        throw new Error(`Local ${packageName} has invalid version ${String(metadata.version)}`);
+      }
+      versions.set(packageName, metadata.version);
+      packageRoots.set(packageName, packageRoot);
     }
-    versions.set(packageName, metadata.version);
-    packageRoots.set(packageName, packageRoot);
+    const uniqueVersions = new Set(versions.values());
+    if (uniqueVersions.size !== 1) {
+      throw new Error(`Local OMP host packages disagree: ${[...versions].map(([name, value]) => `${name}=${value}`).join(", ")}`);
+    }
+  } else {
+    for (const packageName of OMP_HOST_PACKAGES) versions.set(packageName, version);
   }
-
-  const uniqueVersions = new Set(versions.values());
-  if (uniqueVersions.size !== 1) {
-    throw new Error(`Local OMP host packages disagree: ${[...versions].map(([name, version]) => `${name}=${version}`).join(", ")}`);
-  }
-  const version = versions.get("@oh-my-pi/pi-coding-agent");
   return { executable, resolvedExecutable, version, versions, packageRoots };
 }
 

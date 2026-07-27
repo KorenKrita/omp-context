@@ -104,13 +104,13 @@ function installAndVerify(root) {
   run("bun", ["install"], join(root, "test", "host-fixture"));
   run("bun", ["run", "typecheck"], root);
   run("bun", ["run", "test:host"], root);
-  run("bun", ["test", "src/version-contract.test.ts"], root);
+  run("bun", ["test", "./scripts/host-version.test.mjs"], root);
 }
 
 function verifyDeclaredHost() {
   run("bun", ["run", "typecheck"], repoRoot);
   run("bun", ["run", "test:host"], repoRoot);
-  run("bun", ["test", "src/version-contract.test.ts"], repoRoot);
+  run("bun", ["test", "./scripts/host-version.test.mjs"], repoRoot);
 }
 
 try {

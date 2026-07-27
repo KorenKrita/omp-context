@@ -1,18 +1,17 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type { ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { buildSessionMessages } from "./host-bridge.js";
-import { fixOrphanedToolUse } from "./message-sanitizer.js";
+import { rebuildAcmContextPacket } from "./context-packet.js";
+import type { ReadonlySessionManager } from "./host-bridge.js";
+import { formatToolProtocolDefects, type ToolProtocolDefect } from "./tool-protocol.js";
 
-const INSTALLATION_SYMBOL = Symbol.for("omp-context.live-agent-session-adapter.v1");
+const INSTALLATION_SYMBOL = Symbol.for("pi-context.live-agent-session-adapter.v1");
 
 interface LiveAgentSession {
   readonly sessionManager: ReadonlySessionManager;
   readonly agent: {
     readonly state: {
-      readonly messages: AgentMessage[];
+      messages: AgentMessage[];
     };
-    replaceMessages(messages: AgentMessage[]): void;
   };
 }
 
@@ -29,7 +28,12 @@ export type AgentSessionSyncOutcome =
   | { status: "unavailable"; reason: "unsupported_host_shape" | "unsupported_session_shape"; message: string }
   | { status: "pending"; preferredLeafId?: string }
   | { status: "applied"; leafId: string | null; messageCount: number }
-  | { status: "failed"; reason: "read_leaf_failed" | "build_messages_failed" | "replace_messages_failed"; message: string }
+  | {
+      status: "failed";
+      reason: "read_leaf_failed" | "build_messages_failed" | "invalid_protocol" | "replace_messages_failed";
+      message: string;
+      defects?: ToolProtocolDefect[];
+    }
   | { status: "skipped"; reason: "branch_not_applied" | "missing_association" | "not_pending" | "stale_leaf"; message: string };
 
 type AgentSessionUnavailableOutcome = Extract<AgentSessionSyncOutcome, { status: "unavailable" }>;
@@ -51,12 +55,28 @@ interface InstallationState {
   readonly outcomes: WeakMap<object, AgentSessionSyncOutcome>;
 }
 
+export type AgentSessionTailPruneOutcome =
+  | { status: "pruned"; removedCount: number; messageCount: number }
+  | { status: "noop"; message: string }
+  | AgentSessionUnavailableOutcome;
+
 export interface LiveAgentSessionAdapter {
   readonly installation: AgentSessionAdapterInstallationOutcome;
   schedule(sessionManager: object, toolCallId: string, preferredLeafId?: string): AgentSessionSyncOutcome;
   apply(sessionManager: object, toolCallId: string): AgentSessionSyncOutcome;
   getStatus(sessionManager: object): AgentSessionSyncOutcome;
   clear(sessionManager: object): void;
+  /**
+   * Defensive host-crash mitigation: before an overflow-recovery retry the host
+   * continues from `agent.state.messages`, but its own recovery path only strips a
+   * trailing assistant whose stopReason is "error". A trailing assistant with any
+   * other stopReason (e.g. "length" with zero output, which the host itself
+   * classified as overflow) makes agentLoopContinue throw
+   * "Cannot continue from message role: assistant". Pruning every trailing
+   * assistant message restores a continuable tail; the pruned messages remain in
+   * the session history, only the live retry context is trimmed.
+   */
+  pruneNonContinuableTail(sessionManager: object): AgentSessionTailPruneOutcome;
 }
 
 export interface LiveAgentSessionAdapterOptions {
@@ -89,8 +109,7 @@ function observeSessionAssociation(state: InstallationState, value: unknown): vo
     if (!value || typeof value !== "object") return;
     const sessionManager = (value as { sessionManager?: unknown }).sessionManager;
     if (!sessionManager || typeof sessionManager !== "object") return;
-    const existing = state.sessions.get(sessionManager)?.deref();
-    if (existing !== value) state.sessions.set(sessionManager, new WeakRef(value));
+    state.sessions.set(sessionManager, new WeakRef(value));
   } catch {
     // Capability observation must never change host getContextUsage behavior.
   }
@@ -107,13 +126,10 @@ function inspectLiveSession(value: unknown, expectedSessionManager: object):
     if (candidate.sessionManager !== expectedSessionManager) {
       return { ok: false, outcome: unavailable("unsupported_session_shape", "AgentSession.sessionManager does not match the scheduled SessionManager") };
     }
-    if (!candidate.agent || typeof candidate.agent !== "object") {
-      return { ok: false, outcome: unavailable("unsupported_session_shape", "AgentSession.agent is unavailable") };
+    if (!candidate.agent || typeof candidate.agent !== "object" || !candidate.agent.state || typeof candidate.agent.state !== "object") {
+      return { ok: false, outcome: unavailable("unsupported_session_shape", "AgentSession.agent.state is unavailable") };
     }
-    if (typeof candidate.agent.replaceMessages !== "function") {
-      return { ok: false, outcome: unavailable("unsupported_session_shape", "AgentSession.agent.replaceMessages is unavailable") };
-    }
-    if (!candidate.agent.state || typeof candidate.agent.state !== "object" || !Array.isArray(candidate.agent.state.messages)) {
+    if (!Array.isArray(candidate.agent.state.messages)) {
       return { ok: false, outcome: unavailable("unsupported_session_shape", "AgentSession.agent.state.messages is not an array") };
     }
     return { ok: true, session: candidate as LiveAgentSession };
@@ -159,17 +175,16 @@ function install(HostClass: AgentSessionHostClass): InstallationState | AgentSes
   const existing = current[INSTALLATION_SYMBOL];
   if (existing) return existing;
 
-  const originalGetContextUsage = current;
   const state: InstallationState = {
     kind: "installed",
-    originalGetContextUsage,
+    originalGetContextUsage: current,
     sessions: new WeakMap(),
     pending: new WeakMap(),
     outcomes: new WeakMap(),
   };
   const replacement: InstalledGetContextUsage = function (this: LiveAgentSession, ...args: unknown[]) {
     observeSessionAssociation(state, this);
-    return originalGetContextUsage.apply(this, args);
+    return current.apply(this, args);
   };
   Object.defineProperty(replacement, INSTALLATION_SYMBOL, { value: state });
   return replacePrototypeMethod(prototype, replacement) ?? state;
@@ -192,7 +207,9 @@ function retainsMessageSequence(actual: AgentMessage[], expected: AgentMessage[]
 
 /**
  * Installs the narrow capability-probed adapter. Tree mutations remain owned by Host Bridge;
- * this adapter only replaces the matching live AgentSession message array after tool completion.
+ * this adapter only replaces the matching live AgentSession message array after its caller has
+ * chosen the correct lifecycle boundary. A caller that must follow the latest active leaf leaves
+ * preferredLeafId unset.
  */
 export function createLiveAgentSessionAdapter(
   options: LiveAgentSessionAdapterOptions = {},
@@ -207,6 +224,7 @@ export function createLiveAgentSessionAdapter(
       apply: () => installation,
       getStatus: () => installation,
       clear: () => undefined,
+      pruneNonContinuableTail: () => installation,
     };
   }
 
@@ -251,7 +269,6 @@ export function createLiveAgentSessionAdapter(
           message: "No live AgentSession synchronization matches this tool execution",
         };
       }
-      state.pending.delete(sessionManager);
 
       let currentLeafId: string | null;
       try {
@@ -266,6 +283,7 @@ export function createLiveAgentSessionAdapter(
         return outcome;
       }
       if (pending.preferredLeafId && currentLeafId !== pending.preferredLeafId) {
+        state.pending.delete(sessionManager);
         const outcome: AgentSessionSyncOutcome = {
           status: "skipped",
           reason: "stale_leaf",
@@ -274,7 +292,6 @@ export function createLiveAgentSessionAdapter(
         state.outcomes.set(sessionManager, outcome);
         return outcome;
       }
-
       const session = state.sessions.get(sessionManager)?.deref();
       if (!session) {
         const outcome: AgentSessionSyncOutcome = {
@@ -291,27 +308,38 @@ export function createLiveAgentSessionAdapter(
         return inspected.outcome;
       }
 
-      const messagesResult = buildSessionMessages(inspected.session.sessionManager);
-      if (!messagesResult.ok) {
+      const packetResult = rebuildAcmContextPacket(inspected.session.sessionManager);
+      if (!packetResult.ok) {
         const outcome: AgentSessionSyncOutcome = {
           status: "failed",
           reason: "build_messages_failed",
-          message: messagesResult.message,
+          message: packetResult.message,
         };
         state.outcomes.set(sessionManager, outcome);
         return outcome;
       }
-      const messages = fixOrphanedToolUse(messagesResult.value);
+      if (packetResult.value.protocol.status === "invalid") {
+        const outcome: AgentSessionSyncOutcome = {
+          status: "failed",
+          reason: "invalid_protocol",
+          message: `Refused native context replacement for invalid tool protocol: ${formatToolProtocolDefects(packetResult.value.protocol.defects) || "no defect details were supplied"}`,
+          defects: packetResult.value.protocol.defects,
+        };
+        state.outcomes.set(sessionManager, outcome);
+        return outcome;
+      }
+      const messages = packetResult.value.messages;
       try {
-        inspected.session.agent.replaceMessages(messages);
+        inspected.session.agent.state.messages = messages;
         if (!retainsMessageSequence(inspected.session.agent.state.messages, messages)) {
-          throw new Error("AgentSession.agent.replaceMessages did not retain the replacement message sequence");
+          throw new Error("AgentSession.agent.state.messages did not retain the replacement message sequence");
         }
         const outcome: AgentSessionSyncOutcome = {
           status: "applied",
           leafId: currentLeafId,
           messageCount: messages.length,
         };
+        state.pending.delete(sessionManager);
         state.outcomes.set(sessionManager, outcome);
         return outcome;
       } catch (error) {
@@ -326,6 +354,24 @@ export function createLiveAgentSessionAdapter(
     },
     getStatus(sessionManager) {
       return state.outcomes.get(sessionManager) ?? initialStatus;
+    },
+    pruneNonContinuableTail(sessionManager) {
+      const session = state.sessions.get(sessionManager)?.deref();
+      if (!session) {
+        return { status: "noop", message: "No live AgentSession is associated with this SessionManager" };
+      }
+      const inspected = inspectLiveSession(session, sessionManager);
+      if (!inspected.ok) return inspected.outcome;
+      const messages = inspected.session.agent.state.messages;
+      let removedCount = 0;
+      while (messages.length > 0 && messages[messages.length - 1]?.role === "assistant") {
+        messages.pop();
+        removedCount += 1;
+      }
+      if (removedCount === 0) {
+        return { status: "noop", message: "The live context tail is already continuable" };
+      }
+      return { status: "pruned", removedCount, messageCount: messages.length };
     },
     clear(sessionManager) {
       state.pending.delete(sessionManager);

@@ -1,4 +1,4 @@
-import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent";
 import {
   extractTextFromContent,
   findInTree,

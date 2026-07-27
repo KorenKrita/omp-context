@@ -1,4 +1,4 @@
-import type { ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { ReadonlySessionManager } from "./host-bridge.js";
 import {
   appendCheckpointLabel,
   applyBranchWithSummary,
@@ -7,7 +7,7 @@ import {
   type CheckpointLabelPrevalidation,
   type LabelRollbackToken,
 } from "./host-bridge.js";
-import { buildLabelMaps } from "./lib.js";
+import { buildLabelMaps } from "./label-journal.js";
 
 export interface TravelBackupPlan {
   targetId: string;
@@ -116,9 +116,9 @@ export function executeTravelMutation(request: TravelMutationRequest): TravelMut
       summaryEntryId: branch.value.summaryEntryId,
       resultingLeafId: branch.value.leafAfter,
       backupOutcome,
-      backupLabelEntryId,
-      backupRollbackToken: backupToken,
-      hostReturnedSummaryEntryId: branch.value.hostReturnedEntryId,
+      ...(backupLabelEntryId === undefined ? {} : { backupLabelEntryId }),
+      ...(backupToken === undefined ? {} : { backupRollbackToken: backupToken }),
+      ...(branch.value.hostReturnedEntryId === undefined ? {} : { hostReturnedSummaryEntryId: branch.value.hostReturnedEntryId }),
     };
   }
 
@@ -153,7 +153,7 @@ export function executeTravelMutation(request: TravelMutationRequest): TravelMut
     branchState: branch.state,
     branchFailure,
     backupOutcome,
-    backupLabelEntryId,
+    ...(backupLabelEntryId === undefined ? {} : { backupLabelEntryId }),
     backupRolledBack,
     backupRollbackFailed,
     backupRollbackSkipped,
@@ -161,6 +161,6 @@ export function executeTravelMutation(request: TravelMutationRequest): TravelMut
     remainingBackupLabel,
     remainingBackupLabelState,
     refreshRequired: branch.state === "indeterminate",
-    refreshLeafId,
+    ...(refreshLeafId === undefined ? {} : { refreshLeafId }),
   };
 }

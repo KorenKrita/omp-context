@@ -1,214 +1,83 @@
-# AGENTS.md - omp-context 项目知识库
+# AGENTS.md — omp-context 维护契约
 
-## 概述
+## 项目定位
 
-**omp-context** 是 [pi-context](https://github.com/ttttmr/pi-context) 的 OMP (oh-my-pi) 适配版。它给 OMP agent 提供主动上下文管理能力，让 agent 能在长任务中自己打锚点、查看会话树、穿越时间线并在目标节点继续。
+`omp-context` 将 `KorenKrita/pi-context` 的 Agentic Context Management 行为移植到 OMP。它提供三个工具：
 
-项目当前暴露三个工具：
+- `acm_checkpoint`：追加可恢复的语义 label。
+- `acm_timeline`：观察 active/checkpoints/search/tree 证据与 context HUD。
+- `acm_travel`：通过七字段 handoff 执行 fold、rebase 或 rehydrate。
 
-| 工具 | 作用 |
-|---|---|
-| `acm_checkpoint` | 给会话历史节点打语义 checkpoint label |
-| `acm_timeline` | 输出 active path / full tree / search 视图和 context HUD |
-| `acm_travel` | 穿越到任意 checkpoint 或节点，创建 summary continuation branch |
+判断语义的唯一正典是 `skills/context-management/CORE.md`、`TOOL-CONTRACTS.md` 与按需加载的 advanced Skill references。`src/generated-guidance.ts` 必须由 `bun scripts/generate-guidance.mjs` 生成，不手改。
 
-## 技术栈
+## 精确宿主契约
 
-- TypeScript ESM (`"type": "module"`, `module: Node16`, `target: ES2022`, `strict: true`)
-- `@oh-my-pi/pi-coding-agent` ExtensionAPI 作为 exact peer dependency，由 OMP 运行时提供
-- `@oh-my-pi/pi-agent-core`（token estimator）和 `@oh-my-pi/pi-ai` 与 coding agent 始终使用同一 exact peer/dev version
-- `package.json` 是当前支持版本的权威来源；repository-local pre-commit hook 会对齐并验证本机 `omp`
-- 工具参数 schema 使用运行时注入的 `pi.zod`
-- Source-first: OMP 直接加载 `src/*.ts`, 不打包 `dist/`
+当前唯一支持的 OMP 版本是 **17.1.4**。根 package、peer dependencies、host fixture 与 lockfile 必须保持精确一致：
 
-## 当前实现
+- `@oh-my-pi/pi-agent-core`
+- `@oh-my-pi/pi-ai`
+- `@oh-my-pi/pi-coding-agent`
+- `@oh-my-pi/pi-tui`
 
-### 扩展入口
+版本升级必须通过 `scripts/precommit-host-contract.mjs` 的隔离 promotion，再更新契约。不要引入 `@earendil-works/*` 或 Pi-only API。
 
-`src/index.ts` 是短 composition root，默认导出 `registerAcmExtension(pi)`，注册 canonical prompt hook、三个工具和 session/agent lifecycle handlers。
+## OMP API 映射
 
-`package.json` 的 `omp` 字段是 OMP 发现入口：
+- Extension 类型：`@oh-my-pi/pi-coding-agent/extensibility/extensions/types`。
+- Session entries/tree：`@oh-my-pi/pi-coding-agent/session/session-entries`。
+- Session manager：`@oh-my-pi/pi-coding-agent/session/session-manager`。
+- Agent messages：`@oh-my-pi/pi-agent-core/types`。
+- TUI：`@oh-my-pi/pi-tui`。
+- Tool schema：只使用宿主注入的 `pi.zod`，顶层 object 必须 `.strict()`。
+- OMP tool renderer 签名是 `renderCall(args, options, theme)` 与 `renderResult(result, options, theme, args?)`；返回普通 `Text`。
+- OMP 没有 Pi 的 `promptSnippet`、`promptGuidelines`、`renderShell` 或 `constrainedSampling`。短 tool cues 经 `before_agent_start.systemPrompt: string[]` 幂等注入。
+- OMP 没有 `agent_settled`。native context replacement 的等价边界是 `session_stop`，且必须通过 `ctx.isIdle()` 与 `ctx.hasPendingMessages()` 防止 queued continuation/retry 竞态。
+- OMP `session_stop` 先于 notification-only `agent_end`，handler 返回 continuation 时宿主排入隐藏下一轮；ACM settlement handler本身不请求 continuation。
+- OMP `session_before_tree` 只能取消或直接提供完整 summary，不能覆盖 summarizer prompt。保留 OMP 原生 tree summarization，不伪造等价能力。
+- `SlashCommandInfo` 的来源路径字段是 `.path`。
+- `BranchSummaryEntry` 的扩展来源字段是 `.fromExtension`。
 
-```json
-{
-  "extensions": ["./src/index.ts"],
-  "skills": ["./skills"]
-}
-```
+## 架构边界
 
-### checkpoint 使用 appendLabelChange
+- `host-bridge.ts` 是 SessionManager mutation 与 context reconstruction 的唯一宿主 seam。
+- `live-agent-session-adapter.ts` 只做 capability-probed native message replacement，不拥有树 mutation。
+- `context-packet.ts` 是 provider continuation authority；必须保持 tool-call/result protocol valid。
+- finalized `acm_travel` receipt 之前不得 provider cutover；matching non-error、`mutationStatus: applied`、structured-v1 receipt 才授权。
+- native AgentSession replacement 与 provider packet delivery是两个独立状态；前者失败不能回滚已经核验的持久 travel。
+- raw archive alias 只用于 restore/rehydrate，不作为 fold/rebase base。
+- 每次 mutation 返回 `applied`、`not_applied` 或 `indeterminate`，未知结果不得降格为成功。
 
-不要用 `pi.setLabel(id, name)` 给会话节点打 label。当前 exact host 的扩展加载路径中，`ConcreteExtensionAPI.setLabel(label: string)` 只修改扩展显示名，不会写 session label；该 seam 每次 commit 都由 real-host fixture 复验。
+## Handoff 与恢复
 
-当前实现通过 `appendCheckpointLabel()`、`applyBranchWithSummary()` 和 `rollbackCheckpointLabel()` 三个 typed mutation ports 访问完整 `SessionManager`。结果明确区分 `not_applied`、`applied` 与 `indeterminate`；返回值畸形时以 mutation 后可观察的 journal/leaf 状态为准，不能仅依赖 host 返回 ID。
+结构化 handoff 固定为 `goal/state/evidence/external/exclusions/recover/next`。`goal`、`state`、`next` 不允许空或 `none`；其余字段无内容时写 `none`。兼容 fallback 只接受能精确解析为该对象的 JSON string。
 
-`acm_checkpoint` 的默认 target 是 active branch 上最近的有意义 **USER/AI 消息**，跳过 tool result、bash/custom/system 消息、无可见文字的 internal-tool-only AI turn、空消息等。显式 `target` 可用任意节点 ID（含 tool result），但会 warning；**auto-resolve 仍只选 USER/AI**。
+Travel 只改变会话树和后续上下文，不触碰文件、进程、Git 或远端系统。发生 live replacement、provider rebuild 或 rollback 不确定性时，保留持久 branch 和 recovery pointer，并用 `ctx.ui.notify()` 提供可执行上下文。
 
-checkpoint / `backupCurrentHeadAs` **名称**在整棵树内必须唯一且**大小写敏感**（`Foo` ≠ `foo`），但**同一节点可挂多个别名**（多次 `acm_checkpoint` 或 `backupCurrentHeadAs` 追加 label journal entry，不覆盖旧名）。omp-context 通过扫描全部 `label` 条目重建别名索引；OMP 原生 `getLabel()` 只反映最新一个。label 重放时若同名指向新 entry，会从旧 entry 的 alias list 移除该名。`acm_timeline` 的 `{ view: "search", query }` 对 label/内容**大小写不敏感**。
+## Context gauge
 
-`{ view: "checkpoints" }` 按**别名**逐条列出（同一 `entryId` 可出现多行），active-path checkpoint 优先按路径顺序排列，off-path 再按时间、entry ID、label 排列；同一节点别名会聚在一起。active/tree 视图显示为 `checkpoint: foo, bar`。
+Gauge 使用模型窗口与 400K 的较小值作为 working budget。非 ACM、非错误 tool result 只在整数压力变化时显示；`ACM_GAUGE_DISABLED=1` 时完全禁用。Provider cutover 后优先使用实际 provider `turn_end` usage，不能让 origin-run native usage 覆盖新 epoch。
 
-`target: "root"` 解析为 **第一个 top-level 节点**；多根会话会 notify，优先用显式 checkpoint 名或节点 ID。
+## 测试契约
 
-`acm_checkpoint` 的成功结果是 progressive placement evidence：文本和 `details` 报告 `status`、checkpoint/label entry ID、resolved role、aliases、automatic/explicit target resolution、跳过的 transient entries 和当前 context usage。结果只附一个由 canonical guidance 生成的 next cue（无 `-done` 后缀状态机）；它不替 agent 选择 fold boundary 或 target，也不再返回 nearest/earliest fold candidates。
+旧 OMP 30/50/70 nudge 测试已被最新 pi-context 行为测试替换。非平凡分支、协议修复、mutation recovery 和生命周期竞态必须有 runnable coverage。
 
-`skills/context-management/CORE.md` 拥有 always-on 判断力与 cadence（道/度）；`skills/context-management/TOOL-CONTRACTS.md` 拥有工具描述、prompt metadata、result cues、tree-summary 文案与 recovery（术）；`SKILL.md` 只负责 advanced branch routing。Generator 从这两份源生成 runtime artifacts；`PROMPT_*` / `TREE_SUMMARY_INSTRUCTIONS` 生成但不接线——OMP `registerTool` 无 Pi 的 promptSnippet/promptGuidelines 字段，且 `session_before_tree` 仅支持 `cancel`/`summary`，不支持 Pi 的 `customInstructions`/`replaceInstructions`。Runtime 只能报告 summary-depth evidence，不能证明 rebase snapshot 的语义完整性。本知识文档只记录实现所有权、生成链路与可观察 host contract，不重复 agent 的决策流程、handoff 模板或 policy。
-
-`acm_travel` 的 `backupCurrentHeadAs` 落在最近有意义的 USER/AI 消息上。`travel-coordinator.ts` 拥有单次 mutation transaction：branch 明确未应用时通过 operation-scoped token 恢复之前的完整 alias 集；branch 已应用或状态不确定时保留 backup，并强制安排 context refresh，避免在未知 branch 上继续旧 provider context。
-
-### timeline 是严格的单视图会话树接口
-
-`acm_timeline` 使用单一 `view` 鉴别器；省略 `view` 等价于 `{ view: "active" }`。旧参数 `list_checkpoints`、`full_tree`、`search` 和竞争布尔组合会被 strict schema 拒绝，不做兼容转换。
-
-- `{ view: "active", limit?, verbose? }`：只展示 active path（LLM 实际看到的 spine）并附带 context HUD；`verbose: true` 显示 ACM 工具调用及 system/custom 元消息。
-- `{ view: "checkpoints", limit?, filter? }`：扫描整棵树上的 checkpoint alias；`filter` 对 label 和 entry ID 做大小写不敏感匹配。
-- `{ view: "search", limit?, query }`：在整棵树（active + off-path）按 label、节点 ID、内容做大小写不敏感搜索；`query` 必填且非空。
-- `{ view: "tree", limit? }`：渲染 `sm.getTree()` 的整棵树，包括 off-path branch、checkpoint label、HEAD 和 `branch_summary` 的 `branchPoint` / `origin` 元数据。
-
-active HUD 包含 context usage、active path 节点数、active summary depth、off-path summary 数、距最近 checkpoint 的 step 数和 ACM Judgment cue。active summary depth 只统计当前 spine 上的 `branch_summary`，不混入 native `compaction`。已有 active summary 时，HUD 使用 canonical rebase-check cue；它仍是 evidence，不是 travel authorization。默认 active 视图不会把 off-path `branch_summary` / `compaction` 插进主序列，而是在分支点以 `[off-path]` 脚注标出，避免假线性叙事。
-
-checkpoint 列表上限 50；大树或 tree 截断时优先改用 `{ view: "checkpoints" }` 或 `{ view: "search", query: "..." }`。checkpoint view 额外显示不计入 alias limit 的 `root` structural candidate，并对 root 与每个 alias 报告 travel 后 projected summary depth；root 是候选证据，不是安全 verdict。搜索先做低成本字段匹配，只有命中时才构造 preview，避免对大型 tool result 反复拼接和 lower-case。
-
-### travel 使用 branchWithSummary + context event
-
-当前 travel 方案由 `travel-tool.ts` 与 `travel-coordinator.ts` 分工：
-
-1. Tool 解析 target、校验七槽 handoff、建立 usage/message evidence，并完成 branch 与 backup prevalidation。
-2. Coordinator append backup label，获得包含 prior aliases 的 operation-scoped rollback token。
-3. Typed branch port 调用 `branchWithSummary(..., true)`，随后验证实际 leaf、entry type、parent 与 summary，而不是信任返回 ID。
-4. 精确观察到期望 summary 时提交 transaction；明确未应用时补偿 backup；mutation 已发生或无法排除时返回 `indeterminate`，保留恢复标签并设置 refresh obligation。
-5. `runtime-lifecycle.ts` 在每次 LLM 调用前通过公开的 compaction-aware `buildSessionContext()` 重建 messages；失败最多重试 3 次，HUD 显示原因与进度。`session_start` / `session_switch` / `session_branch` 重建当前 active branch 的 reminder state；`session_tree` 与 `session_compact` 清空易失状态并开启 baseline-only reminder cycle（手动 `/tree` 绕过 `acm_travel`）；`session_shutdown` 清理易失状态。
-
-travel tool result `details` 保留 resolved target、origin、`summaryEntryId`、backup outcome、`messagesBefore`/`messagesAfter`、`contextRefreshPending` 等结构标识，并报告 raw `tokenDelta`、`percentagePointDelta`、`structuralMessageDelta`、factual `structuralMessageDirection`、`activeSummaryDepthBefore` / `After` / `Delta`、`targetSummaryDepth` 与 `targetIsStructuralRoot`。Root rebase 会替换旧 active handoff layers，但 travel 本身追加一个新 handoff，因此结果 depth 通常是 target depth + 1，而不是 0；runtime 只解释这个结构事实，不把一次 travel 认证为 safe rebase。**无** legacy `summaryEntry` 别名字段。
-
-travel 改的是 OMP 会话历史树和发给模型的上下文，不会回滚磁盘文件、进程、浏览器状态、远端服务或任何外部副作用。
-
-travel 不保证降 token，也不再给出基于 500-token/2-percent 阈值的 `estimatedEffect` / `structuralEffect` 语义 verdict。tool result 直接报告 `usageBefore`、同步估算的 `estimatedUsageAfter`、token delta、percentage-point delta、message counts 与精确 message-count direction；不可用 usage 用 `null` / `unknown`，不能归类为 no saving。官方 `usageAfter` 仍为 `pending_next_context_event`，下一步 `acm_timeline` HUD 可确认。
-
-### Live AgentSession 同步依赖 capability-probed host seam
-
-当前 OMP host 的普通 tool context 仍不暴露原子的 tree-navigation/state-sync API。`live-agent-session-adapter.ts` 不读取、不比较也不显示宿主版本；它通过幂等包装可用的 `AgentSession.getContextUsage()`，按 SessionManager 对象 identity 捕获对应 live AgentSession，并探测 `agent.replaceMessages()` 与可观察的 `agent.state.messages`。匹配的 `acm_travel` `tool_execution_end` 才从当前 active leaf 重建消息并替换 live state。关联和完整 pending ticket 使用 WeakMap/WeakRef；禁止全局 current-session、路径匹配或通用私有访问框架。
-
-只有明确 `applied` 的 branch mutation 可以 schedule live sync。能力/shape 不支持、association 缺失或 replacement 失败时，不回滚已成功的 travel；持久 branch 与公开 `context` rebuild 继续生效，diagnostics 给出 `unavailable` / `failed` / `skipped` 与 reload guidance。`replaceMessages()` 后按消息引用顺序验证实际状态，允许宿主浅拷贝数组，但拒绝忽略或改写消息序列。成功同步后，native stored-context accounting 不再携带 pre-travel messages，因此不会立即触发 stale auto-compaction；真实 OMP compaction 仍完全由 host 拥有。
-
-该 adapter 的主要风险是 OMP lifecycle seam 在未来版本变化。每次 commit 前的 host contract gate 仍用本机 exact OMP release 在 cold candidate copy 中验证捕获时机、`agent.replaceMessages()`、tool execution ordering、重复 travel、resume 和 multi-session isolation；exact dependency version 是当前验证目标，不是运行时可用性开关。若 OMP 暴露官方 refresh/navigation API，应删除该 adapter 并迁移到官方接口。
-
-### Context usage reminder 使用 OMP-native 两条交付路径
-
-`context` handler 读取 `ctx.getContextUsage()` 的 active tokens、hard context window 与 hard usage。Reminder 档位按 `workingBudgetTokens = min(contextWindow, 400_000)`、`pressurePercent = tokens / workingBudgetTokens * 100` 分类：400K 及以下使用实际窗口，超过 400K 使用 400K cap。`usagePercent` 始终表示 hard-window usage；message details、baseline state 与 timeline dashboard 分别暴露 `pressurePercent`、`workingBudgetTokens` 和 `policy`。每个 context cycle 只在首次达到 30%、50%、70% 时安排 reminder；一次跨过多档只保留最高新档位，普通 usage 回落不会 rearm。`tool_result` 将 pending reminder 作为 `display: false` 的 `steer` 发送，因此有工具调用的 main agent 与 subagent 都能在当前 loop 收到。
-
-主会话没有 tool-result 交付点时，`session_stop` 只记录“正常终止可交付”状态并始终返回 `undefined`，不创建 continuation、不短路其他 stop hooks，也不丢失其他扩展的 metadata。随后对应的 `agent_end` 使用 `sendMessage(..., { deliverAs: "nextTurn", triggerTurn: true })` 安排隐藏 continuation。OMP 不向 subagent 发 `session_stop`，所以 subagent 只保证 tool-result path。
-
-成功 `acm_travel`、`session_compact` 与手动 `session_tree` 都把 reminder cycle 重置为 `baselinePending`。第一条真实 post-transition `turn_end` 用 assistant prompt usage 建立基线，并通过 `pi.appendEntry("acm:context-usage-state", ...)` 持久化但不进入 LLM context；后续隐藏 `acm:context-usage-reminder` custom message 记录已交付档位。`session_start`、`session_switch`、`session_branch` 扫描 active branch 上最近任意 `branch_summary` / native `compaction` 之后的两类 entry，恢复 baseline 与最高已交付档位。
-
-### 没有 /acm command
-
-当前代码没有 `/acm` command，也不调用 command-only 的 `navigateTree()`。不注册 `session_before_tree` handoff 注入——OMP 的 `SessionBeforeTreeResult` 只有 `cancel`/`summary`。`session_stop` 不是 ACM continuation hook；它只为无工具的 reminder fallback 标记一次 terminal eligibility。
-
-## 关键设计决策
-
-### Typed guarded mutation ports
-
-`ctx.sessionManager` 的公开 read methods 直接作为 `SessionStructuralView` 使用。只有 OMP 未公开给 tool context 的 mutation capability 被隔离在 `src/host-bridge.ts`：
-
-- `appendLabelChange`
-- `branchWithSummary`
-
-每个 port 都在调用前检查 capability，在调用后观察 journal/leaf，并返回穷尽 mutation state。Host Bridge 不保存跨操作的全局 rollback registry；rollback ownership 只存在于一次 travel transaction 的 token 中。消息重建使用公开的 `buildSessionContext()`。
-
-### BranchSummaryEntry.fromId 是 branch point，不是 origin
-
-OMP 的 `fromId` 字段表示 branch point（travel target），不是旧 HEAD。timeline 渲染使用 `branchPoint` / `origin`（来自 `details`），不要把 `fromId` 显示成 `from`。
-
-### zod schema 使用 TSchema cast
-
-`registerTool<TParams extends TSchema>` 的类型约束不直接接受 `pi.zod.object(...)` 生成的 schema。当前代码使用：
-
-```ts
-parameters: schema as unknown as TSchema
-```
-
-运行时 schema 仍来自 `pi.zod`，不要改成独立导入的 zod 实例。`acm_timeline` 为兼容 OMP 的 root-object registration 保持单对象 schema，并用 `superRefine` 恢复 view-specific required/forbidden field contract；不要退回 root discriminated union，也不要只依赖 execute-time 检查。
-
-### 类型导入用子路径
-
-Node16 moduleResolution 下需要从 OMP 子路径导入类型：
-
-- `@oh-my-pi/pi-coding-agent/extensibility/extensions/types`
-- `@oh-my-pi/pi-coding-agent/session/session-manager`
-- `@oh-my-pi/pi-coding-agent/session/session-entries`
-- `@oh-my-pi/pi-ai/types`
-
-### 工具命名使用 acm_ 前缀
-
-三个工具名固定为 `acm_checkpoint`、`acm_timeline`、`acm_travel`。
-
-## 结构
-
-| 路径 | 作用 |
-|---|---|
-| `src/index.ts` | 短 composition root；组装 prompt、三个工具和 lifecycle |
-| `src/checkpoint-tool.ts` / `src/timeline-tool.ts` / `src/travel-tool.ts` | behavior-owned tool modules |
-| `src/travel-coordinator.ts` | travel transaction、compensation 与 refresh obligation |
-| `src/host-bridge.ts` | typed guarded mutation ports，不保存跨操作状态 |
-| `src/runtime.ts` / `src/runtime-lifecycle.ts` / `src/context-usage-nudge.ts` | session-scoped refresh、live sync、30/50/70 reminder、transition baseline、reload restore、usage、compaction 与 context rebuild |
-| `src/live-agent-session-adapter.ts` | capability-probed live AgentSession 捕获与 message replacement seam |
-| `src/entry-resolution.ts` / `src/message-sanitizer.ts` | meaningful entry resolution 与 orphan tool sanitation |
-| `src/label-journal.ts` / `src/lib.ts` | dependency-free alias replay 与纯领域逻辑 |
-| `src/generated-guidance.ts` | 从 canonical CORE / advanced guidance 派生的工具描述、正常 cue 与异常恢复片段 |
-| `skills/context-management/CORE.md` | always-on 道/度：compression-as-intelligence、moves、cadence、handoff example |
-| `skills/context-management/TOOL-CONTRACTS.md` | 术：tool descriptions、cues、recovery、tree-summary 文案 |
-| `skills/context-management/SKILL.md` | model-invoked advanced-only router |
-| `skills/context-management/references/target-selection.md` | 非显然 earliest-safe-base、interleaved fronts、missing anchor、raw node fallback、名称冲突 |
-| `skills/context-management/references/archive-recovery.md` | archive detail recovery round trip 与 archive-drift 防护 |
-| `skills/context-management/references/exceptional-recovery.md` | travel/rollback/refresh/restored-history/no-saving 异常恢复 |
-| `test/host-fixture/` | exact OMP host 的真实 SessionManager/runtime contract fixtures |
-| `scripts/generate-guidance.mjs` | 从 CORE + TOOL-CONTRACTS 生成运行时 artifacts |
-| `scripts/precommit-host-contract.mjs` / `scripts/host-version.mjs` | 本机 OMP detection、cold candidate validation 与 exact-version promotion |
-| `.githooks/pre-commit` | 每次 commit 前执行 host contract gate |
-| `README.md` | 面向用户的产品说明 |
-| `.omp-plugin/marketplace.json` | marketplace 元数据 |
-
-## Host compatibility 与提交门禁
-
-仓库使用 `.githooks/pre-commit`，通过 `bun scripts/install-git-hooks.mjs` 设置 repository-local `core.hooksPath`。`bun install` 的 `prepare` 会自动完成安装；禁止修改 global Git config。
-
-每次 commit 都执行 `scripts/precommit-host-contract.mjs`：
-
-1. 从 `PATH` 上的 `omp` executable 定位本机 `@oh-my-pi/pi-coding-agent` package root。
-2. 验证本机 coding-agent、agent-core 与 pi-ai 版本完全一致。
-3. 若本机版本等于仓库 exact version，直接运行 typecheck、real-host fixture 和 version contract。
-4. 若版本不同，先复制当前 working tree 到隔离的 **cold candidate**，只在 candidate 中更新 package/fixture dependency versions，安装对应 release 并跑完整 host contract。
-5. Candidate 失败则阻止 commit 且不修改仓库；candidate 成功时，只有四个 promotion targets 均无现有改动才会更新真实仓库的 exact dependency fields 和两份 lock。任何目标已有 staged/unstaged/untracked work 都会 fail closed，避免覆盖用户内容。
-6. 真实仓库 promotion 后若 install/verification 意外失败，脚本恢复四个 tracked targets 并尝试按旧 lock reconcile dependencies；整个 gate 有 15 分钟总 deadline。
-7. 成功 promotion 仍会阻止本次 commit，要求人工 review/stage 后重新提交。
-
-手动命令：
+完整验证：
 
 ```bash
-bun run host:check-local    # 只验证；版本不一致时不写仓库
-bun run host:promote-local  # 验证成功后更新 exact version fields 与 locks
+bun run verify:acm
 ```
 
-版本提升不得跳过 cold candidate。检查覆盖 extension registration、SessionManager mutation ports、session-context construction、token estimation、compaction lifecycle、live AgentSession capture/replacement、重复 travel、resume 和 multi-session isolation。Host contract 成功只证明已覆盖 seam 未失效，不代表未使用的 OMP surface 全部兼容。
+该 gate 必须依次覆盖：
 
-## 开发注意事项
+1. generated guidance 与 exact host version 契约；
+2. 根测试套件；
+3. production TypeScript typecheck；
+4. `test/host-fixture` 在真实 OMP 17.1.4 上的 source build 与 host tests。
 
-- 改工具实现时直接读对应的 `*-tool.ts`；改 mutation/compensation 读 `travel-coordinator.ts` 与 `host-bridge.ts`；`src/index.ts` 只负责组合。
-- 不要在代码中用 `console.log`；需要日志时优先使用 OMP 提供的 logger 能力。
-- 不要把 travel 解释成文件系统回滚。它只影响会话上下文。
-- 先运行对应 focused test；canonical 非写入式总 gate 使用 `bun run verify:acm`，类型检查使用 `bun run typecheck`。
+Host fixture 至少覆盖 strict schema、CORE/tool-cue prompt 注入、OMP Skills prompt、automatic checkpoint anchor、current/target protocol validation、finalized receipt ordering、provider cutover、idle `session_stop` native replacement、replacement failure recovery、cache fallback/exhaustion、repeat travel、off-path restore、resume 与 SessionManager 隔离。
 
-## Agent skills
+## 文档与实现决策
 
-### Issue tracker
+宿主差异、无法等价映射的能力和选择理由写入 `implementation-notes.html`，标记 `agent-resolved` 或 `user-decided`。不要把 Pi 的宿主细节写成 OMP 当前事实。
 
-Issues are tracked as local Markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-The canonical triage labels are `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-This repository uses a single-context domain documentation layout. See `docs/agents/domain.md`.
+不使用 `console.log`；用户可见 warning 使用 `ctx.ui.notify()`。

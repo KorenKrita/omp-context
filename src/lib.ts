@@ -1,8 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction/compaction";
-import { countTokens } from "@oh-my-pi/pi-agent-core/tokenizer";
 import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import type { TextContent, ToolCall } from "@oh-my-pi/pi-ai/types";
+import type { TextContent, ToolCall, ThinkingContent } from "@oh-my-pi/pi-ai/types";
 import { buildLabelMaps, type LabelMaps } from "./label-journal.js";
 export { buildLabelMaps, type LabelMaps } from "./label-journal.js";
 
@@ -10,77 +9,27 @@ export const ACM_INTERNAL_TOOLS = new Set(["acm_checkpoint", "acm_timeline", "ac
 
 /** `root` is a structural target keyword and cannot safely be used as an alias. */
 export function isReservedTargetName(name: string): boolean {
-  return name.toLowerCase() === "root";
+ return name.toLowerCase() === "root";
 }
 
 /** Neutralize terminal control characters in dynamic TUI text while preserving tabs and line breaks. */
-export function sanitizeTerminalText(value: string | undefined | null): string {
-  if (value === undefined || value === null) return "";
-  return value
-    .replace(/\r\n?/g, "\n")
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, "");
+export function sanitizeTerminalText(value: string): string {
+ return value
+  .replace(/\r\n?/g, "\n")
+  .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, "");
 }
 
 /** Fixed token overhead for a branch_summary entry in travel usage estimates. */
 const BRANCH_SUMMARY_ENTRY_OVERHEAD_TOKENS = 100;
 
-export const HANDOFF_SLOT_HINT = "Goal/State/Evidence/External/Exclusions/Recover/NEXT";
-
-export const HANDOFF_SLOTS = ["Goal", "State", "Evidence", "External", "Exclusions", "Recover", "NEXT"] as const;
-
-export type HandoffSlot = typeof HANDOFF_SLOTS[number];
-
-export type HandoffValidationResult =
- | { ok: true }
- | {
-   ok: false;
-   missing: HandoffSlot[];
-   empty: HandoffSlot[];
-   duplicate: HandoffSlot[];
-   outOfOrder: boolean;
-  };
-
-/** Validate only the observable seven-slot handoff shape, never semantic sufficiency. */
-export function validateHandoffStructure(summary: string): HandoffValidationResult {
- const occurrences: Record<HandoffSlot, Array<{ index: number; value: string }>> = {
-  Goal: [],
-  State: [],
-  Evidence: [],
-  External: [],
-  Exclusions: [],
-  Recover: [],
-  NEXT: [],
- };
-
- const lines = summary.split(/\r?\n/);
- for (const [index, line] of lines.entries()) {
-  for (const slot of HANDOFF_SLOTS) {
-   const prefix = `${slot}:`;
-   if (!line.startsWith(prefix)) continue;
-   occurrences[slot].push({ index, value: line.slice(prefix.length).trim() });
-  }
- }
-
- const missing = HANDOFF_SLOTS.filter((slot) => occurrences[slot].length === 0);
- const empty = HANDOFF_SLOTS.filter((slot) => occurrences[slot].some(({ value }) => value.length === 0));
- const duplicate = HANDOFF_SLOTS.filter((slot) => occurrences[slot].length > 1);
- const firstIndexes = HANDOFF_SLOTS
-  .map((slot) => occurrences[slot][0]?.index)
-  .filter((index): index is number => index !== undefined);
- const outOfOrder = firstIndexes.some((index, position) => position > 0 && index <= firstIndexes[position - 1]!);
-
- if (missing.length === 0 && empty.length === 0 && duplicate.length === 0 && !outOfOrder) return { ok: true };
- return { ok: false, missing, empty, duplicate, outOfOrder };
-}
-
-export const BOUNDARY_SELECTION_GUIDANCE = "Choose a target by what it precedes, not by proximity or name. A candidate is correct only when it sits immediately before the material being folded — anchor gravity misleads.";
-
-export function formatBoundaryTravelCue(nearestCheckpointName: string | null): string {
+export function formatBoundaryTravelCue(nearestCheckpointName: string | null, advancedPointer?: string): string {
  if (nearestCheckpointName === null) {
   return "no save point is on this path. If risk or a fold lies ahead, save first; the last clean pre-fold node ID is also a valid travel target";
  }
- return `nearest save point is '${nearestCheckpointName}' — a candidate, not the default. Choose the last clean node before the material being folded; anchor gravity misleads. Load Advanced Target Selection only if the target stays ambiguous`;
+ return `nearest save point is '${nearestCheckpointName}' — a candidate, not the default. Choose the last clean node before the material being folded, not whichever label is nearest.${advancedPointer ? ` ${advancedPointer}` : ""}`;
 }
+
+type AssistantContentPart = TextContent | ThinkingContent | ToolCall | { type: string; [key: string]: unknown };
 
 export type StructuralMessageDirection = "decreased" | "increased" | "equal" | "unknown";
 
@@ -143,9 +92,13 @@ export class ContextRefreshRegistry {
   return this.failures.get(sm);
  }
 
- /** Record a failed refresh attempt. Returns true if another retry is allowed. */
+ /**
+  * Record a failed refresh attempt. Every refresh cycle has the same bounded
+  * budget; a valid cached packet may remain deliverable after exhaustion, but
+  * persistence reads are not retried again until a new lifecycle cycle.
+  */
  recordFailedAttempt(sm: object, message: string): boolean {
-  const next = (this.attempts.get(sm) ?? 0) + 1;
+  const next = Math.min((this.attempts.get(sm) ?? 0) + 1, ContextRefreshRegistry.MAX_ATTEMPTS);
   this.attempts.set(sm, next);
   this.setFailure(sm, message);
   if (next >= ContextRefreshRegistry.MAX_ATTEMPTS) {
@@ -197,7 +150,7 @@ export function isValidEntryId(id: string): boolean {
 
 /** Push tree children left-to-right so stack.pop() visits in document order. */
 export function pushTreeChildrenPreOrder(stack: SessionTreeNode[], children: SessionTreeNode[]): void {
- for (let i = children.length - 1; i >= 0; i--) stack.push(children[i]);
+ for (let i = children.length - 1; i >= 0; i--) stack.push(children[i]!);
 }
 
 export function extractTextFromContent(content: unknown): string {
@@ -266,18 +219,18 @@ export interface SessionStructuralView {
 }
 
 export function resolveTargetId(
-  view: SessionStructuralView,
-  tree: SessionTreeNode[],
-  target: string,
-  branchIds?: Set<string>,
-  labelMaps?: LabelMaps,
+ view: SessionStructuralView,
+ tree: SessionTreeNode[],
+ target: string,
+ branchIds?: Set<string>,
+ labelMaps?: LabelMaps,
 ): ResolvedTarget {
-  const ids = branchIds ?? new Set(view.getBranch().map((e: SessionEntry) => e.id));
-  if (target.toLowerCase() === "root") {
-    const id = tree[0]?.entry.id ?? "";
-    return { id, fromOffPath: id.length > 0 && !ids.has(id) };
-  }
-  const maps = labelMaps ?? buildLabelMaps(view.getEntries());
+ const ids = branchIds ?? new Set(view.getBranch().map((e: SessionEntry) => e.id));
+ if (target.toLowerCase() === "root") {
+  const id = tree[0]?.entry.id ?? "";
+  return { id, fromOffPath: id.length > 0 && !ids.has(id) };
+ }
+ const maps = labelMaps ?? buildLabelMaps(view.getEntries());
 
  const owner = findCheckpointLabelOwner(maps, target, ids);
  if (owner) {
@@ -369,7 +322,9 @@ export function estimateUsageAtTravelTarget(
  targetMessages: AgentMessage[],
  summaryText: string,
 ): UsageLike | undefined {
- const summaryTokens = summaryText.length > 0 ? countTokens(summaryText) : 0;
+ const summaryTokens = summaryText.length > 0
+  ? estimateTokens({ role: "user", content: summaryText, timestamp: 0 })
+  : 0;
  return estimateUsageAfterMessageChange(
   usageBefore,
   currentMessages,
@@ -387,13 +342,14 @@ export function getMeaningfulSkipReason(entry: SessionEntry): MeaningfulSkipReas
  if ((msg.role as string) === "system") return "system_message";
  if (msg.role === "assistant") {
   if (Array.isArray(msg.content)) {
-   // Avoid pinning callbacks to a host-specific content union (OMP 16 vs 17 differ).
-   const parts = msg.content as ReadonlyArray<{ type: string }>;
-   const toolCalls = parts.filter((c): c is ToolCall => c.type === "toolCall");
-   const hasVisibleText = parts.some(
-    (c) => c.type === "text" &&
-     typeof (c as TextContent).text === "string" &&
-     (c as TextContent).text.trim().length > 0,
+   const content = msg.content as unknown as readonly AssistantContentPart[];
+   const toolCalls = content.filter(
+    (part): part is ToolCall => part.type === "toolCall",
+   );
+   const hasVisibleText = content.some(
+    (part) => part.type === "text" &&
+     typeof (part as TextContent).text === "string" &&
+     (part as TextContent).text.trim().length > 0,
    );
    const onlyInternalTools = toolCalls.length > 0 &&
     toolCalls.every((tc: ToolCall) => ACM_INTERNAL_TOOLS.has(tc.name));
@@ -431,15 +387,16 @@ export function findLastMeaningfulEntry(
   if (signal?.aborted) {
    return { entryId: null, skipped, aborted: true };
   }
-  const entry = branch[i];
+  const entry = branch[i]!;
   const skipReason = isSkipped(entry);
+  const role = getRole(entry);
   if (skipReason) {
-   skipped.push({ id: entry.id, reason: skipReason, role: getRole(entry) });
+   skipped.push({ id: entry.id, reason: skipReason, ...(role === undefined ? {} : { role }) });
    continue;
   }
   return {
    entryId: entry.id,
-   role: getRole(entry),
+   ...(role === undefined ? {} : { role }),
    snippet: getSnippet(entry),
    skipped,
   };

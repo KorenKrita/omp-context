@@ -3,12 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "verify": "bun install --frozen-lockfile && bun ./build-source.mjs && bun test ./version.test.ts ./session-manager.test.ts ./host-bridge.test.ts ./agent-session-adapter.test.ts ./travel-live-sync.test.ts ./travel.test.ts ./context-rebuild.test.ts ./compaction-lifecycle.test.ts"
+    "verify": "bun install --frozen-lockfile && bun ./build-source.mjs && bun test ./version.test.ts ./prompt-injection-host.test.ts ./skills-system-prompt-host.test.ts ./tree-navigation-host.test.ts ./tool-protocol.test.ts ./agent-session-adapter.test.ts ./travel-deferred-refresh.test.ts ./deferred-refresh-failure-recovery.test.ts ./deferred-refresh-repeat-resume.test.ts ./deferred-refresh-isolation.test.ts ./deferred-refresh-host.test.ts"
   },
   "dependencies": {
-    "@oh-my-pi/pi-agent-core": "17.0.1",
-    "@oh-my-pi/pi-ai": "17.0.1",
-    "@oh-my-pi/pi-coding-agent": "17.0.1",
-    "zod": "4.4.3"
+    "@oh-my-pi/pi-agent-core": "17.1.4",
+    "@oh-my-pi/pi-ai": "17.1.4",
+    "@oh-my-pi/pi-coding-agent": "17.1.4",
+    "@oh-my-pi/pi-tui": "17.1.4"
   }
 }
