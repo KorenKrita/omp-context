@@ -316,6 +316,8 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
     description: TOOL_DESCRIPTIONS.timeline,
     parameters: schema,
     strict: true,
+    loadMode: "essential",
+    approval: "read",
     renderCall(rawArgs: Static<typeof schema>, _options: any, theme: any) {
       const args = rawArgs as Static<typeof schema>;
       const view = args.view ?? "active";

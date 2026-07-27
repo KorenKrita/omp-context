@@ -39,7 +39,12 @@
         <tr>
           <td>agent-resolved</td>
           <td>Use injected <code>pi.zod</code> strict schemas and OMP renderer signatures; inject Pi-only tool prompt metadata into <code>before_agent_start.systemPrompt</code>.</td>
-          <td>OMP has no <code>promptSnippet</code>, <code>promptGuidelines</code>, <code>renderShell</code>, or <code>constrainedSampling</code>. A separate idempotent system-prompt segment preserves the cues, while strict Zod validation and normal <code>Text</code> renderers use supported APIs.</td>
+          <td>OMP has no Pi-style <code>promptSnippet</code>, <code>promptGuidelines</code>, <code>renderShell</code>, or <code>constrainedSampling</code>. A separate idempotent system-prompt segment preserves the cues. Schemas are built from injected <code>pi.zod</code>; OMP-native <code>strict: true</code> carries them to capable providers.</td>
+        </tr>
+        <tr>
+          <td>user-decided</td>
+          <td>Use OMP-native top-level, approval, and scheduling contracts for all ACM tools.</td>
+          <td>All three tools declare <code>loadMode: "essential"</code> so the default <code>tools.xdev: true</code> cannot hide them behind the outer <code>write</code> schema; this makes their <code>strict: true</code> schemas provider-visible at a measured recurring cost of about 6.7K schema-and-description characters per request. <code>acm_timeline</code> is approval tier <code>read</code>; checkpoint and travel are <code>write</code>. Travel uses OMP's effective <code>concurrency: "exclusive"</code> contract instead of the ignored Pi-only <code>executionMode: "sequential"</code>. Exact-host adapter tests lock strictness, top-level xdev exclusion, approval tiers, and exclusive scheduling after wrapping.</td>
         </tr>
         <tr>
           <td>agent-resolved</td>

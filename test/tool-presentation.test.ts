@@ -11,7 +11,9 @@ interface CapturedTool {
   strict?: boolean;
   promptSnippet?: string;
   promptGuidelines?: string[];
-  executionMode?: "sequential" | "parallel";
+  loadMode?: "essential" | "discoverable";
+  approval?: "read" | "write" | "exec";
+  concurrency?: "shared" | "exclusive";
   renderShell?: "default" | "self";
   renderCall?: (args: unknown, theme: Theme, context: unknown) => Component;
   renderResult?: (result: unknown, options: unknown, theme: Theme, context: unknown) => Component;
@@ -79,8 +81,18 @@ describe("ACM tool OMP metadata", () => {
     expect(tool.strict).toBe(true);
   });
 
-  test("acm_travel forces the containing tool batch to execute sequentially", () => {
-    expect(travel.executionMode).toBe("sequential");
+  test.each([checkpoint, timeline, travel])("$name stays top-level so its strict schema reaches the provider", (tool: CapturedTool) => {
+    expect(tool.loadMode).toBe("essential");
+  });
+
+  test("ACM tools declare accurate approval tiers", () => {
+    expect(checkpoint.approval).toBe("write");
+    expect(timeline.approval).toBe("read");
+    expect(travel.approval).toBe("write");
+  });
+
+  test("acm_travel uses OMP's exclusive scheduler contract", () => {
+    expect(travel.concurrency).toBe("exclusive");
   });
 
   test.each([checkpoint, timeline, travel])("$name registers both OMP renderer slots", (tool: CapturedTool) => {
