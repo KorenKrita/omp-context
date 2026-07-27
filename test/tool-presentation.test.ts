@@ -91,8 +91,9 @@ describe("ACM tool OMP metadata", () => {
     expect(travel.approval).toBe("write");
   });
 
-  test("acm_travel uses OMP's exclusive scheduler contract", () => {
+  test("session-tree mutating tools use OMP's exclusive scheduler contract", () => {
     expect(travel.concurrency).toBe("exclusive");
+    expect(checkpoint.concurrency).toBe("exclusive");
   });
 
   test.each([checkpoint, timeline, travel])("$name registers both OMP renderer slots", (tool: CapturedTool) => {

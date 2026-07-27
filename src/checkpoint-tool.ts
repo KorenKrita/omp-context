@@ -64,6 +64,9 @@ export function registerCheckpointTool(pi: ExtensionAPI): void {
     strict: true,
     loadMode: "essential",
     approval: "write",
+    // Label journal appends mutate the session tree; OMP's default "shared"
+    // would let a sibling tool interleave with that mutation.
+    concurrency: "exclusive",
     renderCall(rawArgs: Static<typeof schema>, _options: any, theme: any) {
       const args = rawArgs as Static<typeof schema>;
       const target = sanitizeTerminalText(args.target ?? "latest protocol-complete pre-call leaf");

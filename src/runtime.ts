@@ -99,6 +99,7 @@ export class AcmSessionRuntime {
   readonly contextRefresh = new ContextRefreshRegistry();
   readonly liveAgentSessions: LiveAgentSessionAdapter;
   private readonly cachedUsage = new WeakMap<object, UsageLike>();
+  private readonly cachedUsageModels = new WeakMap<object, string>();
   private readonly refreshTargets = new WeakMap<object, string>();
   /**
    * A successful travel changes the persisted tree while its originating agent
@@ -384,12 +385,34 @@ export class AcmSessionRuntime {
       ?? this.liveAgentSessions.getStatus(session);
   }
 
-  setUsage(session: object, usage: UsageLike): void {
+  setUsage(session: object, usage: UsageLike, modelIdentity?: string): void {
     this.cachedUsage.set(session, usage);
+    if (modelIdentity === undefined) this.cachedUsageModels.delete(session);
+    else this.cachedUsageModels.set(session, modelIdentity);
   }
 
   getUsage(session: object): UsageLike | undefined {
     return this.cachedUsage.get(session);
+  }
+
+  /**
+   * Drop cached provider usage recorded on a different model. The new model's
+   * window makes the old prompt size meaningless, so the gauge falls back to
+   * the host's current usage and the provider HUD returns to pending until the
+   * new model completes a turn. Returns true when state was invalidated.
+   */
+  syncUsageModel(session: object, modelIdentity: string | undefined): boolean {
+    if (modelIdentity === undefined) return false;
+    const recorded = this.cachedUsageModels.get(session);
+    if (recorded === undefined || recorded === modelIdentity) return false;
+    this.cachedUsage.delete(session);
+    this.cachedUsageModels.delete(session);
+    this.gaugeStates.delete(session);
+    const deferred = this.deferredTravelRefresh.get(session);
+    if (deferred?.providerUsageObserved) {
+      this.deferredTravelRefresh.set(session, { ...deferred, providerUsageObserved: false });
+    }
+    return true;
   }
 
   resetGaugeCycle(session: object): void {
@@ -403,6 +426,7 @@ export class AcmSessionRuntime {
     this.refreshTargets.delete(session);
     this.deferredTravelRefresh.delete(session);
     this.cachedUsage.delete(session);
+    this.cachedUsageModels.delete(session);
     this.gaugeStates.delete(session);
     this.liveAgentSessions.clear(session);
   }

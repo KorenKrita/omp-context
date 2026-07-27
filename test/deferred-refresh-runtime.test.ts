@@ -104,11 +104,13 @@ function createLifecycleFixture(
   runtime: AcmSessionRuntime,
   sessionManager: object,
   contextUsage?: { tokens: number; contextWindow: number; percent: number },
+  initialModel: { provider: string; id: string } | undefined = { provider: "test", id: "model-a" },
 ) {
   const handlers = new Map<string, Handler[]>();
   const notifications: string[] = [];
   const appendedEntries: Array<{ customType: string; data: unknown }> = [];
   let idle: boolean | "throw" = true;
+  let model = initialModel;
   const pi = {
     on(name: string, handler: Handler) {
       const current = handlers.get(name) ?? [];
@@ -125,6 +127,7 @@ function createLifecycleFixture(
     sessionManager,
     getContextUsage: () => contextUsage,
     hasPendingMessages: () => false,
+    models: { current: () => model },
     isIdle() {
       if (idle === "throw") throw new Error("idle state unavailable");
       return idle;
@@ -135,6 +138,7 @@ function createLifecycleFixture(
     appendedEntries,
     notifications,
     setIdle(value: boolean | "throw") { idle = value; },
+    setModel(value: { provider: string; id: string } | undefined) { model = value; },
     async emit(event: string, data: object = {}) {
       let result: unknown;
       for (const handler of handlers.get(event) ?? []) result = await handler({ type: event, ...data }, context);
@@ -702,6 +706,96 @@ describe("deferred post-travel context delivery", () => {
 
     expect(runtime.contextRefresh.isPending(session)).toBe(false);
     expect(runtime.getContextDeliveryPhase(session)).toBe("fallback");
+  });
+
+  test("anchors the pre-compaction checkpoint after a completed regular tool batch", async () => {
+    const adapter = createAdapter();
+    const runtime = new AcmSessionRuntime(adapter);
+    const user = persistedUserEntry("pre-compact-user", "read the file");
+    const assistant = {
+      id: "pre-compact-assistant",
+      type: "message",
+      parentId: user.id,
+      timestamp: "2026-07-21T00:00:01.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "file.txt" } }],
+        stopReason: "toolUse",
+        timestamp: 1,
+      },
+    } as SessionEntry;
+    const toolResult = {
+      id: "pre-compact-result",
+      type: "message",
+      parentId: assistant.id,
+      timestamp: "2026-07-21T00:00:02.000Z",
+      message: {
+        role: "toolResult",
+        toolCallId: "read-1",
+        toolName: "read",
+        content: [{ type: "text", text: "important completed evidence" }],
+        timestamp: 2,
+      },
+    } as SessionEntry;
+    const entries: SessionEntry[] = [user, assistant, toolResult];
+    let checkpointTarget: string | undefined;
+    const session = {
+      getLeafId: () => entries.at(-1)?.id ?? null,
+      getEntries: () => entries,
+      getBranch: () => entries,
+      getEntry: (id: string) => entries.find((entry) => entry.id === id),
+      appendLabelChange(targetId: string, label: string | undefined) {
+        checkpointTarget = targetId;
+        entries.push({
+          id: "pre-compact-label",
+          type: "label",
+          parentId: toolResult.id,
+          timestamp: "2026-07-21T00:00:03.000Z",
+          targetId,
+          label,
+        } as SessionEntry);
+        return "pre-compact-label";
+      },
+    };
+    const fixture = createLifecycleFixture(runtime, session);
+
+    await fixture.emit("session_before_compact", {});
+
+    expect(checkpointTarget).toBe(toolResult.id);
+  });
+
+  test("invalidates provider usage and resets the gauge when the session model changes", async () => {
+    const adapter = createAdapter();
+    const runtime = new AcmSessionRuntime(adapter);
+    const session = createSession("model-change-leaf");
+    const fixture = createLifecycleFixture(runtime, session, {
+      tokens: 90_000,
+      contextWindow: 100_000,
+      percent: 90,
+    });
+    runtime.deferPostTravelRefresh(session, "model-change-travel", "model-change-leaf");
+    runtime.markProviderCutoverReady(session, "model-change-travel");
+    runtime.activateProviderPacket(
+      session,
+      [{ role: "user", content: "compact provider packet", timestamp: 1 }],
+      "model-change-leaf",
+    );
+    await fixture.emit("turn_end", {
+      message: { role: "assistant", usage: { input: 300_000, cacheRead: 0, cacheWrite: 0 } },
+    });
+    expect(runtime.getUsage(session)).toBeDefined();
+    expect(runtime.getProviderDeliveryStatus(session).usageObserved).toBe(true);
+
+    fixture.setModel({ provider: "test", id: "model-b" });
+    const patch = await fixture.emit("tool_result", {
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text", text: "done" }],
+    }) as { content: Array<{ type: "text"; text: string }> };
+
+    expect(runtime.getUsage(session)).toBeUndefined();
+    expect(runtime.getProviderDeliveryStatus(session).usageObserved).toBe(false);
+    expect(patch.content[0]?.text).toContain("[ctx 90% window]");
   });
 
   test("multiple successful travels retain only the latest ticket until settlement", () => {

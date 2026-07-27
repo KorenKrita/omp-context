@@ -9,7 +9,6 @@ import { analyzeToolProtocol, formatToolProtocolDefects } from "./tool-protocol.
 import { calculateContextUsagePressure } from "./context-pressure.js";
 import { buildLabelMaps, ContextRefreshRegistry } from "./lib.js";
 import { GUIDANCE_CUES, RECOVERY_GUIDANCE, TREE_SUMMARY_INSTRUCTIONS } from "./generated-guidance.js";
-import { findLastMeaningfulEntry } from "./entry-resolution.js";
 import { getLiveAgentSyncRecoveryGuidance } from "./live-agent-session-adapter.js";
 import type { AcmSessionRuntime } from "./runtime.js";
 import { withAvailableAdvancedGuidance } from "./advanced-guidance.js";
@@ -141,8 +140,22 @@ export function registerAcmLifecycle(pi: ExtensionAPI, runtime: AcmSessionRuntim
   // a provider epoch has not yet observed a turn_end (a single long run never
   // updates cached provider usage, and a gauge that goes blind mid-run
   // defeats its purpose).
+  // OMP has no model-change extension event, so every gauge observation
+  // re-reads the session model: cached provider usage recorded on a different
+  // model describes a different window and must not be reported as current.
+  const currentModelIdentity = (ctx: ExtensionContext): string | undefined => {
+    try {
+      const model = ctx.models?.current();
+      if (!model) return undefined;
+      return `${String(model.provider)}/${String(model.id)}`;
+    } catch {
+      return undefined;
+    }
+  };
+
   const currentGaugePressure = (ctx: ExtensionContext) => {
     const session = ctx.sessionManager;
+    runtime.syncUsageModel(session, currentModelIdentity(ctx));
     if (!runtime.shouldObserveNativeContextUsage(session)) {
       const cached = runtime.getUsage(session);
       const providerPressure = calculateContextUsagePressure(cached?.tokens, cached?.contextWindow, cached?.percent);
@@ -380,6 +393,8 @@ export function registerAcmLifecycle(pi: ExtensionAPI, runtime: AcmSessionRuntim
     // Usage becomes authoritative at provider cutover, not native settlement.
     // The origin run is stale until a compact persisted packet is actually
     // delivered; a fallback with no valid provider packet remains stale.
+    const modelIdentity = currentModelIdentity(ctx);
+    runtime.syncUsageModel(ctx.sessionManager, modelIdentity);
     if (!runtime.isProviderDeliveryActive(ctx.sessionManager)) return;
     const message = event.message;
     if (message.role !== "assistant" || !message.usage) return;
@@ -391,7 +406,7 @@ export function registerAcmLifecycle(pi: ExtensionAPI, runtime: AcmSessionRuntim
         tokens: pressure.tokens,
         contextWindow: pressure.contextWindow,
         percent: pressure.usagePercent,
-      });
+      }, modelIdentity);
       runtime.markProviderUsageObserved(ctx.sessionManager);
     }
   });
@@ -407,9 +422,19 @@ export function registerAcmLifecycle(pi: ExtensionAPI, runtime: AcmSessionRuntim
     for (let ordinal = 2; labelMaps.labelToEntryId.has(checkpointName); ordinal++) {
       checkpointName = `${checkpointBase}-${ordinal}`;
     }
-    const resolved = findLastMeaningfulEntry(branch, event.signal);
-    if (!resolved.entryId) return;
-    const append = appendCheckpointLabel(sessionManager, resolved.entryId, checkpointName);
+    let checkpointTargetId: string | undefined;
+    for (let index = branch.length - 1; index >= 0; index--) {
+      if (event.signal?.aborted) return;
+      const candidate = branch[index];
+      if (!candidate) continue;
+      const packet = rebuildAcmContextPacket(sessionManager, candidate.id);
+      if (packet.ok && packet.value.protocol.status === "complete") {
+        checkpointTargetId = candidate.id;
+        break;
+      }
+    }
+    if (!checkpointTargetId) return;
+    const append = appendCheckpointLabel(sessionManager, checkpointTargetId, checkpointName);
     if (!append.ok) ctx.ui.notify(`Could not create pre-compaction checkpoint: ${append.message}`, "warning");
   });
 

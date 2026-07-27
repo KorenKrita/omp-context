@@ -582,6 +582,14 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
         officialUsageRaw?.contextWindow,
         officialUsageRaw?.percent,
       );
+      // OMP has no model-change event: cached provider usage from another model
+      // reports a different window, so drop it before the HUD reads it.
+      try {
+        const model = ctx.models?.current();
+        if (model) runtime.syncUsageModel(sessionManager, `${String(model.provider)}/${String(model.id)}`);
+      } catch {
+        // A host without a readable model query keeps the existing cache.
+      }
       const lastUsage = runtime.getUsage(sessionManager);
       let stepsSinceCheckpoint = 0;
       let nearestCheckpoint: string | null = null;
