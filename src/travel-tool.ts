@@ -104,6 +104,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
     label: "ACM Travel",
     description: TOOL_DESCRIPTIONS.travel,
     parameters: schema,
+    strict: true,
     executionMode: "sequential",
     renderCall(rawArgs: Static<typeof schema>, _options: any, theme: any) {
       const backup = rawArgs.backupCurrentHeadAs

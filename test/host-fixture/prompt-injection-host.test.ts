@@ -76,6 +76,7 @@ test("ACM tools register generated prompt metadata on the exact Pi host", async 
 
     const tools = new Map(runner.getAllRegisteredTools().map((tool) => [tool.definition.name, tool.definition]));
     expect([...tools.keys()].sort()).toEqual(["acm_checkpoint", "acm_timeline", "acm_travel"]);
+    for (const tool of tools.values()) expect(tool.strict).toBe(true);
     expect(tools.get("acm_checkpoint")?.promptSnippet).toBeUndefined();
     expect(tools.get("acm_timeline")?.promptSnippet).toBeUndefined();
     expect(tools.get("acm_travel")?.promptSnippet).toBeUndefined();

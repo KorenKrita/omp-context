@@ -8,6 +8,7 @@ import { registerTravelTool } from "../src/travel-tool.js";
 
 interface CapturedTool {
   name: string;
+  strict?: boolean;
   promptSnippet?: string;
   promptGuidelines?: string[];
   executionMode?: "sequential" | "parallel";
@@ -72,6 +73,10 @@ describe("ACM tool OMP metadata", () => {
     expect(tool.promptSnippet).toBeUndefined();
     expect(tool.promptGuidelines).toBeUndefined();
     expect(tool.renderShell).toBeUndefined();
+  });
+
+  test.each([checkpoint, timeline, travel])("$name opts into provider-side strict tool schemas", (tool: CapturedTool) => {
+    expect(tool.strict).toBe(true);
   });
 
   test("acm_travel forces the containing tool batch to execute sequentially", () => {

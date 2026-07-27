@@ -61,6 +61,7 @@ export function registerCheckpointTool(pi: ExtensionAPI): void {
     label: "ACM Checkpoint",
     description: TOOL_DESCRIPTIONS.checkpoint,
     parameters: schema,
+    strict: true,
     renderCall(rawArgs: Static<typeof schema>, _options: any, theme: any) {
       const args = rawArgs as Static<typeof schema>;
       const target = sanitizeTerminalText(args.target ?? "latest protocol-complete pre-call leaf");
