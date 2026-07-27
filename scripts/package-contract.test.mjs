@@ -25,15 +25,36 @@ describe("marketplace production package contract", () => {
       ...Object.keys(packageMetadata.peerDependencies ?? {}),
     ]);
     const runtimeSpecifiers = [
+      ...runtimeImports("src/index.ts"),
       ...runtimeImports("src/checkpoint-tool.ts"),
       ...runtimeImports("src/handoff.ts"),
+      ...runtimeImports("src/context-packet.ts"),
       ...runtimeImports("src/live-agent-session-adapter.ts"),
       ...runtimeImports("src/timeline-tool.ts"),
       ...runtimeImports("src/travel-tool.ts"),
     ];
     const missing = [...new Set(runtimeSpecifiers.map(packageName).filter((name) => !declared.has(name)))];
     expect(missing).toEqual([]);
-    expect(packageMetadata.dependencies?.zod).toBe("^3.25.0");
+  });
+
+  test("keeps zod out of the runtime module graph because OMP installs omit extension dependencies", () => {
+    // OMP marketplace installs do not run `npm install` for an extension's own
+    // dependencies, so any bare `zod` value import in a runtime source would fail
+    // to resolve on the host. Schemas must be built from the injected `pi.zod`.
+    const runtimeSources = [
+      "src/index.ts",
+      "src/checkpoint-tool.ts",
+      "src/handoff.ts",
+      "src/context-packet.ts",
+      "src/live-agent-session-adapter.ts",
+      "src/timeline-tool.ts",
+      "src/travel-tool.ts",
+    ];
+    const zodImporters = runtimeSources.filter((path) =>
+      runtimeImports(path).some((specifier) => specifier === "zod" || specifier.startsWith("zod/")),
+    );
+    expect(zodImporters).toEqual([]);
+    expect(packageMetadata.dependencies ?? {}).toEqual({});
   });
 
   test("keeps package and marketplace release versions identical", () => {

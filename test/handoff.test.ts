@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { z } from "zod/v4";
 import {
   ACM_CONTINUATION_MARKER,
   buildCanonicalHandoff,
-  StructuredHandoffSchema,
+  HANDOFF_FIELD_DESCRIPTIONS,
   type HandoffInput,
 } from "../src/handoff";
 
@@ -22,10 +21,7 @@ function handoff(overrides: Partial<HandoffInput> = {}): HandoffInput {
 
 describe("canonical handoff", () => {
   test("keeps Evidence optional and non-blocking for NEXT", () => {
-    const schema = z.toJSONSchema(StructuredHandoffSchema) as {
-      properties: { evidence: { description?: string } };
-    };
-    const description = schema.properties.evidence.description ?? "";
+    const description = HANDOFF_FIELD_DESCRIPTIONS.evidence;
     expect(description).toContain("never a verification checklist or a prerequisite to NEXT");
     // v1 doctrine: a pointer licenses one bounded spot-check of a
     // load-bearing claim, never a re-derivation of folded material.

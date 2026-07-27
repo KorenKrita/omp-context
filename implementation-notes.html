@@ -28,8 +28,8 @@
         </tr>
         <tr>
           <td>agent-resolved</td>
-          <td>Ship <code>zod</code> as a production dependency and validate marketplace dependency closure.</td>
-          <td>The published extension imports <code>zod/v4</code> at runtime from <code>src/handoff.ts</code>. Marketplace installation omits dev dependencies, so keeping Zod only in <code>devDependencies</code> made version 0.1.2 unloadable. Version 0.1.3 moves Zod to <code>dependencies</code> and adds a package contract test that checks every extension runtime import is a declared dependency or OMP host peer.</td>
+          <td>Keep the runtime module graph free of any bare <code>zod</code> import; build all schemas from the injected <code>pi.zod</code>.</td>
+          <td>OMP marketplace installs do not install an extension's own <code>dependencies</code>, so a runtime <code>import { z } from "zod/v4"</code> fails to resolve on the host — this made 0.1.2 and 0.1.3 unloadable (<code>Cannot find module 'zod/v4'</code>). Version 0.1.4 removes the top-level Zod import from <code>src/handoff.ts</code> (schemas already build from <code>pi.zod</code> in <code>travel-tool.ts</code>; field descriptions live as plain data in <code>handoff.ts</code>), returns <code>zod</code> to <code>devDependencies</code> for tests only, and adds a contract test asserting no runtime source imports <code>zod</code> and that <code>dependencies</code> is empty.</td>
         </tr>
         <tr>
           <td>agent-resolved</td>

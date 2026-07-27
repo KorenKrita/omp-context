@@ -1,42 +1,37 @@
-import { z } from "zod/v4";
-import type { infer as ZodInfer } from "zod/v4";
-
 export const ACM_CONTINUATION_MARKER = "<!-- PI-CONTEXT:ACM-CONTINUATION:v1 -->";
 
-export const StructuredHandoffSchema = z.object({
-  goal: z.string().min(1).describe(
-    "The authoritative current objective, including any user-visible result still owed. Knowing a result is not the same as delivering it.",
-  ),
-  state: z.string().min(1).describe(
-    "Live cognition for future self, not a report: settled knowns, open unknowns, competing hypotheses with their current weights, surviving fronts, and the exact hot values needed next. If writing this forces vagueness, the fold is not yet earned. Multiline text is allowed.",
-  ),
-  evidence: z.string().min(1).describe(
-    "Compact direct facts and optional pointers supporting State. This is a receipt, never a verification checklist or a prerequisite to NEXT: a pointer here licenses one bounded spot-check of a load-bearing claim, not a re-derivation. Write 'none' when empty.",
-  ),
-  external: z.string().min(1).describe(
-    "Lasting file, process, browser, or remote-system state as known at handoff time. Future self treats it as authoritative unless later activity changed it. Write 'none' when empty.",
-  ),
-  exclusions: z.string().min(1).describe(
-    "Rejected or closed directions that should not regain authority — what a dead end proved rides here, so the lesson survives the fold. Write 'none' when empty.",
-  ),
-  recover: z.string().min(1).describe(
-    "Checkpoint names, node IDs, or archive pointers available for optional recovery. These are choices, not instructions to reread; the folded path stays one travel away. Write 'none' when empty.",
-  ),
-  next: z.string().min(1).describe(
-    "The first real task action future self should take directly from this handoff — one concrete action, executable immediately. Do not revalidate the handoff merely because travel occurred.",
-  ),
-}).strict();
+/**
+ * Canonical handoff field descriptions. Kept as plain data — never a runtime
+ * zod import — so the extension module graph loads on an OMP host that does not
+ * install extension `dependencies`. The travel tool builds its schema from the
+ * host-injected `pi.zod` and reuses these strings.
+ */
+export const HANDOFF_FIELD_DESCRIPTIONS = {
+  goal: "The authoritative current objective, including any user-visible result still owed. Knowing a result is not the same as delivering it.",
+  state: "Live cognition for future self, not a report: settled knowns, open unknowns, competing hypotheses with their current weights, surviving fronts, and the exact hot values needed next. If writing this forces vagueness, the fold is not yet earned. Multiline text is allowed.",
+  evidence: "Compact direct facts and optional pointers supporting State. This is a receipt, never a verification checklist or a prerequisite to NEXT: a pointer here licenses one bounded spot-check of a load-bearing claim, not a re-derivation. Write 'none' when empty.",
+  external: "Lasting file, process, browser, or remote-system state as known at handoff time. Future self treats it as authoritative unless later activity changed it. Write 'none' when empty.",
+  exclusions: "Rejected or closed directions that should not regain authority — what a dead end proved rides here, so the lesson survives the fold. Write 'none' when empty.",
+  recover: "Checkpoint names, node IDs, or archive pointers available for optional recovery. These are choices, not instructions to reread; the folded path stays one travel away. Write 'none' when empty.",
+  next: "The first real task action future self should take directly from this handoff — one concrete action, executable immediately. Do not revalidate the handoff merely because travel occurred.",
+} as const;
 
-export const HandoffSchema = z.union([
-  StructuredHandoffSchema,
-  z.string().min(1).describe(
-    "Compatibility fallback for providers that serialize a nested tool argument: an exact JSON encoding of the same seven-field handoff object. This is not free-form summary text.",
-  ),
-]).describe(
-  "Prefer the structured seven-field object. A JSON-encoded copy of that exact object is accepted only as a provider compatibility fallback.",
- );
-export type HandoffInput = ZodInfer<typeof StructuredHandoffSchema>;
-export type HandoffWireInput = ZodInfer<typeof HandoffSchema>;
+export const HANDOFF_SERIALIZED_DESCRIPTION =
+  "Compatibility fallback for providers that serialize a nested tool argument: an exact JSON encoding of the same seven-field handoff object. This is not free-form summary text.";
+
+export const HANDOFF_UNION_DESCRIPTION =
+  "Prefer the structured seven-field object. A JSON-encoded copy of that exact object is accepted only as a provider compatibility fallback.";
+
+export interface HandoffInput {
+  goal: string;
+  state: string;
+  evidence: string;
+  external: string;
+  exclusions: string;
+  recover: string;
+  next: string;
+}
+export type HandoffWireInput = HandoffInput | string;
 export type HandoffField = keyof HandoffInput;
 
 export type HandoffDefect =

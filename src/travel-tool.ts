@@ -20,7 +20,13 @@ import {
   resolveTargetId,
   sanitizeTerminalText,
 } from "./lib.js";
-import { buildCanonicalHandoff, type HandoffWireInput } from "./handoff.js";
+import {
+  buildCanonicalHandoff,
+  HANDOFF_FIELD_DESCRIPTIONS,
+  HANDOFF_SERIALIZED_DESCRIPTION,
+  HANDOFF_UNION_DESCRIPTION,
+  type HandoffWireInput,
+} from "./handoff.js";
 import { rebuildAcmContextPacket } from "./context-packet.js";
 import {
   prevalidateBranchWithSummary,
@@ -70,13 +76,13 @@ function formatSignedDelta(value: number | null, fractionDigits = 0, suffix = ""
 
 export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime): void {
   const handoffFields = {
-    goal: pi.zod.string().min(1),
-    state: pi.zod.string().min(1),
-    evidence: pi.zod.string().min(1),
-    external: pi.zod.string().min(1),
-    exclusions: pi.zod.string().min(1),
-    recover: pi.zod.string().min(1),
-    next: pi.zod.string().min(1),
+    goal: pi.zod.string().min(1).describe(HANDOFF_FIELD_DESCRIPTIONS.goal),
+    state: pi.zod.string().min(1).describe(HANDOFF_FIELD_DESCRIPTIONS.state),
+    evidence: pi.zod.string().min(1).describe(HANDOFF_FIELD_DESCRIPTIONS.evidence),
+    external: pi.zod.string().min(1).describe(HANDOFF_FIELD_DESCRIPTIONS.external),
+    exclusions: pi.zod.string().min(1).describe(HANDOFF_FIELD_DESCRIPTIONS.exclusions),
+    recover: pi.zod.string().min(1).describe(HANDOFF_FIELD_DESCRIPTIONS.recover),
+    next: pi.zod.string().min(1).describe(HANDOFF_FIELD_DESCRIPTIONS.next),
   };
   const schema = pi.zod.object({
     target: pi.zod.string().min(1).describe(
@@ -84,9 +90,9 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
     ),
     handoff: pi.zod.union([
       pi.zod.object(handoffFields).strict(),
-      pi.zod.string().min(1),
+      pi.zod.string().min(1).describe(HANDOFF_SERIALIZED_DESCRIPTION),
     ]).describe(
-      "Prefer the structured seven-field object. A JSON-encoded copy of that exact object is accepted only as a provider compatibility fallback.",
+      HANDOFF_UNION_DESCRIPTION,
     ),
     backupCurrentHeadAs: pi.zod.string().min(1).regex(/^[A-Za-z0-9._-]+$/).describe(
       "Optional brand-new recovery alias for the latest protocol-complete point on the current origin path before mutation; unique and semantic, never a workflow state ('root' is reserved). This field never selects the destination: Put an existing checkpoint, archive alias, or return alias in target and omit this field. Use it only when a new alias is needed for this exact pre-travel path.",
