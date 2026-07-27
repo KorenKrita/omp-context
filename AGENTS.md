@@ -57,6 +57,10 @@ Travel 只改变会话树和后续上下文，不触碰文件、进程、Git 或
 
 Gauge 使用模型窗口与 400K 的较小值作为 working budget。非 ACM、非错误 tool result 只在整数压力变化时显示；`ACM_GAUGE_DISABLED=1` 时完全禁用。Provider cutover 后优先使用实际 provider `turn_end` usage，不能让 origin-run native usage 覆盖新 epoch。
 
+针可以报状态，也可以报收益：`% budget` / `% window` 是压力，`fold@turn→X%` / `fold@task→Y%` 是在最近与最早结构参照点折叠后的投影压力（同一 working-budget 口径，`Math.floor`）。四者同为 measurement：回答「折了能省多少」而不回答「是否该折」（**Preview measures; boundary decides**，资格线在 CORE）。合宪标准是三条：不携带动词或评价、不选择出现时机（无下限无档位）、缺参照点时省略而非编造零。收益针恢复自 upstream `7c3bdff7`（2026-07-12）架构拆分中静默丢失的 fold preview——那次只有空白 commit body，随后六次 guidance 修订都在用措辞补偿一个缺失的数字。`test/fold-visibility.test.ts` 是机制清单，任何再次搬走收益针的重构必须让它变红。
+
+零距离折叠（FM-15：打点后立刻以该点为 target）在 travel mutation 之前按**结构**拒绝：若替换范围内全部是 ACM 自身的 label 记账条目，则拒绝并说明 target precedes nothing。不按距离也不按投影数字拒绝——前者误伤「打点→批量读取→折回点」这类短距离高收益用法，后者让数字越权决定。
+
 ## 测试契约
 
 旧 OMP 30/50/70 nudge 测试已被最新 pi-context 行为测试替换。非平凡分支、协议修复、mutation recovery 和生命周期竞态必须有 runnable coverage。

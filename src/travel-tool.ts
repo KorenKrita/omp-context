@@ -14,7 +14,7 @@ import {
   estimateUsageAtTravelTarget,
   findInTree,
   formatContextUsage,
-  formatEntryLabels,
+  formatEntryLabel,
   isReservedTargetName,
   isValidEntryId,
   optionalString,
@@ -33,6 +33,7 @@ import {
   prevalidateBranchWithSummary,
   prevalidateCheckpointLabel,
   type CheckpointLabelConflict,
+  type CheckpointLabelDisplacement,
   type CheckpointLabelPrevalidation,
 } from "./host-bridge.js";
 import {
@@ -46,6 +47,20 @@ import { getLiveAgentSyncRecoveryGuidance } from "./live-agent-session-adapter.j
 import type { AcmSessionRuntime } from "./runtime.js";
 import { GUIDANCE_CUES, RECOVERY_GUIDANCE, TOOL_DESCRIPTIONS } from "./generated-guidance.js";
 import { withAvailableAdvancedGuidance } from "./advanced-guidance.js";
+
+/**
+ * Entry kinds a fold can legitimately compress. A replacement range containing
+ * only ACM's own bookkeeping (label journal entries, and the receipts of the
+ * save point that was just created) compresses nothing the model produced.
+ *
+ * The test is structural, not numeric: FM-15's shape is "checkpoint, then
+ * travel to it", where everything between target and leaf is the checkpoint's
+ * own trace. One real message in that range makes the fold small, not empty,
+ * and small folds stay the model's judgment.
+ */
+function isAcmBookkeepingEntry(entry: { readonly type?: string } | undefined): boolean {
+  return entry?.type === "label";
+}
 
 interface TravelSummaryDetails {
   kind: "acm_travel";
@@ -293,7 +308,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
       }
 
       const originId = currentLeaf;
-      const originLabel = formatEntryLabels(labelMaps, originId);
+      const originLabel = formatEntryLabel(labelMaps, originId);
       const usageBeforeRaw = ctx.getContextUsage();
       const usageBefore = usageBeforeRaw && usageBeforeRaw.tokens != null && usageBeforeRaw.percent != null
         ? { tokens: usageBeforeRaw.tokens, contextWindow: usageBeforeRaw.contextWindow, percent: usageBeforeRaw.percent }
@@ -335,6 +350,29 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
         };
       }
       const targetBranch = sessionManager.getBranch(targetId);
+      const replacedEntryCount = branch.length - targetBranch.length;
+      const replacedEntries = replacedEntryCount > 0 ? branch.slice(targetBranch.length) : [];
+      // Off-path restore and rehydrate legitimately grow history, so a target
+      // that replaces nothing is expected there; the guard applies to folds.
+      const foldsOnlyBookkeeping = !resolved.fromOffPath
+        && (replacedEntries.length === 0
+          || replacedEntries.every((entry) => isAcmBookkeepingEntry(entry as { readonly type?: string })));
+      if (foldsOnlyBookkeeping) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Zero-distance travel refused: target ${targetId} precedes nothing foldable (${replacedEntryCount} replaceable entr${replacedEntryCount === 1 ? "y" : "ies"} on this spine, all produced by this call). A fold target must sit before the material being folded; a save point created just now sits after it. Choose the last clean node before that material — acm_timeline view search or checkpoints locates it — or continue without folding.`,
+          }],
+          details: {
+            error: "zero_distance_travel",
+            targetId,
+            leafId: currentLeaf,
+            replacedEntryCount,
+            activeBranchEntries: branch.length,
+            targetBranchEntries: targetBranch.length,
+          },
+        };
+      }
       const targetAnalysis = buildTravelTargetFacts({
         targetId,
         targetEntry: targetNode.entry,
@@ -457,6 +495,21 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
             return {
               content: [{ type: "text" as const, text: `Error: archive bookmark name '${params.backupCurrentHeadAs}' already exists at ${existing}. ${withAvailableAdvancedGuidance(pi, RECOVERY_GUIDANCE.nameCollision, GUIDANCE_CUES.advancedTargetPointer)}` }],
               details: { error: "duplicate_backup_name", name: params.backupCurrentHeadAs, owner: conflict },
+            };
+          }
+          if (backupCheck.error === "label_displaces_existing") {
+            const displaced = backupCheck.details as CheckpointLabelDisplacement;
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Error: archive bookmark '${params.backupCurrentHeadAs}' would replace checkpoint '${displaced.existingLabel}' on the pre-travel entry ${displaced.targetId}, because the host keeps one label per entry. No mutation was attempted. Choose a different backupCurrentHeadAs target, or move '${displaced.existingLabel}' first.`,
+              }],
+              details: {
+                error: "backup_displaces_existing_label",
+                name: params.backupCurrentHeadAs,
+                candidateId: displaced.targetId,
+                existingLabel: displaced.existingLabel,
+              },
             };
           }
           return {

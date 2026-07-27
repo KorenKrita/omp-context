@@ -834,7 +834,11 @@ describe("deferred post-travel context delivery", () => {
 
       expect(pressure).not.toBeNull();
       expect(pressure?.pressurePercent).toBe(scenario.pressurePercent);
-      expect(gaugeText(gauge)).toBe(`read complete${buildGaugeSuffix(pressure!)}`);
+      // The pressure needles must agree with the timeline's authoritative
+      // reading. Fold needles are projections appended after them, so compare
+      // the pressure prefix instead of the whole suffix.
+      const expectedPressureNeedles = buildGaugeSuffix(pressure!).replace(/\]$/, "");
+      expect(gaugeText(gauge)).toStartWith(`read complete${expectedPressureNeedles}`);
       expect(timeline.content[0]?.text).toContain(
         `• ACM Pressure:     ${formatContextUsagePressure(pressure!)} (${scenario.pressureAuthority})`,
       );
@@ -1039,7 +1043,10 @@ describe("deferred post-travel context delivery", () => {
 
     expect(runtime.getUsage(session)).toBeUndefined();
     expect(runtime.getProviderDeliveryStatus(session).usageObserved).toBe(false);
-    expect(patch.content[0]?.text).toContain("[ctx 90% window]");
+    // Pressure needles must match the timeline's authoritative reading. Fold
+    // needles may follow in the same suffix, so assert the pressure prefix
+    // rather than the whole bracket.
+    expect(patch.content[0]?.text).toContain("[ctx 90% window");
   });
 
   test("multiple successful travels retain only the latest ticket until settlement", () => {
