@@ -30,7 +30,7 @@ pi-context 的 boundary ledger 记录了 202 个真实 user-request boundary、0
 ## 技术栈与版本契约
 
 - TypeScript ESM，source-first：OMP 直接加载 `src/*.ts`，生产不依赖 `dist/`
-- 四个 `@oh-my-pi/*` peer/dev dependency 精确固定 **`17.1.5`**（含 `test/host-fixture/`），不要改成 range；版本升级必须通过 `scripts/precommit-host-contract.mjs` 的隔离 promotion
+- 四个 `@oh-my-pi/*` peer/dev dependency 精确固定 **`17.2.1`**（含 `test/host-fixture/`），不要改成 range；版本升级必须通过 `scripts/precommit-host-contract.mjs` 的隔离 promotion
 - **不引入** `@earendil-works/*` 或 Pi-only API
 - **不使用** constrainedSampling 类机制：handoff wire schema 的四个可选字段与 OpenAI strict 模式（全 properties 进 required）不兼容
 
@@ -150,7 +150,7 @@ bun run generate:guidance # 从 canonical 源重新生成
 bun run verify:acm        # 完整 gate：guidance check + 测试 + typecheck + host fixture
 ```
 
-host fixture（`test/host-fixture/`）在真实 OMP 17.1.5 上验证宿主契约：exact version、CORE 注入、strict schema 三必填、自动回程票锚定（含 OMP 宿主规范化语义）、travel/settled sync 全链路、multi-session 隔离。独立 lockfile 和构建（`bun ./build-source.mjs`），根目录 `bun test` 不含它。
+host fixture（`test/host-fixture/`）在真实 OMP 17.2.1 上验证宿主契约：exact version、CORE 注入、strict schema 三必填、自动回程票锚定（含 OMP 宿主规范化语义）、travel/settled sync 全链路、multi-session 隔离。独立 lockfile 和构建（`bun ./build-source.mjs`），根目录 `bun test` 不含它。
 
 ## 文档与实现决策
 
