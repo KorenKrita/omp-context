@@ -12,7 +12,6 @@ import {
   countActiveSummaryDepth,
   estimateUsageAfterMessageChange,
   extractTextFromContent,
-  formatBoundaryTravelCue,
   formatContextUsage,
   getEntryLabel,
   optionalString,
@@ -27,7 +26,6 @@ import { calculateContextUsagePressure, formatContextUsagePressure } from "./con
 import { getLiveAgentSyncRecoveryGuidance } from "./live-agent-session-adapter.js";
 import type { AcmSessionRuntime, ProviderDeliveryPhase } from "./runtime.js";
 import { GUIDANCE_CUES, RECOVERY_GUIDANCE, TOOL_DESCRIPTIONS } from "./generated-guidance.js";
-import { getAvailableAdvancedGuidance, withAvailableAdvancedGuidance } from "./advanced-guidance.js";
 
 interface CheckpointListing {
   entryId: string;
@@ -265,7 +263,7 @@ function countOffPathSummaries(branch: SessionEntry[], tree: SessionTreeNode[], 
 
 export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntime): void {
   const limitSchema = pi.zod.number().int().min(1).describe(
-    "Requested recent visible entries (active), checkpoint entries (checkpoints), matches (search), or traversal depth per root (tree). Default 50. Runtime applies and reports a context-derived per-call work/result budget instead of rejecting large requests.",
+    "Requested maximum entries; output budgets may return fewer. Default 50.",
   ).optional();
   const schema = pi.zod.object({
     view: pi.zod.union([
@@ -276,13 +274,13 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
     ]).describe("Timeline view mode. Default: active.").optional(),
     limit: limitSchema,
     verbose: pi.zod.boolean().describe(
-      "Show all active-path messages, including internal tool traffic and system/custom metadata. (active view only)",
+      "Active view only: show all messages, including internal tool traffic and metadata.",
     ).optional(),
     filter: pi.zod.string().min(1).describe(
-      "Optional non-blank checkpoint label or entry-ID filter, matched case-insensitively. (checkpoints view only)",
+      "Narrow the checkpoints view by label or node-ID substring (case-insensitive).",
     ).optional(),
     query: pi.zod.string().min(1).describe(
-      "Full-tree query matching labels, node IDs, or rendered content case-insensitively. Required when view=search.",
+      "Search text; matches labels, node IDs, and content across the whole tree. Required for view=search.",
     ).optional(),
   }).strict();
   pi.registerTool(({
@@ -370,7 +368,7 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
         : "active");
       const lines = [
         theme.fg("success", "✓ TIMELINE READY") + theme.fg("accent", `  ${displayView.toUpperCase()}`),
-        theme.fg("muted", `  ${evidence} · summary depth ${depth}`),
+        theme.fg("muted", `  ${evidence} · handoff layers ${depth}`),
         theme.fg("dim", `  context ${usage} · delivery ${delivery}`),
       ];
 
@@ -413,7 +411,6 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
       const effectiveLimit = Math.min(requestedLimit, resultEntryBudget);
       const resultBudgetApplied = requestedLimit > effectiveLimit;
       const resultCharacterBudget = timelineResultCharacterBudget(ctx);
-      const advancedTargetPointer = getAvailableAdvancedGuidance(pi, GUIDANCE_CUES.advancedTargetPointer);
       const sessionManager = ctx.sessionManager;
       const tree = sessionManager.getTree();
       const branch = sessionManager.getBranch();
@@ -472,7 +469,7 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
         const aliasCountText = filter
           ? `${checkpointsMatchingAliases} matched ${matchingAliasLabel} / ${checkpointAliasesOnMatchingEntries} total aliases`
           : `${checkpointAliasesOnMatchingEntries} aliases`;
-        lines.push(`Checkpoints (${listings.length} matching ${matchingEntryLabel} / ${aliasCountText}, ${displayedListings.length} ${displayedEntryLabel} displayed${filter ? ` for '${boundedTimelineValue(params.filter ?? "")}'` : ""}; requested ${requestedLimit}, effective ${effectiveLimit}). Current: ${currentResult.value.messages.length} msgs, ${formatContextUsage(usage, true)}, summary depth ${activeSummaryDepth}:`);
+        lines.push(`Checkpoints (${listings.length} matching ${matchingEntryLabel} / ${aliasCountText}, ${displayedListings.length} ${displayedEntryLabel} displayed${filter ? ` for '${boundedTimelineValue(params.filter ?? "")}'` : ""}; requested ${requestedLimit}, effective ${effectiveLimit}). Current: ${currentResult.value.messages.length} msgs, ${formatContextUsage(usage, true)}, handoff layers ${activeSummaryDepth}:`);
         const cache = new Map<string, { ok: true; messages: AgentMessage[] } | { ok: false }>();
         const projectedDepthCache = new Map<string, number>();
         if (rootEntry && rootMatchesFilter) {
@@ -494,7 +491,7 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
           const rootDepthNote = activeSummaryDepth > 0 && rootProjectedSummaryDepth === 1
             ? "; projected depth is 1 rather than 0 because travel appends one new handoff"
             : "";
-          lines.push(`  root → ${rootEntry.id} (structural candidate, not a checkpoint${rootTopology}) ${estimateText}; summary depth ${activeSummaryDepth} → ${rootProjectedSummaryDepth} projected${rootDepthNote}`);
+          lines.push(`  root → ${rootEntry.id} (structural candidate, not a checkpoint${rootTopology}) ${estimateText}; handoff layers ${activeSummaryDepth} → ${rootProjectedSummaryDepth} projected${rootDepthNote}`);
         }
         for (const checkpoint of displayedListings) {
           if (signal?.aborted) break;
@@ -520,9 +517,9 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
             projectedDepthCache.set(checkpoint.entryId, projectedSummaryDepth);
           }
           const rawArchiveNote = checkpoint.isRawArchive
-            ? "; raw archive origin — restore/rehydrate only, not a fold/rebase base"
+            ? "; raw archive — restores pre-fold history; fold targets are the entries before the folded material"
             : "";
-          lines.push(`  ${checkpoint.entryId} (checkpoint: ${formatCheckpointLabel(checkpoint)}; ${checkpoint.onActivePath ? "on-path" : "off-path"}${checkpoint.isHead ? ", *HEAD*" : ""}${rawArchiveNote}) ${estimateText}; summary depth ${activeSummaryDepth} → ${projectedSummaryDepth} projected`);
+          lines.push(`  ${checkpoint.entryId} (checkpoint: ${formatCheckpointLabel(checkpoint)}; ${checkpoint.onActivePath ? "on-path" : "off-path"}${checkpoint.isHead ? ", *HEAD*" : ""}${rawArchiveNote}) ${estimateText}; handoff layers ${activeSummaryDepth} → ${projectedSummaryDepth} projected`);
         }
         if (listings.length > displayedListings.length) lines.push(`  ... +${listings.length - displayedListings.length} more — use a narrower filter or query`);
       } else if (params.view === "search") {
@@ -629,13 +626,10 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
         `• ACM Pressure:     ${authoritativePressure ? formatContextUsagePressure(authoritativePressure) : "N/A"} (${providerTurnUsageAuthoritative ? "provider actual" : "native context"})`,
         `• Last LLM Prompt:  ${lastUsage ? formatContextUsage(lastUsage, true) : "N/A"} (${providerTurnUsageAuthoritative ? "provider actual turn_end" : "turn_end"})`,
         `• Active Path:      ${branch.length} node(s) — LLM context follows this spine`,
-        `• Summary Depth:    ${activeSummaryDepth} active handoff summary layer(s) on the current spine`,
-        `• Off-path Summaries: ${countOffPathSummaries(branch, tree, activeIds)} branch point(s) with abandoned summaries`,
+        `• Handoff Layers:   ${activeSummaryDepth} handoff layer(s) on the current spine`,
+        `• Off-path Handoffs: ${countOffPathSummaries(branch, tree, activeIds)} branch point(s) with archived handoffs`,
         `• Recovery Distance: ${stepsSinceCheckpoint} step(s) since last save point '${nearestCheckpoint ? boundedTimelineValue(nearestCheckpoint) : "None"}'`,
         `• Fold Projection:  ${foldProjectionText}`,
-        `• ACM Judgment:     ${activeSummaryDepth > 0
-          ? `${GUIDANCE_CUES.rebaseCheck}${advancedTargetPointer ? ` ${advancedTargetPointer}` : ""}`
-          : formatBoundaryTravelCue(nearestCheckpoint ? boundedTimelineValue(nearestCheckpoint) : null, advancedTargetPointer)}`,
       ];
       if (resultBudgetApplied) {
         hudParts.push(`• Result Budget:    requested ${requestedLimit}; this call processed at most ${effectiveLimit} entries from the ${resultEntryBudget}-entry context-derived budget. Narrow with filter/query for the remainder.`);
@@ -644,7 +638,7 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
         const attempts = runtime.contextRefresh.getAttemptCount(sessionManager);
         const exhausted = attempts >= ContextRefreshRegistry.MAX_ATTEMPTS && !refreshPending;
         const refreshGuidance = exhausted
-          ? withAvailableAdvancedGuidance(pi, RECOVERY_GUIDANCE.refreshExhausted, GUIDANCE_CUES.advancedExceptionalPointer)
+          ? RECOVERY_GUIDANCE.refreshExhausted
           : "";
         hudParts.push(`• Context Sync:     last travel refresh failed — ${refreshFailure}${refreshGuidance ? ` ${refreshGuidance}` : ""}`);
       }

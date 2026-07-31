@@ -1,5 +1,9 @@
 export const ACM_CONTINUATION_MARKER = "<!-- PI-CONTEXT:ACM-CONTINUATION:v1 -->";
 
+// Wire shape: goal/state/next required; the four supporting fields optional,
+// defaulting to "none". The persisted durable text always renders all seven
+// labeled lines — parsing anchors and continuation projection depend on the
+// fixed format.
 /**
  * Canonical handoff field descriptions. Kept as plain data — never a runtime
  * zod import — so the extension module graph loads on an OMP host that does not
@@ -7,21 +11,33 @@ export const ACM_CONTINUATION_MARKER = "<!-- PI-CONTEXT:ACM-CONTINUATION:v1 -->"
  * host-injected `pi.zod` and reuses these strings.
  */
 export const HANDOFF_FIELD_DESCRIPTIONS = {
-  goal: "The authoritative current objective, including any user-visible result still owed. Knowing a result is not the same as delivering it.",
-  state: "Live cognition for future self, not a report: settled knowns, open unknowns, competing hypotheses with their current weights, surviving fronts, and the exact hot values needed next. If writing this forces vagueness, the fold is not yet earned. Multiline text is allowed.",
-  evidence: "Compact direct facts and optional pointers supporting State. This is a receipt, never a verification checklist or a prerequisite to NEXT: a pointer here licenses one bounded spot-check of a load-bearing claim, not a re-derivation. Write 'none' when empty.",
-  external: "Lasting file, process, browser, or remote-system state as known at handoff time. Future self treats it as authoritative unless later activity changed it. Write 'none' when empty.",
-  exclusions: "Rejected or closed directions that should not regain authority — what a dead end proved rides here, so the lesson survives the fold. Write 'none' when empty.",
-  recover: "Checkpoint names, node IDs, or archive pointers available for optional recovery. These are choices, not instructions to reread; the folded path stays one travel away. Write 'none' when empty.",
-  next: "The first real task action future self should take directly from this handoff — one concrete action, executable immediately. Do not revalidate the handoff merely because travel occurred.",
+  goal: "What this work is trying to accomplish, including any result still owed to the user.",
+  state: "What is settled, what stays uncertain, and the exact values, paths, and names the next steps will use. Multiline text is allowed.",
+  next: "The next step to take right now, written as one concrete action.",
+  evidence: "Optional: verifiable pointers supporting state — file paths, commands, IDs.",
+  external: "Optional: lasting side effects outside the conversation — files changed, commands run, systems touched.",
+  exclusions: "Optional: directions tried and ruled out, so they are not retried.",
+  recover: "Optional: save point names or node IDs that recover folded history. The automatic return ticket is appended here either way.",
 } as const;
 
 export const HANDOFF_SERIALIZED_DESCRIPTION =
-  "Compatibility fallback for providers that serialize a nested tool argument: an exact JSON encoding of the same seven-field handoff object. This is not free-form summary text.";
+  "Compatibility fallback: a JSON encoding of the same handoff object. Free-form summary text is not accepted.";
 
 export const HANDOFF_UNION_DESCRIPTION =
-  "Prefer the structured seven-field object. A JSON-encoded copy of that exact object is accepted only as a provider compatibility fallback.";
+  "The handoff object — goal/state/next required; evidence/external/exclusions/recover optional. A JSON-encoded string of the same object is accepted.";
 
+/** Wire shape before normalization: the four supporting fields may be omitted. */
+export interface HandoffWireObject {
+  goal: string;
+  state: string;
+  next: string;
+  evidence?: string;
+  external?: string;
+  exclusions?: string;
+  recover?: string;
+}
+
+/** Canonical seven-field shape after normalization; omitted optional fields become "none". */
 export interface HandoffInput {
   goal: string;
   state: string;
@@ -31,7 +47,8 @@ export interface HandoffInput {
   recover: string;
   next: string;
 }
-export type HandoffWireInput = HandoffInput | string;
+
+export type HandoffWireInput = HandoffWireObject | string;
 export type HandoffField = keyof HandoffInput;
 
 export type HandoffDefect =
@@ -59,7 +76,7 @@ const FIELD_ORDER: Array<{ field: HandoffField; label: string }> = [
   { field: "next", label: "NEXT" },
 ];
 
-const AUTHORITATIVE_FIELDS = new Set<HandoffField>(["goal", "state", "next"]);
+const REQUIRED_FIELDS = new Set<HandoffField>(["goal", "state", "next"]);
 
 function normalize(value: string): string {
   return value.replace(/\r\n?|\u2028|\u2029/g, "\n").trim();
@@ -89,15 +106,26 @@ export function buildCanonicalHandoff(
   const normalizedFields: Partial<Record<HandoffField, string>> = {};
   for (const { field } of FIELD_ORDER) {
     const rawValue = inputRecord[field];
+    const required = REQUIRED_FIELDS.has(field);
+    if (rawValue === undefined || rawValue === null) {
+      // Optional fields default to "none"; missing required fields are defects.
+      if (required) defects.push({ field, reason: "invalid_type" });
+      else normalizedFields[field] = "none";
+      continue;
+    }
     if (typeof rawValue !== "string") {
       defects.push({ field, reason: "invalid_type" });
       continue;
     }
     const value = normalize(rawValue);
-    normalizedFields[field] = value;
     if (value.length === 0) {
-      defects.push({ field, reason: "empty" });
-    } else if (AUTHORITATIVE_FIELDS.has(field) && value.toLowerCase() === "none") {
+      // An explicitly empty optional field means "nothing to carry".
+      if (required) defects.push({ field, reason: "empty" });
+      else normalizedFields[field] = "none";
+      continue;
+    }
+    normalizedFields[field] = value;
+    if (required && value.toLowerCase() === "none") {
       defects.push({ field, reason: "none_not_allowed" });
     }
   }
@@ -137,4 +165,37 @@ export function buildCanonicalHandoff(
       ].join("\n"),
     },
   };
+}
+
+/**
+ * Derive a return-ticket name from the handoff goal: the first few
+ * significant words as a slug, suffixed to stay unique among existing names.
+ * Alias charset must satisfy the checkpoint name pattern ^[A-Za-z0-9._-]+$.
+ */
+export function deriveReturnTicketName(goal: string, taken: (name: string) => boolean): string {
+  const words = goal
+    .toLowerCase()
+    .replace(/[^a-z0-9\s._-]+/g, " ")
+    .split(/\s+/)
+    .filter((word) => word.length > 0)
+    .slice(0, 4);
+  // A slug with no alphanumeric signal (non-Latin goals collapse entirely,
+  // punctuation-only goals leave residue like "----...") is not a name a
+  // human can pick from the checkpoints view; fall back to the plain stem.
+  const slug = words.join("-");
+  const base = /[a-z0-9]/.test(slug) ? `${slug}-raw` : "fold-raw";
+  if (!taken(base) && base !== "root") return base;
+  for (let ordinal = 2; ordinal < 1000; ordinal++) {
+    const candidate = `${base}-${ordinal}`;
+    if (!taken(candidate)) return candidate;
+  }
+  // Timestamp fallback goes through the same collision check: a taken
+  // timestamp candidate (same-millisecond callers, imported labels) walks
+  // forward until a free name is found.
+  const stamp = Date.now().toString(36);
+  for (let ordinal = 0; ordinal < 1000; ordinal++) {
+    const candidate = ordinal === 0 ? `${base}-${stamp}` : `${base}-${stamp}-${ordinal}`;
+    if (!taken(candidate)) return candidate;
+  }
+  return `${base}-${stamp}-${Math.random().toString(36).slice(2, 8)}`;
 }

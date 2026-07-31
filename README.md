@@ -34,17 +34,23 @@
 }
 ```
 
-`goal`、`state`、`next` 必须包含真实内容；其余字段无内容时写 `none`。合格标准是一个不知道前情的新 agent 能仅靠 handoff 和其中的指针继续工作。
+- **goal / state / next** 必填：目标是什么、现在什么状态、下一步做什么。
+- **evidence / external / exclusions / recover** 可选：证据在哪、改过哪些文件、放弃过哪些方向、想回头时去哪——用到才写，省略自动记为 `none`。简单场景三个字段就够。
+- 每次折叠都会自动给折叠前的位置记一张"回程票"（archive alias），写进 Recover 行——想找回原文时直接 travel 过去。
+
+合格标准是一个不知道前情的新 agent 能仅靠 handoff 和其中的指针继续工作。
 
 ## 上下文仪表
 
-非 ACM 工具结果会按整数压力变化显示简短仪表：
+非 ACM 工具结果末尾会带一行仪表：
 
 ```text
-[ctx 41% budget · 12% window]
+[ctx 41% budget · 12% window · boundary · 2pts · fold@turn→24%/38 · fold@task→11%/92]
 ```
 
-工作预算取模型窗口与 400K 的较小值；仪表只报告压力，不替 agent 作判断。设置 `ACM_GAUGE_DISABLED=1` 可关闭。
+依次是：注意力预算占用（预算 = 模型窗口和 400K 取小）、物理窗口占用、`boundary` 标记（每个新请求的首次读数）、路径上的存档数，以及两根折叠针——折到上一段开头 / 折到最早存档点，各自显示折后压力和会折掉的消息数。整数位变了才显示，每个新请求的首次读数必显示。
+
+它只报数，从不建议做什么——什么时候整理，是 agent 自己的判断。设 `ACM_GAUGE_DISABLED=1` 可以关掉。
 
 ## 安装
 
@@ -78,7 +84,7 @@ omp install .
 - `@oh-my-pi/pi-coding-agent`
 - `@oh-my-pi/pi-tui`
 
-工具参数使用 OMP 注入的 `pi.zod` 严格 schema；Pi-only prompt metadata 被等价注入 `before_agent_start.systemPrompt`；Pi 的 `agent_settled` 语义映射到 OMP 原生 `session_stop`。
+工具参数使用 OMP 注入的 `pi.zod` 严格 schema；Pi-only prompt metadata（promptSnippet/promptGuidelines）等价注入 `before_agent_start.systemPrompt`；Pi 的 `agent_settled` 语义映射到 OMP 原生 `session_stop`。
 
 ## 开发与验证
 
@@ -87,10 +93,10 @@ bun install --frozen-lockfile
 bun run verify:acm
 ```
 
-完整 gate 包含 guidance 一致性、根测试、TypeScript 类型检查，以及真实 OMP 17.1.5 host fixture。架构与维护契约见 [`AGENTS.md`](AGENTS.md)，判断语义正典见 [`docs/acm-judgment-contract.md`](docs/acm-judgment-contract.md)。
+完整 gate 包含 guidance 一致性、根测试、TypeScript 类型检查，以及真实 OMP 17.1.5 host fixture。架构、host 兼容性契约、文案宪法与维护规则见 [`AGENTS.md`](AGENTS.md)。
 
 ## 来源
 
-本项目将 [`KorenKrita/pi-context`](https://github.com/KorenKrita/pi-context) 的 ACM 行为移植到 OMP，并针对 OMP 生命周期、schema、rendering、Skills prompt 和 session API 做宿主适配。
+本项目将 [`KorenKrita/pi-context`](https://github.com/KorenKrita/pi-context) 的 ACM 行为移植到 OMP，并针对 OMP 生命周期、schema、rendering 和 session API 做宿主适配。
 
 MIT License

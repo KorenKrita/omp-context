@@ -31,7 +31,6 @@ import {
 } from "./entry-resolution.js";
 import { findContainingAssistantToolBatch, type ToolProtocolDefect, type ToolProtocolRepair } from "./tool-protocol.js";
 import { GUIDANCE_CUES, RECOVERY_GUIDANCE, TOOL_DESCRIPTIONS } from "./generated-guidance.js";
-import { withAvailableAdvancedGuidance } from "./advanced-guidance.js";
 
 interface SkippedCheckpointAnchor {
   id: string;
@@ -55,10 +54,10 @@ interface AutomaticCheckpointAnchor {
 export function registerCheckpointTool(pi: ExtensionAPI): void {
   const schema = pi.zod.object({
     name: pi.zod.string().min(1).regex(/^[A-Za-z0-9._-]+$/).describe(
-      "Semantic save-point name; unique and case-sensitive across the session tree ('root' is reserved). Name the state a future search should find, e.g. payments-retry-baseline. Suffixes are naming convention only; they never classify workflow state.",
+      "Semantic name a future search should find, e.g. parser-fix-baseline or p99-before-db-scan. Unique in this session; 'root' is reserved.",
     ),
     target: pi.zod.string().min(1).describe(
-      "History node ID or checkpoint name to label. Omit to anchor on the latest protocol-complete leaf before this call; pass an explicit target only to label a deliberately chosen older node.",
+      "Node ID or existing checkpoint name to label. Omit to mark the current position (recommended).",
     ).optional(),
   }).strict();
 
@@ -254,7 +253,7 @@ export function registerCheckpointTool(pi: ExtensionAPI): void {
           return {
             content: [{
               type: "text" as const,
-              text: `Checkpoint '${params.name}' already belongs to ${conflict.entryId} (${conflict.onActivePath ? "on-path" : "off-path"}). ${withAvailableAdvancedGuidance(pi, RECOVERY_GUIDANCE.nameCollision, GUIDANCE_CUES.advancedTargetPointer)}`,
+              text: `Checkpoint '${params.name}' already belongs to ${conflict.entryId} (${conflict.onActivePath ? "on-path" : "off-path"}). ${RECOVERY_GUIDANCE.nameCollision}`,
             }],
             details: {
               error: "duplicate_name",
@@ -271,7 +270,7 @@ export function registerCheckpointTool(pi: ExtensionAPI): void {
           return {
             content: [{
               type: "text" as const,
-              text: `Entry ${displaced.targetId} already carries checkpoint '${displaced.existingLabel}'; writing '${params.name}' would replace it, because the host keeps one label per entry. No label was written. Reuse '${displaced.existingLabel}' as the recovery pointer, or checkpoint a different node. ${withAvailableAdvancedGuidance(pi, RECOVERY_GUIDANCE.nameCollision, GUIDANCE_CUES.advancedTargetPointer)}`,
+              text: `Entry ${displaced.targetId} already carries checkpoint '${displaced.existingLabel}'; writing '${params.name}' would replace it, because the host keeps one label per entry. No label was written. Reuse '${displaced.existingLabel}' as the recovery pointer, or checkpoint a different node. ${RECOVERY_GUIDANCE.nameCollision}`,
             }],
             details: {
               error: "label_displaces_existing",

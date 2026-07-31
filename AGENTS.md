@@ -1,102 +1,164 @@
-# AGENTS.md — omp-context 维护契约
+# AGENTS.md — omp-context 项目知识库
 
-## 项目定位
+## 概述
 
-`omp-context` 将 `KorenKrita/pi-context` 的 Agentic Context Management 行为移植到 OMP。它提供三个工具：
+**omp-context** 是 [pi-context (KorenKrita)](https://github.com/KorenKrita/pi-context) 的 OMP 移植版，由 KorenKrita 独立维护。它为 OMP agent 提供主动上下文管理能力，暴露三个 ACM 工具：
 
-- `acm_checkpoint`：追加可恢复的语义 label。
-- `acm_timeline`：观察 active/checkpoints/search/tree 证据与 context HUD。
-- `acm_travel`：通过七字段 handoff 执行 fold、rebase 或 rehydrate。
+| 工具 | 作用 |
+|---|---|
+| `acm_checkpoint` | 给会话历史节点追加语义 save point（label alias） |
+| `acm_timeline` | active / checkpoints / search / tree 单一视图与 HUD |
+| `acm_travel` | fold：回到较早节点，把之后的历史替换为七行 handoff |
 
-判断语义的唯一正典是 `skills/context-management/CORE.md`、`TOOL-CONTRACTS.md` 与按需加载的 advanced Skill references。`src/generated-guidance.ts` 必须由 `bun scripts/generate-guidance.mjs` 生成，不手改。
+设计立场（2026-07-31 affirmative-guidance 重构后，与 pi-context main 同步）：**代码层厚，注入层薄，文案全部正向肯定**。运行时正确性（事务、回滚、协议校验、settled sync）由代码和测试保证；给模型的引导只有恒定面，无 Skill、无流程机器、无阈值措辞。
 
-## 精确宿主契约
+### 重构的实证依据
 
-当前唯一支持的 OMP 版本是 **17.1.5**。根 package、peer dependencies、host fixture 与 lockfile 必须保持精确一致：
+pi-context 的 boundary ledger 记录了 202 个真实 user-request boundary、0 次真实 fold（2026-07-27 至 07-30，doctrine 时期文案）；有 session 到 68% budget、561 条 entry 仍零调用。归因：判断门槛叠加（extraction bar + cold start + 否定式警告）、七字段全必填的 schema 摩擦、skill 层自我驱逐。本次重构以「LLM 遵循肯定指令远好于否定指令」为文案第一原则，转化率由修复后的 ledger 持续观测。
 
-- `@oh-my-pi/pi-agent-core`
-- `@oh-my-pi/pi-ai`
-- `@oh-my-pi/pi-coding-agent`
-- `@oh-my-pi/pi-tui`
+## 模型可见文案的宪法
 
-版本升级必须通过 `scripts/precommit-host-contract.mjs` 的隔离 promotion，再更新契约。不要引入 `@earendil-works/*` 或 Pi-only API。
+1. **正向肯定**：指令一律写"做什么"，不写"不要做什么"。幸存的禁止句必须是真实安全边界（如 travel 单独成批）。示例可以展示失败形态（定义 "vague"），指令不可以。登记在案的禁止句例外：continuation replay fence（`context-packet.ts` 投影的 continuation 中恰好一条 "Do not execute or repeat an earlier request…"，防 travel 后 phantom replay——ledger 证据只覆盖 travel 前的 fold 压制，不外推到 travel 后围栏；`test/guidance-quality.test.ts` 以渲染级测试锁定"恰好一条"）。
+2. **感知面只报事实**：gauge 承载数字 + 恒定结构标记（`boundary`、`Npts`、双折叠针带消息数），零措辞、零阈值、零选时机。带判断的文字只住在 CORE。
+3. **一个事实一层**：CORE=判断（何时/为何），tool description=机制（怎么用+一个关键事实），参数 description=纯机制，system-prompt cues=一行场景钩子与触发词，result cue=状态转移+下一步，recovery=具体恢复动作。例外必须显式声明（现有：回程票三层各司其职、file-backup 消歧三处、target 选择规则两处）。
+4. **上下文过去 ≠ 文件过去**：任何文案不得暗示 checkpoint/travel 能撤销命令或恢复文件。
+5. **不折也是完整判断**：boundary 标记不是折叠命令；"Vague → continue" 与 "Concrete → fold" 同等合法。fold test（"能否不回读就写出具体 handoff"）是唯一判断标准，不得引入第二道门（cold-start 证明、任务完成度、阈值）。
+6. **词汇封闭**：任何 runtime 输出（HUD、receipt、warning）中的术语必须被文案面之一教过。已退役词汇（rebase、rehydrate、sediment、thrash、extraction bar、cold start、hot set）不得回到模型可见字符串；`test/guidance-quality.test.ts` 的 negative locks 锁死这一条。
+
+文案面：CORE、tool descriptions、参数 descriptions、result cues、system-prompt cues（经 `before_agent_start.systemPrompt` 注入的 snippet/guideline 等价物）、recovery 文案、TREE_SUMMARY_INSTRUCTIONS、gauge 后缀。另有 runtime 动态文本（HUD 行、receipt、动态 warning），同样受宪法约束。
+
+## 技术栈与版本契约
+
+- TypeScript ESM，source-first：OMP 直接加载 `src/*.ts`，生产不依赖 `dist/`
+- 四个 `@oh-my-pi/*` peer/dev dependency 精确固定 **`17.1.5`**（含 `test/host-fixture/`），不要改成 range；版本升级必须通过 `scripts/precommit-host-contract.mjs` 的隔离 promotion
+- **不引入** `@earendil-works/*` 或 Pi-only API
+- **不使用** constrainedSampling 类机制：handoff wire schema 的四个可选字段与 OpenAI strict 模式（全 properties 进 required）不兼容
 
 ## OMP API 映射
 
 - Extension 类型：`@oh-my-pi/pi-coding-agent/extensibility/extensions/types`。
-- Session entries/tree：`@oh-my-pi/pi-coding-agent/session/session-entries`。
-- Session manager：`@oh-my-pi/pi-coding-agent/session/session-manager`。
-- Agent messages：`@oh-my-pi/pi-agent-core/types`。
-- TUI：`@oh-my-pi/pi-tui`。
-- Tool schema：只使用宿主注入的 `pi.zod`，顶层 object 必须 `.strict()`。
+- Session entries/tree：`@oh-my-pi/pi-coding-agent/session/session-entries`；session manager：`.../session/session-manager`。
+- Agent messages：`@oh-my-pi/pi-agent-core/types`。TUI：`@oh-my-pi/pi-tui`。
+- Tool schema：只使用宿主注入的 `pi.zod`，顶层 object 必须 `.strict()`。handoff 三必填四可选：必填 `.min(1)`，可选 `.optional()`；共享描述字符串住在 `handoff.ts` 的 `HANDOFF_FIELD_DESCRIPTIONS`（纯数据，无 runtime zod import）。
 - OMP tool renderer 签名是 `renderCall(args, options, theme)` 与 `renderResult(result, options, theme, args?)`；返回普通 `Text`。
-- OMP 没有 Pi 的 `promptSnippet`、`promptGuidelines`、`renderShell` 或 `constrainedSampling`。短 tool cues 经 `before_agent_start.systemPrompt: string[]` 幂等注入。
+- OMP 没有 Pi 的 `promptSnippet`、`promptGuidelines`、`renderShell`。短 tool cues 经 `before_agent_start.systemPrompt: string[]` 幂等注入。
+- OMP 没有 `model_select` 事件。每次 gauge 观测调用 `runtime.syncUsageModel(session, currentModelIdentity(ctx))`，换模型时丢弃跨模型的 cached provider usage。
 - OMP 没有 `agent_settled`。native context replacement 的等价边界是 `session_stop`，且必须通过 `ctx.isIdle()` 与 `ctx.hasPendingMessages()` 防止 queued continuation/retry 竞态。
-- OMP `session_stop` 先于 notification-only `agent_end`，handler 返回 continuation 时宿主排入隐藏下一轮；ACM settlement handler本身不请求 continuation。
-- OMP `session_before_tree` 只能取消或直接提供完整 summary，不能覆盖 summarizer prompt。保留 OMP 原生 tree summarization，不伪造等价能力。
-- `SlashCommandInfo` 的来源路径字段是 `.path`。
-- `BranchSummaryEntry` 的扩展来源字段是 `.fromExtension`。
+- OMP `session_stop` 先于 notification-only `agent_end`；ACM settlement handler 本身不请求 continuation。
+- OMP `session_before_tree` 只能取消或直接提供完整 summary，不能覆盖 summarizer prompt。omp-context 不注入 `TREE_SUMMARY_INSTRUCTIONS`（generated-guidance 仍导出它以保持生成物一致）；保留 OMP 原生 tree summarization，不伪造等价能力。
+- OMP 的 overflow retry 证据在 `auto_compaction_end`（Pi 在 `session_compact`）；tail 修复（prune non-continuable trailing assistant）挂在该事件。
+- OMP 的 session manager 在 packet rebuild 时**宿主侧规范化**协议缺陷（剥离 unfinished tool call、去重 duplicate tool-call id），因此 Pi 侧的 `current_protocol_invalid` / `backup_protocol_incomplete` 拒绝路径在 OMP 上通常观测为 complete/normalized——host fixture 的对应测试按此语义断言。
+- `SlashCommandInfo` 的来源路径字段是 `.path`；`BranchSummaryEntry` 的扩展来源字段是 `.fromExtension`（Pi 是 `.fromHook`）。
 
-## 架构边界
+## 架构
 
-- `host-bridge.ts` 是 SessionManager mutation 与 context reconstruction 的唯一宿主 seam。
-- `live-agent-session-adapter.ts` 只做 capability-probed native message replacement，不拥有树 mutation。
-- `context-packet.ts` 是 provider continuation authority；必须保持 tool-call/result protocol valid。
-- finalized `acm_travel` receipt 之前不得 provider cutover；matching non-error、`mutationStatus: applied`、structured-v1 receipt 才授权。
-- native AgentSession replacement 与 provider packet delivery是两个独立状态；前者失败不能回滚已经核验的持久 travel。
-- raw archive alias 只用于 restore/rehydrate，不作为 fold/rebase base。
-- 每次 mutation 返回 `applied`、`not_applied` 或 `indeterminate`，未知结果不得降格为成功。
+`src/index.ts` 是 composition root：创建 `AcmSessionRuntime`、注册 canonical prompt injection、三个工具、lifecycle handlers。
 
-## Handoff 与恢复
+| 路径 | 责任 |
+|---|---|
+| `src/checkpoint-tool.ts` | checkpoint schema、自动 protocol-complete 锚定、fold 投影回执 |
+| `src/timeline-tool.ts` | strict single-view timeline、HUD、投影收益 |
+| `src/travel-tool.ts` | handoff 验证、自动回程票、travel evidence、settled sync 调度 |
+| `src/handoff.ts` | 三必填四可选 wire schema、"none" 缺省、canonical 七行文本、`deriveReturnTicketName` |
+| `src/context-packet.ts` | LLM-bound packet 重建、tool protocol normalization、ACM continuation 投影 |
+| `src/travel-coordinator.ts` | backup → branch → verify → compensate 单次事务 |
+| `src/host-bridge.ts` | readonly SessionManager 到 mutation capability 的唯一 guarded seam |
+| `src/runtime.ts` | 按 SessionManager 隔离 usage、refresh、gauge state（含 boundary 追踪）、ledger state、settled sync、`syncUsageModel` |
+| `src/runtime-lifecycle.ts` | context rebuild、gauge 装配（boundary/savePoints/双针）、settled sync、overflow-retry 修复、cleanup |
+| `src/context-gauge.ts` | 仪表格式化、里程表节奏、boundary 强制首读 |
+| `src/context-pressure.ts` | working-budget pressure（400K cap policy） |
+| `src/fold-estimate.ts` | 双折叠针投影（剩余压力 + 消息数），计入 handoff 名义成本 |
+| `src/boundary-ledger.ts` | 被动 append-only 观测（boundary/fold 行，fold 区分 direction） |
+| `src/live-agent-session-adapter.ts` | capability-probed live sync 与 settled-boundary replacement |
+| `src/generated-guidance.ts` | 生成产物，不要手改 |
 
-结构化 handoff 固定为 `goal/state/evidence/external/exclusions/recover/next`。`goal`、`state`、`next` 不允许空或 `none`；其余字段无内容时写 `none`。兼容 fallback 只接受能精确解析为该对象的 JSON string。
+### Guidance 管道
 
-Travel 只改变会话树和后续上下文，不触碰文件、进程、Git 或远端系统。发生 live replacement、provider rebuild 或 rollback 不确定性时，保留持久 branch 和 recovery pointer，并用 `ctx.ui.notify()` 提供可执行上下文。
-
-## Context gauge
-
-Gauge 使用模型窗口与 400K 的较小值作为 working budget。非 ACM、非错误 tool result 只在整数压力变化时显示；`ACM_GAUGE_DISABLED=1` 时完全禁用。Provider cutover 后优先使用实际 provider `turn_end` usage，不能让 origin-run native usage 覆盖新 epoch。
-
-针可以报状态，也可以报收益：`% budget` / `% window` 是压力，`fold@turn→X%` / `fold@task→Y%` 是在最近与最早结构参照点折叠后的投影压力（同一 working-budget 口径，`Math.floor`）。四者同为 measurement：回答「折了能省多少」而不回答「是否该折」（**Preview measures; boundary decides**，资格线在 CORE）。合宪标准是三条：不携带动词或评价、不选择出现时机（无下限无档位）、缺参照点时省略而非编造零。收益针恢复自 upstream `7c3bdff7`（2026-07-12）架构拆分中静默丢失的 fold preview——那次只有空白 commit body，随后六次 guidance 修订都在用措辞补偿一个缺失的数字。`test/fold-visibility.test.ts` 是机制清单，任何再次搬走收益针的重构必须让它变红。
-
-参照点语义：`fold@turn` 跳过当前用户轮，取它之前最近的 boundary/label；`fold@task` 取最早的。这是值域选择不是精度选择——fold 只能塌尾巴不能塌中段，「折掉上一段的过程」的 target 必然落在上一个 user boundary；tip-first 取最近 boundary 会在新请求刚到时指向本轮开头，让教义点名的候选位置报出近零收益。跳过无条件，按「产出足够多」前移会让数字决定参照点。收益针计入折叠追加的 handoff 名义成本（`NOMINAL_HANDOFF_TOKENS`），与 `estimateUsageAtTravelTarget` 对齐；不计入会承诺 travel 交付不了的收益。
-
-零距离折叠（FM-15：打点后立刻以该点为 target）在 travel mutation 之前按**结构**拒绝：若替换范围内全部是 ACM 自身的 label 记账条目，则拒绝并说明 target precedes nothing。不按距离也不按投影数字拒绝——前者误伤「打点→批量读取→折回点」这类短距离高收益用法，后者让数字越权决定。
-
-## Boundary ledger
-
-请求边界处的漏折在仓库内不可观测：一个从不折叠的 session 同样从不调用 `acm_timeline`，所以任何呈现面恰好在失效发生处不可见。观测必须被动，否则 n 永不增长。退役的评测装置回答不了这个问题——它构造场景且前提被校准反复推翻；缺的不是场景，是计数。
-
-`src/boundary-ledger.ts` 是一个 append-only writer，默认开启：每个不同的 user-request boundary 一行、每次 applied travel 一行，落在 `<agent-dir>/state/acm-boundary-ledger.jsonl`。它合宪的理由与仪表相同：不注入、不选时机、不渲染。
-
-- **只记计数与百分比**，绝不记消息内容；测试用 allowlist 断言字段集，任何携带文本的新字段必须让它变红；
-- 百分比取 `Math.floor`，与仪表渲染的读数一致；不可用值记 `null` 而非 0；
-- boundary 按 entry id 去重——同一 boundary 会在该轮每个 tool result 上被观测到，按观测计数就变成了统计工具活动而非请求结构；
-- **写失败一律吞掉**，硬要求：账本不许成为新的失败面。`appendLedgerRow` 永不抛出，返回值只作诊断；
-- 无读取路径、无查询层、无轮换，只有 `MAX_LEDGER_BYTES` 上限；超限即停写；
-- `ACM_LEDGER_DISABLED=1` 完全静默，按调用时读取；`test/setup.ts` 通过 bunfig preload 在测试期强制禁用——fixture 的合成压力会污染账本存在的意义。
-
-## 测试契约
-
-旧 OMP 30/50/70 nudge 测试已被最新 pi-context 行为测试替换。非平凡分支、协议修复、mutation recovery 和生命周期竞态必须有 runnable coverage。
-
-完整验证：
+`skills/context-management/CORE.md`（道+度）与 `TOOL-CONTRACTS.md`（术）是唯一文案来源（与 pi-context main 逐字符同步，仅 `TOOL-CONTRACTS.md` 中 hostCapability recovery 的 "Pi version" → "OMP version" 一处差异）；改完必须跑：
 
 ```bash
-bun run verify:acm
+bun run generate:guidance
 ```
 
-该 gate 必须依次覆盖：
+CI 用 `--check` 校验一致性。没有 SKILL.md、没有 references/、没有 advanced routing——skill 层已整体删除（2026-07-31），不要恢复。
 
-1. generated guidance 与 exact host version 契约；
-2. 根测试套件；
-3. production TypeScript typecheck；
-4. `test/host-fixture` 在真实 OMP 17.1.5 上的 source build 与 host tests。
+## 核心机制契约
 
-Host fixture 至少覆盖 strict schema、CORE/tool-cue prompt 注入、OMP Skills prompt、automatic checkpoint anchor、current/target protocol validation、finalized receipt ordering、provider cutover、idle `session_stop` native replacement、replacement failure recovery、cache fallback/exhaustion、repeat travel、off-path restore、resume 与 SessionManager 隔离。
+### Handoff（三必填四可选）
+
+wire 上 `goal/state/next` 必填；`evidence/external/exclusions/recover` 可选，缺省或显式空串补 `"none"`。持久化文本始终渲染七行 `Goal:/State:/Evidence:/External:/Exclusions:/Recover:/NEXT:`（解析锚点，保持英文）。必填字段不接受 "none"。unexpected field 仍是 defect。兼容 fallback 只接受能精确解析为该对象的 JSON string。
+
+### 自动回程票
+
+每次 travel 都给 pre-travel head 记 archive alias，写入 handoff 的 Recover 行（`Raw archive: <name>`）：
+
+- 名字来源优先级：`backupCurrentHeadAs` 显式覆盖 → head 已有 label 复用（不 displace）→ `deriveReturnTicketName(goal)`（slug + 序号防撞）
+- 锚定规则与 checkpoint 自动锚定一致：从 pre-travel head 向后走，跳过需要 repair 的 entry，取最新 protocol-complete entry，窗口 `ANCHOR_SEARCH_WINDOW`；OMP 宿主规范化让多数 stretch 直接 protocol-complete
+- 找不到 protocol-complete prefix 时 travel 整体 abort（`no_protocol_complete_backup_target`）
+- receipt 的 `backupCurrentHeadAs` details 字段始终报告解析后的实际名字
+
+### Gauge
+
+形态：`[ctx 43% budget · 17% window · boundary · 3pts · fold@turn→24%/38 · fold@task→11%/92]`
+
+- `policy === "400k-cap"` 时 budget+window 双针，否则仅 window
+- `boundary`：每个 user request 的首个 gauge reading 上出现的恒定结构标记
+- `Npts`：active path 上的 save point 数
+- 双折叠针：剩余压力% + 折掉的消息数；参照点不存在时省略该针
+- 节奏：整数位变化即显示（双向）+ **每个 request 首读强制显示**（boundary entry id 变化触发）
+- 重置点：明确成功的 travel、model change（`syncUsageModel`）、manual tree navigation、session start
+- 豁免：`acm_*` 结果与 error 结果永不装饰
+- provider-active 阶段 pressure 只采用最近 provider `turn_end` usage；origin-run native usage 不得覆盖新 epoch
+- kill switch：`ACM_GAUGE_DISABLED=1`，按调用时读取
+
+### Travel 事务与 settled sync
+
+顺序：解析 target → 验证 handoff → 解析回程票 → prevalidate → coordinator（backup label + rollback token → `branchWithSummary` → verify → compensate）→ schedule persistent refresh 与 settled ticket。
+
+- mutation outcome 三态：`applied` / `not_applied` / `indeterminate`；`indeterminate` 只 schedule observation refresh
+- idle `session_stop`（`ctx.isIdle() && !ctx.hasPendingMessages()`）是 native replacement 的唯一 apply boundary；notification-only `agent_end` 不是
+- finalized error receipt 取消 provider cutover 与 native ticket
+- persistent rebuild 最多 3 次，之后 `cached_exhausted`
+- travel 只改会话上下文，不回滚文件/进程/外部系统
+- FM-15 结构性拒绝保留：替换范围内全部是 ACM label 记账条目时拒绝 zero-distance travel，按结构不按数字
+- overflow-retry 尾部修复挂 `auto_compaction_end`（prune non-continuable trailing assistant）
+
+### Boundary ledger
+
+被动 append-only 观测：每个不同 user boundary 一行、每次 applied travel 一行（`direction: "fold" | "restore"`，按 messageDelta 符号区分）。ledger state 住在 runtime（按 SessionManager 隔离），fold 行与 boundary 行共享 session discriminator 以保持 joinable。只记计数与百分比，绝不记内容；写失败一律吞掉；`MAX_LEDGER_BYTES` 上限；`ACM_LEDGER_DISABLED=1` 静默。测试经 `test/setup.ts` bunfig preload 与 fixture `ledger-guard.ts` 强制禁用。
+
+**核心观测指标**：跨 40% budget 的真实 session 中出现 ≥1 次 fold 的比例。
+
+### Checkpoint 契约
+
+- 默认 target 是本次调用前最新的 protocol-complete active-branch leaf；紧邻 prefix 需 repair 时向前找，窗口内找不到则不写 label
+- alias 大小写敏感全树唯一；同一 entry 可多 alias（journal 重放实现，host 每 entry 只存一个 label）；`root` 保留
+- 显式 node ID 可指向任意 entry；非 USER/AI target 产生 warning
+
+### Timeline 契约
+
+strict `view` discriminator：`active`（默认）/ `checkpoints` / `search` / `tree`。HUD 报告 usage、pressure、handoff layers（模型可见术语；details 键仍为 `activeSummaryDepth`）、fold projection、sync state——只报事实，不含判断行。checkpoints 视图列出投影收益并标注 `[raw archive]`。每次调用受 context-derived entry/character budget 约束。每次 timeline/gauge 观测同步 model identity（无 `model_select` 事件的补偿）。
+
+## 测试与验证
+
+测试哲学：少而狠的行为契约测试。每个测试锁一个用户可见行为或安全边界；不锁实现字符串镜像；pass 数不是质量指标。`test/guidance-quality.test.ts` 锁重构的核心赌注（三必填、fold test 唯一性、boundary 合法双向、negative locks）。
+
+```bash
+bun test                  # 全部单元测试
+bun run typecheck         # tsc --noEmit
+bun run generate:guidance # 从 canonical 源重新生成
+bun run verify:acm        # 完整 gate：guidance check + 测试 + typecheck + host fixture
+```
+
+host fixture（`test/host-fixture/`）在真实 OMP 17.1.5 上验证宿主契约：exact version、CORE 注入、strict schema 三必填、自动回程票锚定（含 OMP 宿主规范化语义）、travel/settled sync 全链路、multi-session 隔离。独立 lockfile 和构建（`bun ./build-source.mjs`），根目录 `bun test` 不含它。
 
 ## 文档与实现决策
 
 宿主差异、无法等价映射的能力和选择理由写入 `implementation-notes.html`，标记 `agent-resolved` 或 `user-decided`。不要把 Pi 的宿主细节写成 OMP 当前事实。
 
-不使用 `console.log`；用户可见 warning 使用 `ctx.ui.notify()`。
+不使用 `console.log`；用户可见 warning 用 `ctx.ui.notify()`。
+
+## Git
+
+- 提交身份：`KorenKrita <KorenKrita@gmail.com>`（repo-local）
+- doctrine 时期的完整教义与 30/50/70 nudge 装置保留在 git 历史
