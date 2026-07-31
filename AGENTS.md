@@ -158,6 +158,15 @@ host fixture（`test/host-fixture/`）在真实 OMP 17.2.1 上验证宿主契约
 
 不使用 `console.log`；用户可见 warning 用 `ctx.ui.notify()`。
 
+## 发布：版本号必须 bump（容易漏，每次检查）
+
+**OMP marketplace 靠版本号识别更新：版本不变，已安装用户永远收不到新代码。** 任何改动行为的推送（src、canonical 文案、guidance、宿主契约）都必须在同一批提交里 bump 版本，两处同步改：
+
+1. `package.json` 的 `version`
+2. `.omp-plugin/marketplace.json` 的两处 `version`（metadata 与 plugin 条目）
+
+`scripts/package-contract.test.mjs` 强制两处一致（`verify:acm` 覆盖），但**它只查一致性，不查"是否忘了 bump"**——版本原地不动照样全绿。所以推送前自查：`git log <上个 release tag/commit>..HEAD` 里有行为改动而版本没动，就是漏了。breaking（`feat!`/`chore!` 宿主升级）bump minor，其余 bump patch。
+
 ## Git
 
 - 提交身份：`KorenKrita <KorenKrita@gmail.com>`（repo-local）
