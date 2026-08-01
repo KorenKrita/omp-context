@@ -917,6 +917,75 @@ describe("successful travel synchronizes a capability-compatible live AgentSessi
     expect(ticketName!.endsWith("-raw")).toBe(true);
   });
 
+  test("a mid-span stale orphan result folds with a repaired ticket that restores end to end", async () => {
+    // Field-failure shape on the exact OMP host. OMP's projection strips a
+    // bare dangling toolCall (unlike Pi), so the persistent damage here is
+    // the stale orphan result an interrupted run left behind: every ticket
+    // candidate after it rebuilds as "repaired" (removed_orphan_result).
+    // The two-tier fallback anchors on the newest one, the receipt names the
+    // repair evidence, and the archive is genuinely restorable — the closing
+    // loop travels back to the ticket and rebuilds a lawful packet
+    // containing the post-damage work.
+    const sessionManager = SessionManager.inMemory();
+    const rootId = sessionManager.appendMessage({ role: "user", content: "start the task", timestamp: Date.now() });
+    sessionManager.appendMessage({
+      role: "toolResult",
+      toolCallId: "mid-span-never-issued",
+      toolName: "bash",
+      content: [{ type: "text", text: "stale interrupted result" }],
+      isError: true,
+      timestamp: Date.now(),
+    });
+    const laterWorkId = sessionManager.appendMessage({ role: "user", content: "post-damage work detail", timestamp: Date.now() });
+    sessionManager.appendMessage(travelToolCall());
+    const { context, travelTool } = createExtensionFixture(sessionManager);
+
+    const result = await travelTool.execute(
+      TOOL_CALL_ID,
+      { target: rootId, handoff: HANDOFF, backupCurrentHeadAs: "damaged-span-archive" },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(result.details?.error).toBeUndefined();
+    expect(result.details).toMatchObject({
+      mutationStatus: "applied",
+      backupProtocolStatus: "repaired",
+      backupEntryId: laterWorkId,
+      backupCurrentHeadAs: "damaged-span-archive",
+    });
+    // The receipt names why the anchor is repaired, not just that it is:
+    // the stale orphan result is the load-bearing evidence on this host.
+    const repairs = (result.details as { backupProtocolRepairs?: Array<{ kind: string; toolCallId?: string }> }).backupProtocolRepairs;
+    expect(Array.isArray(repairs)).toBe(true);
+    expect(repairs!.some((repair) => repair.kind === "removed_orphan_result" && repair.toolCallId === "mid-span-never-issued")).toBe(true);
+    // Strictly after the target: the archive covers the post-damage work.
+    const ticketBranch = sessionManager.getBranch(laterWorkId as string);
+    expect(ticketBranch.some((entry) => entry.id === rootId)).toBe(true);
+
+    // Close the loop: restore by traveling to the archive alias. The restore
+    // must apply and rebuild a lawful packet that contains the post-damage
+    // work the fold had removed — repaired anchors are real archives.
+    sessionManager.appendMessage(travelToolCall("restore-damaged-span"));
+    const restore = await travelTool.execute(
+      "restore-damaged-span",
+      { target: "damaged-span-archive", handoff: HANDOFF },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(restore.details?.error).toBeUndefined();
+    expect(restore.details).toMatchObject({ mutationStatus: "applied" });
+    const restored = rebuildAcmContextPacket(sessionManager);
+    expect(restored.ok).toBe(true);
+    if (!restored.ok) throw new Error("restored packet failed to rebuild");
+    // Lawful means deliverable: the restored packet carries the same
+    // deterministic repairs, never an invalid protocol.
+    expect(restored.value.protocol.status).toBe("repaired");
+    expect(JSON.stringify(restored.value.messages)).toContain("post-damage work detail");
+  });
+
   test("rejects duplicate tool-call ids in the current packet before raw backup resolution", async () => {
     const sessionManager = SessionManager.inMemory();
     const rootId = sessionManager.appendMessage({ role: "user", content: "inspect two files", timestamp: Date.now() });

@@ -425,6 +425,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
       let backupResolvedFromHead: string | undefined;
       let backupPrevalidation: CheckpointLabelPrevalidation | undefined;
       let backupProtocolNormalizations: typeof currentPacket.protocol.normalizations = [];
+      let backupProtocolRepairs: typeof currentPacket.protocol.repairs = [];
       // Every fold records a return ticket: the pre-travel head is always
       // labeled, with the explicit name when supplied, the head's existing
       // label when one is already there, or a name derived from the goal.
@@ -436,8 +437,8 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
           };
         }
         // Same anchoring rule as acm_checkpoint's automatic placement: walk
-        // backward for the latest protocol-complete entry, skipping candidates
-        // that would need repair, bounded by the shared search window.
+        // backward for the latest protocol-complete entry, bounded by the
+        // shared search window.
         //
         // On-path folds have a hard lower bound: the ticket must sit strictly
         // after the travel target, inside the replaced range. A ticket at or
@@ -445,36 +446,72 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
         // — advertising it as a raw archive would be a lie. Off-path travel
         // replaces the whole current spine, so every entry on it qualifies.
         //
-        // When the target packet is itself "repaired" — damage in the
-        // surviving prefix, already accepted with explicit warnings — every
-        // candidate after it inherits that repair, so "complete" is
-        // unreachable by construction. A repaired candidate is then
-        // acceptable: the archive carries exactly the damage the fold
-        // already acknowledged, and the receipt records the real status.
+        // Two-tier fallback, aligned with the invalid-only hard floor from
+        // travel-target-facts: "repaired" is deterministic normalization
+        // evidence, not damage — the raw entries stay untouched and restore
+        // rebuilds a lawful packet with the same repairs. A single mid-span
+        // provider-error tool call would otherwise poison every candidate
+        // after it and permanently block folding toward any clean earlier
+        // target. Prefer the latest complete candidate; fall back to the
+        // latest rebuildable repaired one; hard-fail only when nothing in
+        // the replaced range can rebuild at all.
+        //
+        // When the target packet is itself "repaired", a repaired candidate
+        // is accepted immediately (not as a fallback): the archive carries
+        // exactly the damage the fold already acknowledged, and this keeps
+        // ticket placement byte-identical to the pre-fallback behavior on
+        // every previously-succeeding path.
         const targetProtocolStatus = targetPacketResult.value.protocol.status;
+        let repairedFallback: { entryId: string; repairs: typeof currentPacket.protocol.repairs; normalizations: typeof currentPacket.protocol.normalizations } | undefined;
+        let scanAborted = false;
         const lowestIndex = resolved.fromOffPath ? 0 : targetBranch.length;
         const startIndex = (containingBatch?.entryIndex ?? branch.length) - 1;
         for (let index = startIndex, inspected = 0; index >= lowestIndex && inspected < ANCHOR_SEARCH_WINDOW; index--, inspected++) {
-          if (signal?.aborted) break;
+          if (signal?.aborted) {
+            scanAborted = true;
+            break;
+          }
           const candidate = branch[index]!;
           const packet = rebuildAcmContextPacket(sessionManager, candidate.id);
           if (!packet.ok) continue;
           const status = packet.value.protocol.status;
-          if (status !== "complete" && !(status === "repaired" && targetProtocolStatus === "repaired")) continue;
+          if (status !== "complete" && !(status === "repaired" && targetProtocolStatus === "repaired")) {
+            if (status === "repaired" && repairedFallback === undefined) {
+              repairedFallback = {
+                entryId: candidate.id,
+                repairs: packet.value.protocol.repairs,
+                normalizations: packet.value.protocol.normalizations,
+              };
+            }
+            continue;
+          }
           backupProtocolStatus = status;
+          backupProtocolRepairs = packet.value.protocol.repairs;
           backupProtocolNormalizations = packet.value.protocol.normalizations;
           backupEntryId = candidate.id;
           break;
         }
+        if (scanAborted) {
+          return {
+            content: [{ type: "text" as const, text: "acm_travel aborted during backup target resolution." }],
+            details: { error: "aborted", target: params.target, targetId },
+          };
+        }
+        if (!backupEntryId && repairedFallback) {
+          backupProtocolStatus = "repaired";
+          backupProtocolRepairs = repairedFallback.repairs;
+          backupProtocolNormalizations = repairedFallback.normalizations;
+          backupEntryId = repairedFallback.entryId;
+        }
         if (!backupEntryId) {
           return {
-            content: [{ type: "text" as const, text: "Error: the return ticket could not be placed — no protocol-complete entry exists in the history this travel would replace. Finish or explicitly recover the interrupted tool batch, or choose a later target, then retry; nothing was mutated." }],
+            content: [{ type: "text" as const, text: "Error: the return ticket could not be placed — no entry in the history this travel would replace can rebuild a lawful context packet. Finish or explicitly recover the interrupted tool batch, or choose a later target, then retry; nothing was mutated." }],
             details: { error: "no_protocol_complete_backup_target", name: params.backupCurrentHeadAs ?? null, headId: originId, lowestIndex },
           };
         }
         if (backupEntryId !== originId) {
           backupResolvedFromHead = originId;
-          ctx.ui.notify(`Note: the return ticket was placed on protocol-complete entry ${backupEntryId} instead of HEAD ${originId}.`, "info");
+          ctx.ui.notify(`Note: the return ticket was placed on ${backupProtocolStatus === "complete" ? "protocol-complete" : "protocol-repaired"} entry ${backupEntryId} instead of HEAD ${originId}.`, "info");
         }
       }
 
@@ -676,6 +713,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
         backupResolvedFromHead,
         backupOutcome,
         backupProtocolStatus,
+        backupProtocolRepairs,
         backupProtocolNormalizations,
       };
       // The mutation is already durable. Establish both refresh tickets before
