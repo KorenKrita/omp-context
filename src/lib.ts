@@ -3,6 +3,7 @@ import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction/compaction";
 import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import type { TextContent, ToolCall, ThinkingContent } from "@oh-my-pi/pi-ai/types";
 import { buildLabelMaps, type LabelMaps } from "./label-journal.js";
+import { calculateContextUsagePressure, formatContextUsagePressure, formatTokenCount } from "./context-pressure.js";
 export { buildLabelMaps, type LabelMaps } from "./label-journal.js";
 
 export const ACM_INTERNAL_TOOLS = new Set(["acm_checkpoint", "acm_timeline", "acm_travel"]);
@@ -240,16 +241,21 @@ export function resolveTargetId(
 
 export function formatTokens(tokens: number | null | undefined): string {
  if (tokens == null || !Number.isFinite(tokens) || tokens < 0) return "N/A";
- if (tokens >= 999_950) return `${(tokens / 1_000_000).toFixed(1)}M`;
- if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`;
- return String(tokens);
+ return formatTokenCount(tokens);
 }
 
-export function formatContextUsage(usage: UsageLike | undefined, includeTokens = false): string {
+/**
+ * Canonical usage rendering for tool bodies and renderers: single scale-named
+ * percentage plus the raw token pair, both derived from the same tokens and
+ * window. `UsageLike.percent` is intentionally not rendered — host percents
+ * are hard-window readings (and estimates clamp to 100), which can disagree
+ * with the raw pair beside them.
+ */
+export function formatContextUsage(usage: UsageLike | undefined): string {
  if (!usage) return "Unknown";
- const pct = Number.isFinite(usage.percent) ? `${usage.percent.toFixed(1)}%` : "N/A";
- if (!includeTokens) return pct;
- return `${pct} (${formatTokens(usage.tokens)}/${formatTokens(usage.contextWindow)})`;
+ const pressure = calculateContextUsagePressure(usage.tokens, usage.contextWindow);
+ if (!pressure) return "Unknown";
+ return formatContextUsagePressure(pressure, 1);
 }
 
 export interface UsageDelta {

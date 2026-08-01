@@ -66,7 +66,7 @@ function render(component: Component, width = 240): string {
   return component.render(width).join("\n");
 }
 
-const checkpoint = captureTool(registerCheckpointTool);
+const checkpoint = captureTool((pi) => registerCheckpointTool(pi, {} as never));
 const timeline = captureTool((pi) => registerTimelineTool(pi, {} as never));
 const travel = captureTool((pi) => registerTravelTool(pi, {} as never));
 
@@ -134,8 +134,33 @@ describe("ACM tool rendering", () => {
     );
     const output = render(result);
     expect(output).toContain("✓ CHECKPOINT CREATED  parser-fix-start");
-    expect(output).toContain("USER · entry-123 · context 30.0% (120.0K/400.0K)");
+    // Canonical grammar: scale-named percentage plus the raw pair, same scale.
+    // No contextPressure key at all → legacy replay, raw detail is allowed.
+    expect(output).toContain("USER · entry-123 · context 30% window · 120K/400K");
     expect(output).toContain("→ Save point applied.");
+
+    // Presence-based degradation: a receipt that carries contextPressure
+    // prefers it over the legacy raw detail even when both are valid…
+    const render2 = (details: Record<string, unknown>) => render(checkpoint.renderResult!(
+      { content: [{ type: "text", text: "Created" }], details },
+      { expanded: false, isPartial: false },
+      theme,
+      renderContext(args),
+    ));
+    const divergent = render2({
+      status: "created", name: "n", entryId: "e", role: "USER",
+      contextUsage: { tokens: 120_000, contextWindow: 400_000, percent: 30 },
+      contextPressure: { tokens: 300_000, contextWindow: 1_000_000 },
+    });
+    expect(divergent).toContain("context 75% budget(400K) · 300K/1M window");
+    // …and a present-but-malformed authoritative payload fails closed to
+    // unknown instead of re-attributing the number to the raw host detail.
+    const malformedPressure = render2({
+      status: "created", name: "n", entryId: "e", role: "USER",
+      contextUsage: { tokens: 120_000, contextWindow: 400_000, percent: 30 },
+      contextPressure: { tokens: Number.NaN, contextWindow: 1_000_000 },
+    });
+    expect(malformedPressure).toContain("context unknown");
   });
 
   test("timeline keeps the collapsed view compact and exposes full output when expanded", () => {
@@ -207,6 +232,87 @@ describe("ACM tool rendering", () => {
     expect(output).not.toContain("0/0 entries");
   });
 
+  test("timeline renderer reads the authoritative pressure, not the retired contextUsage detail", () => {
+    const args = { view: "active", limit: 50 };
+    const baseDetails = {
+      view: "active",
+      activePathNodes: 3,
+      activeDisplayedEntries: 3,
+      activeVisibleEntries: 3,
+      activeSummaryDepth: 0,
+      contextDeliveryPhase: "active",
+    };
+    const pressure = {
+      tokens: 300_000,
+      contextWindow: 1_000_000,
+      usagePercent: 30,
+      workingBudgetTokens: 400_000,
+      pressurePercent: 75,
+      policy: "400k-cap",
+    };
+    const withAuthority = timeline.renderResult!(
+      {
+        content: [{ type: "text", text: "[Context Dashboard]" }],
+        details: { ...baseDetails, contextUsageAuthority: "provider_turn_end", authoritativeContextPressure: pressure },
+      },
+      { expanded: false, isPartial: false },
+      theme,
+      renderContext(args),
+    );
+    expect(render(withAuthority)).toContain("context 75% budget(400K) · 300K/1M window");
+
+    // Declared provider authority with a missing payload must read unknown —
+    // silently falling back to another source would misattribute the number.
+    const missingPayload = timeline.renderResult!(
+      {
+        content: [{ type: "text", text: "[Context Dashboard]" }],
+        details: { ...baseDetails, contextUsageAuthority: "provider_turn_end", authoritativeContextPressure: null, contextPressure: pressure },
+      },
+      { expanded: false, isPartial: false },
+      theme,
+      renderContext(args),
+    );
+    expect(render(missingPayload)).toContain("context unknown");
+
+    // Native authority may fall back to the native pressure payload.
+    const nativeFallback = timeline.renderResult!(
+      {
+        content: [{ type: "text", text: "[Context Dashboard]" }],
+        details: { ...baseDetails, contextUsageAuthority: "native_context", authoritativeContextPressure: null, contextPressure: pressure },
+      },
+      { expanded: false, isPartial: false },
+      theme,
+      renderContext(args),
+    );
+    expect(render(nativeFallback)).toContain("context 75% budget(400K) · 300K/1M window");
+
+    // A payload with a stale or inconsistent pressurePercent cannot disagree
+    // with the raw pair beside it: the renderer re-derives the percentage
+    // from tokens/window, so 30% here still renders as 75%.
+    const inconsistent = timeline.renderResult!(
+      {
+        content: [{ type: "text", text: "[Context Dashboard]" }],
+        details: { ...baseDetails, contextUsageAuthority: "provider_turn_end", authoritativeContextPressure: { ...pressure, pressurePercent: 30 } },
+      },
+      { expanded: false, isPartial: false },
+      theme,
+      renderContext(args),
+    );
+    expect(render(inconsistent)).toContain("context 75% budget(400K) · 300K/1M window");
+
+    // Non-finite or non-positive payload values fail closed to unknown.
+    const malformed = timeline.renderResult!(
+      {
+        content: [{ type: "text", text: "[Context Dashboard]" }],
+        details: { ...baseDetails, contextUsageAuthority: "provider_turn_end", authoritativeContextPressure: { ...pressure, tokens: Number.NaN } },
+      },
+      { expanded: false, isPartial: false },
+      theme,
+      renderContext(args),
+    );
+    expect(render(malformed)).toContain("context unknown");
+  });
+
   test("travel renders the target, archive pointer, and structural deltas", () => {
     const args = {
       target: "parser-fix-start",
@@ -243,6 +349,7 @@ describe("ACM tool rendering", () => {
           activeSummaryDepthAfter: 1,
           backupCurrentHeadAs: "parser-fix-done",
           contextDeliveryPhase: "pending_tool_result",
+          postMutationEvidenceStatus: "verified",
         },
       },
       { expanded: false, isPartial: false },
@@ -255,6 +362,25 @@ describe("ACM tool rendering", () => {
     expect(output).toContain("messages 42 → 18 (shrunk)");
     expect(output).toContain("handoff layers 2 → 1 · backup parser-fix-done");
     expect(output).toContain("delivery pending_tool_result · evidence verified · persisted refresh pending");
+
+    // A receipt that carries no evidence status must not claim verification:
+    // the renderer downgrades to the pending style with evidence unknown.
+    const noEvidence = travel.renderResult!(
+      {
+        content: [{ type: "text", text: "Travel complete." }],
+        details: {
+          target: "parser-fix-start",
+          resultingLeafId: "summary-456",
+          contextDeliveryPhase: "pending_tool_result",
+        },
+      },
+      { expanded: false, isPartial: false },
+      theme,
+      renderContext(args),
+    );
+    const noEvidenceOutput = render(noEvidence);
+    expect(noEvidenceOutput).toContain("⚠ TRAVEL APPLIED — EVIDENCE PENDING");
+    expect(noEvidenceOutput).toContain("evidence unknown");
   });
 
   test("renderers surface actionable error states instead of success chrome", () => {

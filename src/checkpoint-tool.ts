@@ -8,7 +8,6 @@ import { Text } from "@oh-my-pi/pi-tui";
 import {
   buildLabelMaps,
   ANCHOR_SEARCH_WINDOW,
-  formatContextUsage,
   isReservedTargetName,
   optionalString,
   sanitizeTerminalText,
@@ -16,7 +15,7 @@ import {
   resolveTargetId,
 } from "./lib.js";
 import { rebuildAcmContextPacket, type AcmProtocolNormalization } from "./context-packet.js";
-import { calculateContextUsagePressure } from "./context-pressure.js";
+import { calculateContextUsagePressure, foldProjectionScaleName, formatContextUsagePressure } from "./context-pressure.js";
 import { estimateFoldGains, findNearestSavePoint, selectFoldReferences, type FoldEstimateEntry } from "./fold-estimate.js";
 import {
   appendCheckpointLabel,
@@ -30,6 +29,7 @@ import {
   isCheckpointableMessage,
 } from "./entry-resolution.js";
 import { findContainingAssistantToolBatch, type ToolProtocolDefect, type ToolProtocolRepair } from "./tool-protocol.js";
+import type { AcmSessionRuntime } from "./runtime.js";
 import { GUIDANCE_CUES, RECOVERY_GUIDANCE, TOOL_DESCRIPTIONS } from "./generated-guidance.js";
 
 interface SkippedCheckpointAnchor {
@@ -51,7 +51,7 @@ interface AutomaticCheckpointAnchor {
   searchExhausted?: boolean;
 }
 
-export function registerCheckpointTool(pi: ExtensionAPI): void {
+export function registerCheckpointTool(pi: ExtensionAPI, runtime: AcmSessionRuntime): void {
   const schema = pi.zod.object({
     name: pi.zod.string().min(1).regex(/^[A-Za-z0-9._-]+$/).describe(
       "Semantic name a future search should find, e.g. parser-fix-baseline or p99-before-db-scan. Unique in this session; 'root' is reserved.",
@@ -102,9 +102,27 @@ export function registerCheckpointTool(pi: ExtensionAPI): void {
       const name = sanitizeTerminalText(typeof details?.name === "string" ? details.name : "checkpoint");
       const entryId = sanitizeTerminalText(typeof details?.entryId === "string" ? details.entryId : "unknown entry");
       const role = sanitizeTerminalText(typeof details?.role === "string" ? details.role : "node");
-      const usage = details?.contextUsage && typeof details.contextUsage === "object"
-        ? formatContextUsage(details.contextUsage as { tokens: number; contextWindow: number; percent: number }, true)
-        : "unknown";
+      // The receipt records the authoritative pressure in details; the legacy
+      // contextUsage detail (raw host usage) survives for compatibility but
+      // can describe the pre-travel branch during a provider epoch. Fallback
+      // is presence-based: a receipt without the contextPressure key is a
+      // legacy replay and may use the raw detail, but a receipt that carries
+      // the key with a malformed payload fails closed to unknown — degrading
+      // to the raw detail there would re-attribute the number to the wrong
+      // authority.
+      const asRendererPressure = (value: unknown) => {
+        if (!value || typeof value !== "object") return undefined;
+        const candidate = value as { tokens?: unknown; contextWindow?: unknown };
+        return calculateContextUsagePressure(
+          typeof candidate.tokens === "number" ? candidate.tokens : null,
+          typeof candidate.contextWindow === "number" ? candidate.contextWindow : null,
+        );
+      };
+      const hasAuthoritativeDetail = details !== undefined && "contextPressure" in details && details.contextPressure !== null;
+      const rendererPressure = hasAuthoritativeDetail
+        ? asRendererPressure(details.contextPressure)
+        : asRendererPressure(details?.contextUsage);
+      const usage = rendererPressure ? formatContextUsagePressure(rendererPressure, 1) : "unknown";
       const cue = sanitizeTerminalText(typeof details?.cue === "string" ? details.cue : "");
       const lines = [
         theme.fg("success", `✓ CHECKPOINT ${status}`) + theme.fg("accent", `  ${name}`),
@@ -299,10 +317,12 @@ export function registerCheckpointTool(pi: ExtensionAPI): void {
       const resolvedEntry = targetEntry ?? findEntryInTree(tree, entryId);
       const role = autoResolved?.role ?? (resolvedEntry ? getMessageRoleLabel(resolvedEntry) : undefined) ?? resolvedEntry?.type.toUpperCase() ?? "NODE";
       const usage = ctx.getContextUsage();
-      const usageLike = usage && usage.tokens != null && usage.percent != null
-        ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent }
-        : undefined;
-      const usageText = usageLike ? formatContextUsage(usageLike, true) : "unknown";
+      // One pressure authority for every perception surface: between a
+      // travel's provider cutover and its native replacement the host
+      // estimate still describes the pre-travel branch, so the receipt must
+      // read the same authoritative pressure the gauge and HUD render.
+      const pressure = runtime.authoritativeContextPressure(ctx.sessionManager, usage);
+      const usageText = pressure ? formatContextUsagePressure(pressure) : "unknown";
       const cue = GUIDANCE_CUES.checkpoint;
       // Fold projections and segment distance, restored from the preview that
       // shipped until 7c3bdff7 (2026-07-12) dropped it in the single-file split.
@@ -315,11 +335,10 @@ export function registerCheckpointTool(pi: ExtensionAPI): void {
         const foldBranch = branch as unknown as readonly FoldEstimateEntry[];
         const references = selectFoldReferences(foldBranch, labelMaps, entryId);
         const nearest = findNearestSavePoint(foldBranch, labelMaps);
-        const pressure = calculateContextUsagePressure(usageLike?.tokens, usageLike?.contextWindow, usageLike?.percent);
         const currentPacket = rebuildAcmContextPacket(sessionManager);
         const estimates = pressure && currentPacket.ok
           ? estimateFoldGains({
-              usage: usageLike,
+              usage: { tokens: pressure.tokens, contextWindow: pressure.contextWindow, percent: 0 },
               workingBudgetTokens: pressure.workingBudgetTokens,
               currentMessages: currentPacket.value.messages,
               messagesAt: (id) => {
@@ -328,15 +347,16 @@ export function registerCheckpointTool(pi: ExtensionAPI): void {
               },
             }, references)
           : { turnPercent: null, taskPercent: null };
+        const scale = pressure ? foldProjectionScaleName(pressure.policy) : "budget";
         const segments: string[] = [];
         if (estimates.turnPercent != null && references.turn) {
           const name = references.turn.label ?? references.turn.entryId;
-          segments.push(`fold@turn '${name}' → ~${Math.floor(estimates.turnPercent)}% budget`);
+          segments.push(`fold@turn '${name}' → ~${Math.floor(estimates.turnPercent)}% ${scale}`);
           foldDetails.turn = name;
         }
         if (estimates.taskPercent != null && references.task) {
           const name = references.task.label ?? references.task.entryId;
-          segments.push(`fold@task '${name}' → ~${Math.floor(estimates.taskPercent)}% budget`);
+          segments.push(`fold@task '${name}' → ~${Math.floor(estimates.taskPercent)}% ${scale}`);
           foldDetails.task = name;
         }
         foldDetails.stepsSinceSavePoint = nearest.stepsBack;
@@ -372,6 +392,7 @@ export function registerCheckpointTool(pi: ExtensionAPI): void {
           protocolNormalizations: autoResolved?.normalizations ?? [],
           contextUsage: usage ? { percent: usage.percent, tokens: usage.tokens, contextWindow: usage.contextWindow } : null,
           contextUsageAvailable: usage !== undefined,
+          contextPressure: pressure ?? null,
           skippedTransientCount: skippedCount ?? null,
           autoResolved: autoResolved
             ? {

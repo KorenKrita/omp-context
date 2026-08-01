@@ -849,6 +849,79 @@ describe("deferred post-travel context delivery", () => {
     }
   });
 
+  test("HUD fold projection follows the authoritative numerator when provider and native usage diverge", async () => {
+    // Blocker lock (behavioral): with provider usage at 300K/1M and the native
+    // estimate at 90K/1M, a projection built from the official numerator would
+    // read ~22% while the authoritative one reads ~75%. The HUD must render
+    // the authoritative reading — mixed sources read as a contradiction.
+    const runtime = new AcmSessionRuntime(createAdapter());
+    const mk = (id: string, parentId: string | null, role: string, text: string, ts: number) => ({
+      id,
+      type: "message",
+      parentId,
+      timestamp: `2026-07-21T00:00:0${ts}.000Z`,
+      message: { role, content: text, timestamp: ts },
+    }) as unknown as SessionEntry;
+    const entries: SessionEntry[] = [
+      mk("u1", null, "user", "first request", 0),
+      mk("a1", "u1", "assistant", "x".repeat(400), 1),
+      mk("u2", "a1", "user", "second request", 2),
+    ];
+    const session = {
+      getLeafId: () => entries.at(-1)!.id,
+      getTree: () => [{ entry: entries[0]!, children: [] }],
+      getEntries: () => entries,
+      getBranch: (id?: string) => (id ? entries.slice(0, entries.findIndex((e) => e.id === id) + 1) : entries),
+      getEntry: (id: string) => entries.find((entry) => entry.id === id),
+    };
+    runtime.deferPostTravelRefresh(session, "diverged-travel", session.getLeafId());
+    runtime.markProviderCutoverReady(session, "diverged-travel");
+    runtime.activateProviderPacket(
+      session,
+      [{ role: "user", content: "provider packet", timestamp: 1 }],
+      session.getLeafId(),
+    );
+    runtime.setUsage(session, { tokens: 300_000, contextWindow: 1_000_000, percent: 30 });
+    runtime.markProviderUsageObserved(session);
+    const lifecycle = createLifecycleFixture(runtime, session, {
+      tokens: 90_000,
+      contextWindow: 1_000_000,
+      percent: 9,
+    });
+    const timelineExecute = captureTimelineExecute(runtime);
+
+    const timeline = await timelineExecute("diverged-timeline", { view: "active" }, undefined, undefined, lifecycle.context);
+    const text = timeline.content[0]?.text ?? "";
+    const projection = /turn '[^']*' → ~(\d+)% budget/.exec(text);
+    expect(projection).not.toBeNull();
+    // Messages on this spine are tiny, so the authoritative projection stays
+    // near 75% while an official-numerator projection would sit near 22%.
+    expect(Number(projection![1])).toBeGreaterThan(60);
+
+    // The checkpoints view's Current line must read the same authority —
+    // an authoritative HUD beside a native-numerator Current line in one
+    // result would be a visible self-contradiction. 300K tokens → 75%
+    // budget; the native estimate would read 22%.
+    const checkpoints = await timelineExecute(
+      "diverged-checkpoints",
+      { view: "checkpoints" } as never,
+      undefined,
+      undefined,
+      lifecycle.context,
+    );
+    const checkpointsText = checkpoints.content[0]?.text ?? "";
+    const current = /Current: \d+ msgs, (\d+(?:\.\d+)?)% budget/.exec(checkpointsText);
+    expect(current).not.toBeNull();
+    expect(Number(current![1])).toBeGreaterThan(60);
+
+    // The output character budget must shrink with the same authoritative
+    // tokens: provider 300K of a 400K working window leaves 100K remaining
+    // → min(40K, 25K) = 25K tokens → 100K chars. The stale native 90K would
+    // wrongly relax it to min(40K, 77.5K) = 40K tokens → 160K chars.
+    const budget = (timeline.details as { resultCharacterBudget?: number }).resultCharacterBudget;
+    expect(budget).toBe(100_000);
+  });
+
   test("retains the delivery phase through rebuild failures and consumes it only after a later rebuild succeeds", async () => {
     const adapter = createAdapter();
     const runtime = new AcmSessionRuntime(adapter);
@@ -1045,8 +1118,9 @@ describe("deferred post-travel context delivery", () => {
     expect(runtime.getProviderDeliveryStatus(session).usageObserved).toBe(false);
     // Pressure needles must match the timeline's authoritative reading. Fold
     // needles may follow in the same suffix, so assert the pressure prefix
-    // rather than the whole bracket.
-    expect(patch.content[0]?.text).toContain("[ctx 90% window");
+    // rather than the whole bracket. Small window: one scale-named percentage
+    // plus the raw pair on the same scale.
+    expect(patch.content[0]?.text).toContain("[ctx 90% window · 90K/100K");
   });
 
   test("multiple successful travels retain only the latest ticket until settlement", () => {
