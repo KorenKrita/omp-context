@@ -776,7 +776,7 @@ describe("deferred post-travel context delivery", () => {
       pressurePercent: number;
       applied: boolean;
       phase: string;
-      pressureAuthority: "provider actual" | "native context";
+      pressureAuthority: "provider actual" | "native estimate";
     }> = [
       {
         name: "no travel",
@@ -784,7 +784,7 @@ describe("deferred post-travel context delivery", () => {
         pressurePercent: 70,
         applied: false,
         phase: "active",
-        pressureAuthority: "native context",
+        pressureAuthority: "native estimate",
       },
       {
         name: "provider active with observed usage",
@@ -813,7 +813,7 @@ describe("deferred post-travel context delivery", () => {
         pressurePercent: 70,
         applied: false,
         phase: "receipt_rejected",
-        pressureAuthority: "native context",
+        pressureAuthority: "native estimate",
       },
     ];
 
@@ -840,8 +840,9 @@ describe("deferred post-travel context delivery", () => {
       const expectedPressureNeedles = buildGaugeSuffix(pressure!).replace(/\]$/, "");
       expect(gaugeText(gauge)).toStartWith(`read complete${expectedPressureNeedles}`);
       expect(timeline.content[0]?.text).toContain(
-        `• ACM Pressure:     ${formatContextUsagePressure(pressure!)} (${scenario.pressureAuthority})`,
+        `• Context Usage:    ${scenario.pressurePercent}% of`,
       );
+      expect(timeline.content[0]?.text).toContain(`(${scenario.pressureAuthority})`);
       expect(timeline.details).toMatchObject({
         persistentMutationApplied: scenario.applied,
         providerDeliveryPhase: scenario.phase,
@@ -910,7 +911,7 @@ describe("deferred post-travel context delivery", () => {
       lifecycle.context,
     );
     const checkpointsText = checkpoints.content[0]?.text ?? "";
-    const current = /Current: \d+ msgs, (\d+(?:\.\d+)?)% budget/.exec(checkpointsText);
+    const current = /Current position: \d+ msg\(s\) in context, (\d+(?:\.\d+)?)% of /.exec(checkpointsText);
     expect(current).not.toBeNull();
     expect(Number(current![1])).toBeGreaterThan(60);
 

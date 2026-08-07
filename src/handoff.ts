@@ -11,9 +11,9 @@ export const ACM_CONTINUATION_MARKER = "<!-- PI-CONTEXT:ACM-CONTINUATION:v1 -->"
  * host-injected `pi.zod` and reuses these strings.
  */
 export const HANDOFF_FIELD_DESCRIPTIONS = {
-  goal: "What this work is trying to accomplish, including any result still owed to the user.",
-  state: "What is settled, what stays uncertain, and the exact values, paths, and names the next steps will use. Multiline text is allowed.",
-  next: "The next step to take right now, written as one concrete action.",
+  goal: "What this work is trying to accomplish, including any result still owed to the user and any constraint the work must keep intact.",
+  state: "What is settled, what stays uncertain, and the exact values, paths, and names the next steps will use. Name any question that awaits the user's decision. Multiline text is allowed.",
+  next: "The next step to take right now, written as one concrete action. When that step waits on the user's decision, write it as the question to ask.",
   evidence: "Optional: verifiable pointers supporting state — file paths, commands, IDs.",
   external: "Optional: lasting side effects outside the conversation — files changed, commands run, systems touched.",
   exclusions: "Optional: directions tried and ruled out, so they are not retried.",
@@ -173,16 +173,20 @@ export function buildCanonicalHandoff(
  * Alias charset must satisfy the checkpoint name pattern ^[A-Za-z0-9._-]+$.
  */
 export function deriveReturnTicketName(goal: string, taken: (name: string) => boolean): string {
+  // Dedupe surviving tokens: a mostly non-Latin goal often leaves the same
+  // tool identifier several times, and "acm-acm_checkpoint-acm_timeline-..."
+  // is not a name anyone can pick from the checkpoints view.
+  const seen = new Set<string>();
   const words = goal
     .toLowerCase()
     .replace(/[^a-z0-9\s._-]+/g, " ")
     .split(/\s+/)
-    .filter((word) => word.length > 0)
+    .filter((word) => word.length > 0 && !seen.has(word) && (seen.add(word), true))
     .slice(0, 4);
   // A slug with no alphanumeric signal (non-Latin goals collapse entirely,
   // punctuation-only goals leave residue like "----...") is not a name a
   // human can pick from the checkpoints view; fall back to the plain stem.
-  const slug = words.join("-");
+  const slug = words.join("-").slice(0, 48).replace(/-+$/, "");
   const base = /[a-z0-9]/.test(slug) ? `${slug}-raw` : "fold-raw";
   if (!taken(base) && base !== "root") return base;
   for (let ordinal = 2; ordinal < 1000; ordinal++) {

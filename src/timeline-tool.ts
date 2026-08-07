@@ -22,7 +22,7 @@ import {
 } from "./lib.js";
 import { collectTrustedAcmTravelTransactions, rebuildAcmContextPacket } from "./context-packet.js";
 import { estimateFoldGains, selectFoldReferences, type FoldEstimateEntry } from "./fold-estimate.js";
-import { calculateContextUsagePressure, foldProjectionScaleName, formatContextUsagePressure, type ContextUsagePressure } from "./context-pressure.js";
+import { calculateContextUsagePressure, foldProjectionScaleName, formatContextUsagePressure, formatTokenCount, type ContextUsagePressure } from "./context-pressure.js";
 import { getLiveAgentSyncRecoveryGuidance } from "./live-agent-session-adapter.js";
 import type { AcmSessionRuntime, ProviderDeliveryPhase } from "./runtime.js";
 import { GUIDANCE_CUES, RECOVERY_GUIDANCE, TOOL_DESCRIPTIONS } from "./generated-guidance.js";
@@ -137,6 +137,16 @@ function formatCheckpointLabel(listing: CheckpointListing): string {
   return `${boundedTimelineValue(listing.label)}${listing.isRawArchive ? " [raw archive]" : ""}`;
 }
 
+// ACM's own tool results echo every checkpoint name and dashboard line, so
+// they match almost any query about past work — self-pollution, not recall.
+// They stay searchable only when the entry itself carries a checkpoint label.
+function isAcmToolEcho(entry: SessionEntry): boolean {
+  return entry.type === "message"
+    && entry.message.role === "toolResult"
+    && typeof entry.message.toolName === "string"
+    && entry.message.toolName.startsWith("acm_");
+}
+
 function searchTree(
   tree: SessionTreeNode[],
   labelMaps: LabelMaps,
@@ -155,9 +165,11 @@ function searchTree(
     }
     const node = stack.pop()!;
     const label = getEntryLabel(labelMaps, node.entry.id);
-    const matched = node.entry.id.toLowerCase().includes(normalizedQuery)
-      || (label !== undefined && label.toLowerCase().includes(normalizedQuery))
-      || entryText(node.entry, true).toLowerCase().includes(normalizedQuery);
+    const matched = (label === undefined && isAcmToolEcho(node.entry))
+      ? false
+      : node.entry.id.toLowerCase().includes(normalizedQuery)
+        || (label !== undefined && label.toLowerCase().includes(normalizedQuery))
+        || entryText(node.entry, true).toLowerCase().includes(normalizedQuery);
     if (matched) {
       if (matches.length < limit) matches.push({ entry: node.entry, label });
       else truncated = true;
@@ -167,6 +179,22 @@ function searchTree(
   return { matches, truncated };
 }
 
+/** Shorten a rendered body to one line, marking real truncation honestly. */
+function snippet(text: string, max = 100): string {
+  const flat = text.replace(/\s+/g, " ");
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+// Tree noise filter: the same conversation-first bar the active view uses.
+// Structural/metadata nodes (model changes, labels, tool plumbing) are
+// spliced out — their children are promoted — so the branch shape survives
+// while the rendering budget goes to nodes an agent can actually act on.
+function treeNodeVisible(entry: SessionEntry, labelMaps: LabelMaps, leafId: string | null): boolean {
+  if (entry.id === leafId || getEntryLabel(labelMaps, entry.id) !== undefined) return true;
+  if (entry.type === "branch_summary" || entry.type === "compaction") return true;
+  return entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant");
+}
+
 function renderTree(
   tree: SessionTreeNode[],
   labelMaps: LabelMaps,
@@ -174,24 +202,33 @@ function renderTree(
   leafId: string | null,
   activeIds: Set<string>,
   maxDepth: number,
+  verbose: boolean,
   signal?: AbortSignal,
-): { lines: string[]; truncated: boolean } {
+): { lines: string[]; truncated: boolean; hiddenNodes: number } {
   const lines: string[] = [];
   let truncated = false;
+  let hiddenNodes = 0;
   const visit = (node: SessionTreeNode, depth: number, prefix: string, last: boolean): void => {
     if (signal?.aborted || lines.length >= 200) {
       truncated = true;
+      return;
+    }
+    if (!verbose && !treeNodeVisible(node.entry, labelMaps, leafId)) {
+      // Splice: render the children in this node's place so ancestry and
+      // branch counts stay truthful without spending a line on plumbing.
+      hiddenNodes++;
+      node.children.forEach((child, index) => visit(child, depth, prefix, last && index === node.children.length - 1));
       return;
     }
     const role = displayRole(node.entry);
     const labels = formatTimelineLabel(getEntryLabel(labelMaps, node.entry.id), rawArchiveAliases);
     const tags = [
       node.entry.id === leafId ? "HEAD" : null,
-      activeIds.has(node.entry.id) ? "active" : "off-path",
+      activeIds.has(node.entry.id) ? null : "off-path",
       labels ? `checkpoint: ${labels}` : null,
     ].filter((tag): tag is string => tag !== null);
-    const body = entryText(node.entry, true).replace(/\s+/g, " ").slice(0, 100);
-    lines.push(`${prefix}${last ? "└─" : "├─"} ${node.entry.id} (${tags.join(", ")}) [${role}] ${body}`);
+    const body = snippet(entryText(node.entry, verbose));
+    lines.push(`${prefix}${last ? "└─" : "├─"} ${node.entry.id}${tags.length ? ` (${tags.join(", ")})` : ""} [${role}] ${body}`);
     if (depth >= maxDepth && node.children.length > 0) {
       truncated = true;
       return;
@@ -200,7 +237,24 @@ function renderTree(
     node.children.forEach((child, index) => visit(child, depth + 1, childPrefix, index === node.children.length - 1));
   };
   tree.forEach((root, index) => visit(root, 1, "", index === tree.length - 1));
-  return { lines, truncated };
+  return { lines, truncated, hiddenNodes };
+}
+
+// The Dashboard spells the two scales out in words; the compact canonical
+// form stays on the gauge and receipts where space is tight. Every usage
+// line on the Dashboard goes through this one spelling — two spellings of
+// the same concept on one screen read as a contradiction.
+function describeUsage(pressure: ContextUsagePressure): string {
+  const pct = `${Math.floor(pressure.pressurePercent * 10) / 10}%`;
+  const ratio = `${formatTokenCount(pressure.tokens)}/${formatTokenCount(pressure.contextWindow)}`;
+  return pressure.policy === "400k-cap"
+    ? `${pct} of ${formatTokenCount(pressure.workingBudgetTokens)} working budget · ${ratio} hard window`
+    : `${pct} of the ${formatTokenCount(pressure.contextWindow)} window (${ratio})`;
+}
+
+function describeUsageLike(usage: { tokens: number; contextWindow: number } | undefined): string {
+  const pressure = usage ? calculateContextUsagePressure(usage.tokens, usage.contextWindow) : undefined;
+  return pressure ? describeUsage(pressure) : "Unknown";
 }
 
 function toUsageLike(usage: ReturnType<ExtensionContext["getContextUsage"]>) {
@@ -419,7 +473,13 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
         | { view: "active"; limit: number; verbose?: boolean }
         | { view: "checkpoints"; limit: number; filter?: string }
         | { view: "search"; limit: number; query: string }
-        | { view: "tree"; limit: number };
+        | { view: "tree"; limit: number; verbose?: boolean };
+      // Silently ignored parameters produce false negatives (a filter on the
+      // search view looks like an empty result). Name what was ignored.
+      const ignoredParams: string[] = [];
+      if (filter && view !== "checkpoints") ignoredParams.push(`'filter' (only applies to view=checkpoints)`);
+      if (query && view !== "search") ignoredParams.push(`'query' (only applies to view=search)`);
+      if (verbose !== undefined && view !== "active" && view !== "tree") ignoredParams.push(`'verbose' (only applies to view=active and view=tree)`);
       if (params.view === "search" && !params.query) {
         return {
           content: [{ type: "text" as const, text: "Error: 'query' is required when view=search." }],
@@ -495,13 +555,19 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
             details: { error: currentResult.error, message: currentResult.message },
           };
         }
-        const matchingEntryLabel = listings.length === 1 ? "entry" : "entries";
-        const displayedEntryLabel = displayedListings.length === 1 ? "entry" : "entries";
-        const matchingAliasLabel = checkpointsMatchingAliases === 1 ? "alias" : "aliases";
-        const aliasCountText = filter
-          ? `${checkpointsMatchingAliases} matched ${matchingAliasLabel} / ${checkpointAliasesOnMatchingEntries} total aliases`
-          : `${checkpointAliasesOnMatchingEntries} aliases`;
-        lines.push(`Checkpoints (${listings.length} matching ${matchingEntryLabel} / ${aliasCountText}, ${displayedListings.length} ${displayedEntryLabel} displayed${filter ? ` for '${boundedTimelineValue(params.filter ?? "")}'` : ""}; requested ${requestedLimit}, effective ${effectiveLimit}). Current: ${currentResult.value.messages.length} msgs, ${formatContextUsage(usage)}, handoff layers ${activeSummaryDepth}:`);
+        // Header grammar: entry counts only when they carry information.
+        // An unfiltered list that fits needs one number, not five.
+        const currentSummary = `Current position: ${currentResult.value.messages.length} msg(s) in context, ${describeUsageLike(usage)}${activeSummaryDepth > 0 ? `, handoff layers ${activeSummaryDepth}` : ""}.`;
+        if (listings.length === 0 && !rootMatchesFilter) {
+          lines.push(filter ? `No checkpoints match '${boundedTimelineValue(params.filter ?? "")}'. ${currentSummary}` : `No checkpoints yet. ${currentSummary}`);
+        } else {
+          const savePointCount = `${listings.length} save point${listings.length === 1 ? "" : "s"}`;
+          const shownNote = displayedListings.length < listings.length
+            ? `, showing ${displayedListings.length} (limit ${effectiveLimit})`
+            : "";
+          const filterNote = filter ? ` matching '${boundedTimelineValue(params.filter ?? "")}'` : "";
+          lines.push(`Checkpoints: ${savePointCount}${filterNote}${shownNote}. ${currentSummary} Each line projects the state after folding to that target (a handoff layer is one fold's summary standing in for replaced history):`);
+        }
         const cache = new Map<string, { ok: true; messages: AgentMessage[] } | { ok: false }>();
         const projectedDepthCache = new Map<string, number>();
         if (rootEntry && rootMatchesFilter) {
@@ -516,14 +582,14 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
           if (rootResult.ok) {
             const estimated = estimateUsageAfterMessageChange(usage, currentResult.value.messages, rootMessages);
             estimateText = estimated
-              ? `~${rootMessages.length} msgs, ~${formatContextUsage(estimated)} est. (+summary)`
-              : `~${rootMessages.length} msgs`;
+              ? `~${rootMessages.length} msg(s) kept, ~${formatContextUsage(estimated)} est. (incl. the new handoff)`
+              : `~${rootMessages.length} msg(s) kept`;
           }
           const rootTopology = tree.length > 1 ? `, first of ${tree.length} top-level roots` : "";
           const rootDepthNote = activeSummaryDepth > 0 && rootProjectedSummaryDepth === 1
             ? "; projected depth is 1 rather than 0 because travel appends one new handoff"
             : "";
-          lines.push(`  root → ${rootEntry.id} (structural candidate, not a checkpoint${rootTopology}) ${estimateText}; handoff layers ${activeSummaryDepth} → ${rootProjectedSummaryDepth} projected${rootDepthNote}`);
+          lines.push(`  root → ${rootEntry.id} (session start — not a named checkpoint, but a valid travel target${rootTopology}) ${estimateText}; handoff layers ${activeSummaryDepth} → ${rootProjectedSummaryDepth} after this fold${rootDepthNote}`);
         }
         for (const checkpoint of displayedListings) {
           if (signal?.aborted) break;
@@ -541,8 +607,8 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
           const estimateText = !cachedTarget.ok
             ? "message estimate unavailable"
             : estimated
-              ? `~${cachedTarget.messages.length} msgs, ~${formatContextUsage(estimated)} est. (+summary)`
-              : `~${cachedTarget.messages.length} msgs`;
+              ? `~${cachedTarget.messages.length} msg(s) kept, ~${formatContextUsage(estimated)} est. (incl. the new handoff)`
+              : `~${cachedTarget.messages.length} msg(s) kept`;
           let projectedSummaryDepth = projectedDepthCache.get(checkpoint.entryId);
           if (projectedSummaryDepth === undefined) {
             projectedSummaryDepth = projectSummaryDepthAfterTravel(sessionManager.getBranch(checkpoint.entryId));
@@ -551,7 +617,7 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
           const rawArchiveNote = checkpoint.isRawArchive
             ? "; raw archive — restores pre-fold history; fold targets are the entries before the folded material"
             : "";
-          lines.push(`  ${checkpoint.entryId} (checkpoint: ${formatCheckpointLabel(checkpoint)}; ${checkpoint.onActivePath ? "on-path" : "off-path"}${checkpoint.isHead ? ", *HEAD*" : ""}${rawArchiveNote}) ${estimateText}; handoff layers ${activeSummaryDepth} → ${projectedSummaryDepth} projected`);
+          lines.push(`  ${checkpoint.entryId} (checkpoint: ${formatCheckpointLabel(checkpoint)}; ${checkpoint.onActivePath ? "on-path" : "off-path"}${checkpoint.isHead ? ", *HEAD*" : ""}${rawArchiveNote}) ${estimateText}; handoff layers ${activeSummaryDepth} → ${projectedSummaryDepth} after this fold`);
         }
         if (listings.length > displayedListings.length) lines.push(`  ... +${listings.length - displayedListings.length} more — use a narrower filter or query`);
       } else if (params.view === "search") {
@@ -562,15 +628,19 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
           `Search '${boundedTimelineValue(params.query)}': ${search.matches.length} displayed${search.truncated ? "; additional matches truncated" : " matching node(s)"}.`,
         );
         for (const match of search.matches) {
-          const body = entryText(match.entry, true).replace(/\s+/g, " ").slice(0, 100);
+          const body = snippet(entryText(match.entry, true));
           const displayLabel = formatTimelineLabel(match.label, rawArchiveAliases);
           lines.push(`  ${match.entry.id}${displayLabel ? ` (checkpoint: ${displayLabel})` : ""} [${displayRole(match.entry)}] ${body}`);
         }
         if (search.truncated) lines.push("  ... additional matches truncated");
       } else if (params.view === "tree") {
-        const rendered = renderTree(tree, labelMaps, rawArchiveAliases, leafId, activeIds, effectiveLimit, signal);
+        const treeVerbose = params.verbose ?? false;
+        const rendered = renderTree(tree, labelMaps, rawArchiveAliases, leafId, activeIds, effectiveLimit, treeVerbose, signal);
         lines.push(...rendered.lines);
         treeTruncated = rendered.truncated || lines.length >= 200;
+        if (rendered.hiddenNodes > 0) {
+          lines.push(`  (${rendered.hiddenNodes} structural/metadata node(s) hidden — pass verbose=true to show them)`);
+        }
         if (treeTruncated) lines.unshift("⚠ tree truncated by depth/line limit — use view checkpoints or view search to see hidden nodes");
       } else {
         const verbose = params.verbose ?? false;
@@ -578,12 +648,23 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
         activeVisibleEntries = visible.length;
         activeDisplayedEntries = Math.min(visible.length, effectiveLimit);
         activeOmittedEntries = Math.max(0, visible.length - effectiveLimit);
+        {
+          const shown = Math.min(visible.length, effectiveLimit);
+          const filtered = branch.length - visible.length;
+          const pastLimit = visible.length - shown;
+          const reductions = [
+            filtered > 0 ? `${filtered} structural/tool node${filtered === 1 ? "" : "s"} filtered (verbose=true shows them)` : null,
+            pastLimit > 0 ? `${pastLimit} older row${pastLimit === 1 ? "" : "s"} past limit=${effectiveLimit}` : null,
+          ].filter((part): part is string => part !== null);
+          lines.push(`Showing the latest ${shown} of ${branch.length} tree nodes${reductions.length > 0 ? ` — ${reductions.join(", ")}` : ""}. Markers: * = current position (HEAD), • = user message, | = assistant/summary rows.`);
+        }
         if (activeOmittedEntries > 0) lines.push(`  :  ... (${activeOmittedEntries} earlier visible entries omitted by limit) ...`);
         for (const entry of visible.slice(-effectiveLimit)) {
           const labels = formatTimelineLabel(getEntryLabel(labelMaps, entry.id), rawArchiveAliases);
           const tags = [entry === branch[0] ? "ROOT" : null, entry.id === leafId ? "HEAD" : null, labels ? `checkpoint: ${labels}` : null]
             .filter((tag): tag is string => tag !== null);
-          const body = entryText(entry, verbose).replace(/\s+/g, " ").slice(0, 100);
+          const rawBody = snippet(entryText(entry, verbose));
+          const body = rawBody || (entry.id === leafId && displayRole(entry) === "AI" ? "(in-progress assistant turn — no text yet)" : rawBody);
           lines.push(`${entry.id === leafId ? "*" : displayRole(entry) === "USER" ? "•" : "|"} ${entry.id}${tags.length ? ` (${tags.join(", ")})` : ""} [${displayRole(entry)}] ${body}`);
         }
       }
@@ -605,20 +686,24 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
       }
       const lastUsage = runtime.getUsage(sessionManager);
       let stepsSinceCheckpoint = 0;
+      let msgsSinceCheckpoint = 0;
       let nearestCheckpoint: string | null = null;
       for (let index = branch.length - 1; index >= 0; index--) {
-        const label = getEntryLabel(labelMaps, branch[index]!.id);
+        const entry = branch[index]!;
+        const label = getEntryLabel(labelMaps, entry.id);
         if (label !== undefined) {
           nearestCheckpoint = label;
           break;
         }
         stepsSinceCheckpoint++;
+        if (entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant")) {
+          msgsSinceCheckpoint++;
+        }
       }
       const refreshFailure = runtime.contextRefresh.getFailure(sessionManager);
       const refreshPending = runtime.contextRefresh.isPending(sessionManager);
       const deliveryPhase = runtime.getContextDeliveryPhase(sessionManager);
       const providerDelivery = runtime.getProviderDeliveryStatus(sessionManager);
-      const providerEpoch = providerDelivery.persistentMutationApplied;
       const providerTurnUsageAuthoritative = runtime.isProviderUsageAuthoritative(sessionManager);
       const authoritativePressure = runtime.authoritativeContextPressure(sessionManager, officialUsage);
       // Fold projections: what a fold at each structural reference point would
@@ -628,11 +713,13 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
       // as a contradiction the moment the two sources diverge (same pattern as
       // the gauge adapter in runtime-lifecycle). Facts only — whether the
       // extraction is complete stays CORE's bar.
+      // One packet rebuild serves both the fold projection and the message
+      // count on the Active Path line — msg is the unit fold decisions read.
+      const hudCurrent = rebuildAcmContextPacket(sessionManager);
       let foldProjectionText = "unavailable";
       try {
         const foldBranch = branch as unknown as readonly FoldEstimateEntry[];
         const references = selectFoldReferences(foldBranch, labelMaps);
-        const hudCurrent = rebuildAcmContextPacket(sessionManager);
         const estimates = authoritativePressure && hudCurrent.ok
           ? estimateFoldGains({
               usage: {
@@ -649,29 +736,81 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
             }, references)
           : { turnPercent: null, taskPercent: null };
         const scale = authoritativePressure ? foldProjectionScaleName(authoritativePressure.policy) : "budget";
+        // Before → after → saved: the current pressure is the before, each
+        // projection is the after, and the delta is the decision-ready part.
+        const nowPercent = authoritativePressure ? Math.floor(authoritativePressure.pressurePercent) : null;
+        const withSavings = (projected: number): string => {
+          const after = Math.floor(projected);
+          const saved = nowPercent != null ? nowPercent - after : null;
+          return saved != null && saved > 0 ? `~${after}% ${scale} (saves ~${saved}pt)` : `~${after}% ${scale}`;
+        };
         const segs: string[] = [];
         if (estimates.turnPercent != null && references.turn) {
-          segs.push(`turn '${boundedTimelineValue(references.turn.label ?? references.turn.entryId)}' → ~${Math.floor(estimates.turnPercent)}% ${scale}`);
+          segs.push(`turn '${boundedTimelineValue(references.turn.label ?? references.turn.entryId)}' → ${withSavings(estimates.turnPercent)}`);
         }
         if (estimates.taskPercent != null && references.task) {
-          segs.push(`task '${boundedTimelineValue(references.task.label ?? references.task.entryId)}' → ~${Math.floor(estimates.taskPercent)}% ${scale}`);
+          segs.push(`task '${boundedTimelineValue(references.task.label ?? references.task.entryId)}' → ${withSavings(estimates.taskPercent)}`);
         }
-        foldProjectionText = segs.length > 0 ? segs.join("; ") : "no reference point on this spine";
+        const nowPrefix = nowPercent != null && segs.length > 0 ? `now ~${nowPercent}% ${scale}; ` : "";
+        foldProjectionText = segs.length > 0 ? `${nowPrefix}${segs.join("; ")}` : "no reference point on this path";
       } catch {
         foldProjectionText = "unavailable";
       }
+      // One authoritative usage line; the secondary readings appear only when
+      // they disagree with it enough to change a decision. Identical numbers
+      // repeated under three different names read as noise, not precision.
+      const primaryUsageLine = authoritativePressure
+        ? `• Context Usage:    ${describeUsage(authoritativePressure)} (${providerTurnUsageAuthoritative ? "provider actual" : "native estimate"})`
+        : `• Context Usage:    ${formatContextUsage(officialUsage)} (native estimate)`;
+      const usageLines: string[] = [primaryUsageLine];
+      if (authoritativePressure && officialUsage && Math.abs(officialUsage.tokens - authoritativePressure.tokens) > 1024) {
+        usageLines.push(`• Native Estimate:  ${describeUsageLike(officialUsage)} (host estimate; may lag right after a travel)`);
+      }
+      if (lastUsage && authoritativePressure && Math.abs(lastUsage.tokens - authoritativePressure.tokens) > 1024) {
+        usageLines.push(`• Last Turn End:    ${describeUsageLike(lastUsage)} (recorded at the end of the previous turn)`);
+      }
+      const offPathHandoffs = countOffPathSummaries(branch, tree, activeIds);
+      // Funnel line: tree nodes -> LLM messages, one conversion statement.
+      // Subtraction is not classification (packet rebuild folds tool results
+      // into their parent messages), so the delta says what it is — nodes
+      // with no standalone message — instead of naming node types it never
+      // inspected. Tiers: zero delta needs no aside; a large one answers the
+      // real question ("did I lose content?"), not the arithmetic.
+      let activePathLine: string;
+      if (hudCurrent.ok) {
+        const msgs = hudCurrent.value.messages.length;
+        const nodes = branch.length;
+        const delta = nodes - msgs;
+        const aside = delta <= 0
+          ? ""
+          : delta > 5
+            ? ` (${delta} nodes carry no standalone message — tool results and metadata folded into their turns; no content dropped)`
+            : ` (${delta} node${delta === 1 ? "" : "s"} carr${delta === 1 ? "ies" : "y"} no standalone message — tool/metadata)`;
+        activePathLine = `• Active Path:      ${nodes} tree node${nodes === 1 ? "" : "s"} → ${msgs} LLM message${msgs === 1 ? "" : "s"}${aside}`;
+      } else {
+        activePathLine = `• Active Path:      ${branch.length} tree node(s) — the LLM context follows this path`;
+      }
       const hudParts = [
         "[Context Dashboard]",
-        `• Travel Mutation:  ${providerDelivery.persistentMutationApplied ? "applied" : "none pending"}`,
-        `• Context Usage:    ${formatContextUsage(officialUsage)} (${providerEpoch ? "native AgentSession estimate" : "native context estimate"})`,
-        `• ACM Pressure:     ${authoritativePressure ? formatContextUsagePressure(authoritativePressure) : "N/A"} (${providerTurnUsageAuthoritative ? "provider actual" : "native context"})`,
-        `• Last LLM Prompt:  ${lastUsage ? formatContextUsage(lastUsage) : "N/A"} (${providerTurnUsageAuthoritative ? "provider actual turn_end" : "turn_end"})`,
-        `• Active Path:      ${branch.length} node(s) — LLM context follows this spine`,
-        `• Handoff Layers:   ${activeSummaryDepth} handoff layer(s) on the current spine`,
-        `• Off-path Handoffs: ${countOffPathSummaries(branch, tree, activeIds)} branch point(s) with archived handoffs`,
-        `• Recovery Distance: ${stepsSinceCheckpoint} step(s) since last save point '${nearestCheckpoint ? boundedTimelineValue(nearestCheckpoint) : "None"}'`,
+        ...(providerDelivery.persistentMutationApplied
+          ? ["• Travel Mutation:  applied — the provider context was rewritten by a travel this session"]
+          : []),
+        ...usageLines,
+        activePathLine,
+        ...(activeSummaryDepth > 0
+          ? [`• Handoff Layers:   ${activeSummaryDepth} on the current path — each layer is one fold's summary standing in for replaced history`]
+          : []),
+        ...(offPathHandoffs > 0
+          ? [`• Off-path Handoffs: ${offPathHandoffs} branch point(s) with archived handoffs`]
+          : []),
+        nearestCheckpoint
+          ? `• Last Save Point:  '${boundedTimelineValue(nearestCheckpoint)}' — ${msgsSinceCheckpoint} user/assistant message${msgsSinceCheckpoint === 1 ? "" : "s"} back (${stepsSinceCheckpoint} tree nodes)`
+          : `• Last Save Point:  none on this path yet (${msgsSinceCheckpoint} user/assistant message${msgsSinceCheckpoint === 1 ? "" : "s"} so far)`,
         `• Fold Projection:  ${foldProjectionText}`,
       ];
+      if (ignoredParams.length > 0) {
+        hudParts.push(`• Ignored Params:   ${ignoredParams.join("; ")}`);
+      }
       if (resultBudgetApplied) {
         hudParts.push(`• Result Budget:    requested ${requestedLimit}; this call processed at most ${effectiveLimit} entries from the ${resultEntryBudget}-entry context-derived budget. Narrow with filter/query for the remainder.`);
       }
@@ -683,44 +822,60 @@ export function registerTimelineTool(pi: ExtensionAPI, runtime: AcmSessionRuntim
           : "";
         hudParts.push(`• Context Sync:     last travel refresh failed — ${refreshFailure}${refreshGuidance ? ` ${refreshGuidance}` : ""}`);
       }
-      // Failure evidence and the currently deliverable provider state are
-      // complementary; show both while a bounded retry remains pending.
-      const providerPacketLine = `• Provider Packet: ${providerDelivery.phase}; ${providerDelivery.packetMessageCount ?? "none"} message(s) at ${providerDelivery.leafId ?? "no verified leaf"}${providerDelivery.error ? `; last error: ${providerDelivery.error}` : ""}`;
-      if (refreshPending) {
-        const attempt = runtime.contextRefresh.getAttemptCount(sessionManager);
-        const pendingPhaseByStatus: Partial<Record<ProviderDeliveryPhase, string>> = {
-          pending_tool_result: "waiting for matching persisted tool_result; current valid tool batch is preserved",
-          ready: "matching receipt observed; provider Context Packet rebuild starts on this context event",
-          fallback: "provider rebuild fallback is retrying from the latest persisted branch",
-        };
-        const pendingPhase = pendingPhaseByStatus[providerDelivery.phase]
-          ?? `persistent provider packet active${runtime.contextRefresh.hasRebuilt(sessionManager) ? "" : " (travel pending)"}`;
-        let retry = "";
-        if (attempt > 0 && providerDelivery.phase === "active" && providerDelivery.packetMessageCount !== null) {
-          retry = ` (cached retry ${attempt})`;
-        } else if (attempt > 0) {
-          retry = ` (retry ${attempt}/${ContextRefreshRegistry.MAX_ATTEMPTS})`;
-        }
-        hudParts.push(`• Context Delivery: ${pendingPhase}${retry}`);
-        hudParts.push(providerPacketLine);
-      } else {
-        hudParts.push(`• Context Delivery: ${providerDelivery.phase === "active" ? "active persisted provider context" : providerDelivery.phase}`);
-        hudParts.push(providerPacketLine);
-      }
+      // Delivery diagnostics collapse to one line while healthy; the detailed
+      // lines exist for troubleshooting, not for routine fold decisions.
       const liveSync = runtime.getLiveAgentSyncStatus(sessionManager);
       const liveSyncRecovery = getLiveAgentSyncRecoveryGuidance(liveSync);
-      if (liveSync.status === "applied") {
-        hudParts.push(`• Native Replacement: applied — ${liveSync.messageCount} message(s) at ${liveSync.leafId ?? "no leaf"}`);
-      } else if (liveSyncRecovery) {
-        const message = "message" in liveSync ? liveSync.message : "no adapter diagnostic";
-        hudParts.push(`• Native Replacement: ${liveSync.status} — ${message}. ${liveSyncRecovery}`);
+      const packetDescription = providerDelivery.packetMessageCount != null && providerDelivery.leafId != null
+        ? `${providerDelivery.packetMessageCount} message(s) at ${providerDelivery.leafId}`
+        : "no packet delivered yet";
+      const providerPacketLine = `• Provider Packet: ${providerDelivery.phase}; ${packetDescription}${providerDelivery.error ? `; last error: ${providerDelivery.error}` : ""}`;
+      const syncHealthy = !refreshFailure && !refreshPending && providerDelivery.phase === "active" && !liveSyncRecovery;
+      if (syncHealthy) {
+        const healthyDetail = providerDelivery.packetMessageCount != null && providerDelivery.leafId != null
+          ? `provider packet matches the active path (${packetDescription})`
+          : "no travel yet; context follows the session natively";
+        hudParts.push(`• Context Sync:     healthy — ${healthyDetail}`);
       } else {
-        hudParts.push(`• Native Replacement: ${liveSync.status}`);
+        if (refreshPending) {
+          const attempt = runtime.contextRefresh.getAttemptCount(sessionManager);
+          const pendingPhaseByStatus: Partial<Record<ProviderDeliveryPhase, string>> = {
+            pending_tool_result: "waiting for matching persisted tool_result; current valid tool batch is preserved",
+            ready: "matching receipt observed; provider Context Packet rebuild starts on this context event",
+            fallback: "provider rebuild fallback is retrying from the latest persisted branch",
+          };
+          const pendingPhase = pendingPhaseByStatus[providerDelivery.phase]
+            ?? `persistent provider packet active${runtime.contextRefresh.hasRebuilt(sessionManager) ? "" : " (travel pending)"}`;
+          let retry = "";
+          if (attempt > 0 && providerDelivery.phase === "active" && providerDelivery.packetMessageCount !== null) {
+            retry = ` (cached retry ${attempt})`;
+          } else if (attempt > 0) {
+            retry = ` (retry ${attempt}/${ContextRefreshRegistry.MAX_ATTEMPTS})`;
+          }
+          hudParts.push(`• Context Delivery: ${pendingPhase}${retry}`);
+        } else {
+          hudParts.push(`• Context Delivery: ${providerDelivery.phase === "active" ? "active persisted provider context" : providerDelivery.phase}`);
+        }
+        hudParts.push(providerPacketLine);
+        if (liveSync.status === "applied") {
+          hudParts.push(`• Native Replacement: applied — ${liveSync.messageCount} message(s) at ${liveSync.leafId ?? "no leaf"}`);
+        } else if (liveSyncRecovery) {
+          const message = "message" in liveSync ? liveSync.message : "no adapter diagnostic";
+          hudParts.push(`• Native Replacement: ${liveSync.status} — ${message}. ${liveSyncRecovery}`);
+        } else {
+          hudParts.push(`• Native Replacement: ${liveSync.status} — no native context swap was needed this reading`);
+        }
       }
+      // The raw-archive sentence teaches a thing that does not exist before
+      // the first fold; showing it then reads as a dangling term. Trim it
+      // while the session has no raw-archive alias.
+      const checkpointsCue = rawArchiveAliases.size > 0
+        ? GUIDANCE_CUES.timelineCheckpoints
+        : GUIDANCE_CUES.timelineCheckpoints.split(" Raw-archive")[0]!;
       const cue = params.view === "active"
         ? GUIDANCE_CUES.timelineActive
         : params.view === "checkpoints"
-          ? GUIDANCE_CUES.timelineCheckpoints
+          ? checkpointsCue
           : params.view === "search"
             ? GUIDANCE_CUES.timelineSearch
             : GUIDANCE_CUES.timelineTree;

@@ -128,7 +128,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
     concurrency: "exclusive",
     renderCall(rawArgs: Static<typeof schema>, _options: any, theme: any) {
       const backupName = optionalString(rawArgs.backupCurrentHeadAs);
-      const backup = backupName ? ` · backup ${sanitizeTerminalText(backupName)}` : "";
+      const backup = backupName ? ` · return ticket ${sanitizeTerminalText(backupName)}` : "";
       const target = sanitizeTerminalText(optionalString(rawArgs.target) ?? "…");
       const handoffLength = typeof rawArgs.handoff === "string"
         ? rawArgs.handoff.length
@@ -186,7 +186,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
         ),
         theme.fg("dim",
           `  handoff layers ${formatNumericValue(depthBefore)} → ${formatNumericValue(depthAfter)}`
-            + ` · backup ${backup} · delivery ${delivery} · evidence ${evidenceStatus} · persisted refresh pending`,
+            + ` · return ticket ${backup} · delivery ${delivery} · evidence ${evidenceStatus} · persisted refresh pending`,
         ),
       ];
       if (expanded && raw) {
@@ -432,7 +432,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
       {
         if (signal?.aborted) {
           return {
-            content: [{ type: "text" as const, text: "acm_travel aborted during backup target resolution." }],
+            content: [{ type: "text" as const, text: "acm_travel aborted during return-ticket target resolution." }],
             details: { error: "aborted", target: params.target, targetId },
           };
         }
@@ -493,7 +493,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
         }
         if (scanAborted) {
           return {
-            content: [{ type: "text" as const, text: "acm_travel aborted during backup target resolution." }],
+            content: [{ type: "text" as const, text: "acm_travel aborted during return-ticket target resolution." }],
             details: { error: "aborted", target: params.target, targetId },
           };
         }
@@ -638,8 +638,8 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
           recoveryAction = mutation.remainingBackupLabelState === "present"
             ? (mutation.backupRollbackFailed ? RECOVERY_GUIDANCE.rollbackFailed : RECOVERY_GUIDANCE.rollbackSkipped)
             : mutation.remainingBackupLabelState === "unknown"
-              ? `Backup alias presence could not be verified. Use ${backupRecoveryNode} as the recovery pointer and inspect the active leaf before retrying.`
-              : `The backup alias is absent. Use ${backupRecoveryNode} as the recovery pointer and inspect the active leaf before retrying.`;
+              ? `Return-ticket alias presence could not be verified. Use ${backupRecoveryNode} as the recovery pointer and inspect the active leaf before retrying.`
+              : `The return-ticket alias is absent. Use ${backupRecoveryNode} as the recovery pointer and inspect the active leaf before retrying.`;
         } else if (mutation.branchState === "indeterminate") {
           recoveryAction = "Branch mutation cannot be excluded. Inspect the active leaf and reported summary entry before retrying.";
         } else {
@@ -650,20 +650,20 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
         let backupNote = "";
         if (mutation.backupRollbackFailed) {
           backupNote = mutation.remainingBackupLabelState === "present"
-            ? ` Backup label '${returnTicketName}' remains at ${backupEntryId}; rollback failed.`
+            ? ` Return-ticket label '${returnTicketName}' remains at ${backupEntryId}; rollback failed.`
             : mutation.remainingBackupLabelState === "unknown"
-              ? ` Backup label '${returnTicketName}' may remain; rollback failed and label verification was unavailable.`
-              : ` Rollback failed, but backup label '${returnTicketName}' is not currently present.`;
+              ? ` Return-ticket label '${returnTicketName}' may remain; rollback failed and label verification was unavailable.`
+              : ` Rollback failed, but return-ticket label '${returnTicketName}' is not currently present.`;
         } else if (mutation.backupRollbackSkipped && mutation.backupRollbackSkipReason === "branch_mutation_observed") {
           backupNote = mutation.remainingBackupLabelState === "present"
-            ? ` Backup label '${returnTicketName}' remains because branch mutation was observed or cannot be excluded.`
+            ? ` Return-ticket label '${returnTicketName}' remains because branch mutation was observed or cannot be excluded.`
             : mutation.remainingBackupLabelState === "unknown"
-              ? ` Backup label '${returnTicketName}' may remain because branch mutation was observed and label verification was unavailable.`
-              : ` Backup label '${returnTicketName}' is not currently present; preserve ${backupRecoveryNode} instead.`;
+              ? ` Return-ticket label '${returnTicketName}' may remain because branch mutation was observed and label verification was unavailable.`
+              : ` Return-ticket label '${returnTicketName}' is not currently present; preserve ${backupRecoveryNode} instead.`;
         } else if (mutation.backupRollbackSkipped) {
-          backupNote = ` Backup label '${returnTicketName}' may remain because its mutation state is indeterminate.`;
+          backupNote = ` Return-ticket label '${returnTicketName}' may remain because its mutation state is indeterminate.`;
         } else if (mutation.backupRolledBack) {
-          backupNote = ` Backup label '${returnTicketName}' was rolled back.`;
+          backupNote = ` Return-ticket label '${returnTicketName}' was rolled back.`;
         }
         const refreshNote = mutation.refreshRequired ? ` ${RECOVERY_GUIDANCE.refreshPending}` : "";
         const prefix = mutation.error === "backup_label_failed"
@@ -758,7 +758,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
           content: [{
             type: "text" as const,
             text: [
-              `Travel complete. target=${params.target} (${targetId}); summaryEntryId=${summaryEntryId}; resultingLeafId=${resultingLeafId}; backup=${backupText} (${backupOutcome}); persistentMutation=applied; providerDelivery=${providerDelivery.phase}; providerPacket=none; nativeReplacement=${liveAgentSessionSync.status}.`,
+              `Travel complete. target=${params.target} (${targetId}); summaryEntryId=${summaryEntryId}; resultingLeafId=${resultingLeafId}; returnTicket=${backupText} (${backupOutcome}); persistentMutation=applied; providerDelivery=${providerDelivery.phase}; providerPacket=none; nativeReplacement=${liveAgentSessionSync.status}.`,
               `Post-mutation evidence warning: ${postMutationEvidence.warning}.`,
               "The tree mutation is applied; persistent Context Packet refresh remains scheduled and will retry on a later LLM turn.",
               `Applied handoff NEXT: ${canonicalHandoff.fields.next}`,
@@ -869,6 +869,15 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
       } catch {
         // A diagnostic writer must never affect a travel receipt.
       }
+      const travelsThisTurn = runtime.noteTravelThisTurn(sessionManager);
+      // Loop guard: repeated same-turn travels are how a lost model oscillates
+      // between return tickets. The count is informational at 2 and becomes a
+      // stop instruction at 3+ — matrix testing saw an 11-travel oscillation.
+      const loopGuard = travelsThisTurn >= 3
+        ? `This is travel #${travelsThisTurn} in the current turn. Repeated travels between the same points usually mean the needed state is already in the current handoff — stop travelling, reread it, and act on REQUIRED NEXT.`
+        : travelsThisTurn === 2
+          ? `This is travel #2 in the current turn.`
+          : null;
       const nextCue = GUIDANCE_CUES.travel;
       const summaryDepthNote = targetIsStructuralRoot
         && activeSummaryDepthBefore > targetSummaryDepth
@@ -880,7 +889,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
         content: [{
           type: "text" as const,
           text: [
-            `Travel complete. target=${params.target} (${targetId}); origin=${originLabel ? `${originLabel}@${originId}` : originId}; summaryEntryId=${summaryEntryId}; resultingLeafId=${resultingLeafId}; backup=${backupText} (${backupOutcome}); contextTokens=${formatNumericValue(usageBeforeTokens)} → ${formatNumericValue(estimatedUsageAfterTokens)} est. (delta=${formatSignedDelta(usageDelta.tokenDelta)}); contextPercent=${usageBeforePercentText} → ${estimatedUsageAfterPercentText} est. (delta=${formatSignedDelta(budgetPercentagePointDelta, 1, " pp")}); sessionMessages=${messageDelta}; handoffLayers=${activeSummaryDepthBefore} → ${activeSummaryDepthAfter} (delta=${formatSignedDelta(activeSummaryDepthDelta)}); persistentMutation=applied; providerDelivery=${providerDelivery.phase}; providerPacket=none; nativeReplacement=${liveAgentSessionSync.status}.`,
+            `Travel complete. target=${params.target} (${targetId}); origin=${originLabel ? `${originLabel}@${originId}` : originId}; summaryEntryId=${summaryEntryId}; resultingLeafId=${resultingLeafId}; returnTicket=${backupText} (${backupOutcome}); contextTokens=${formatNumericValue(usageBeforeTokens)} → ${formatNumericValue(estimatedUsageAfterTokens)} est. (delta=${formatSignedDelta(usageDelta.tokenDelta)}); contextPercent=${usageBeforePercentText} → ${estimatedUsageAfterPercentText} est. (delta=${formatSignedDelta(budgetPercentagePointDelta, 1, " pp")}); sessionMessages=${messageDelta}; handoffLayers=${activeSummaryDepthBefore} → ${activeSummaryDepthAfter} (delta=${formatSignedDelta(activeSummaryDepthDelta)}); persistentMutation=applied; providerDelivery=${providerDelivery.phase}; providerPacket=none; nativeReplacement=${liveAgentSessionSync.status}.`,
             summaryDepthNote,
             liveAgentSessionSyncRecovery,
             resolved.fromOffPath ? RECOVERY_GUIDANCE.restoredHistory : null,
@@ -891,6 +900,7 @@ export function registerTravelTool(pi: ExtensionAPI, runtime: AcmSessionRuntime)
             currentUserTurnOpen
               ? "Current user turn remains open: deliver the requested visible result before treating this turn as complete; State is not delivery."
               : null,
+            loopGuard,
             nextCue,
           ].filter((line): line is string => line !== null).join("\n"),
         }],

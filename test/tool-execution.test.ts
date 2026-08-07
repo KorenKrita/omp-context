@@ -1071,7 +1071,7 @@ describe("ACM tool execution contracts", () => {
     });
     // The anchor is the newest candidate before the checkpoint call itself.
     expect(result.details?.entryId).toBe("poisoned-anchor-400");
-    expect(result.content[0]?.text).toContain("protocol-repaired");
+    expect(result.content[0]?.text).toContain("tool protocol repaired");
     const skipped = (result.details?.autoResolved as { skipped?: unknown[] } | undefined)?.skipped;
     expect(Array.isArray(skipped)).toBe(true);
     if (!Array.isArray(skipped)) throw new Error("checkpoint result omitted skipped candidates");
@@ -1341,7 +1341,7 @@ describe("ACM tool execution contracts", () => {
     });
     const ticket = (result.details as { backupCurrentHeadAs?: string }).backupCurrentHeadAs;
     expect(typeof ticket).toBe("string");
-    expect(result.content[0]?.text).toContain(`Backup label '${ticket}'`);
+    expect(result.content[0]?.text).toContain(`Return-ticket label '${ticket}'`);
   });
 
   test("preserves the raw scheduled native replacement outcome alongside delivery phase", async () => {

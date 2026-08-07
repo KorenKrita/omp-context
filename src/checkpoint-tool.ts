@@ -58,7 +58,7 @@ export function registerCheckpointTool(pi: ExtensionAPI, runtime: AcmSessionRunt
       "Semantic name a future search should find, e.g. parser-fix-baseline or p99-before-db-scan. Unique in this session; 'root' is reserved.",
     ),
     target: pi.zod.string().min(1).describe(
-      "Node ID or existing checkpoint name to label. Omit to mark the current position (recommended).",
+      "OPTIONAL — omit this field entirely to mark the current position (recommended). Pass a node ID or existing checkpoint name only to label an earlier point; placeholder values like '.' or 'current' are invalid.",
     ).optional(),
   }).strict();
 
@@ -74,7 +74,7 @@ export function registerCheckpointTool(pi: ExtensionAPI, runtime: AcmSessionRunt
     concurrency: "exclusive",
     renderCall(rawArgs: Static<typeof schema>, _options: any, theme: any) {
       const args = rawArgs as Static<typeof schema>;
-      const target = sanitizeTerminalText(optionalString(args.target) ?? "latest protocol-complete pre-call leaf");
+      const target = sanitizeTerminalText(optionalString(args.target) ?? "current position");
       const name = sanitizeTerminalText(args.name ?? "…");
       return new Text(
         theme.fg("toolTitle", theme.bold("◆ ACM CHECKPOINT  "))
@@ -175,7 +175,7 @@ export function registerCheckpointTool(pi: ExtensionAPI, runtime: AcmSessionRunt
         }
         targetEntry = findEntryInTree(tree, entryId);
         if (!targetEntry) {
-          const hint = " Use acm_timeline to locate the node you want to label; raw node IDs are valid targets.";
+          const hint = " Valid targets are node IDs and existing checkpoint names from acm_timeline. To mark the current position, call again without the target field.";
           return {
             content: [{ type: "text" as const, text: `Error: Target '${params.target}' not found in session tree.${hint}` }],
             details: { error: "target_not_found", requestedTarget: params.target },
@@ -341,9 +341,14 @@ export function registerCheckpointTool(pi: ExtensionAPI, runtime: AcmSessionRunt
         };
       }
 
-      const { status, label, labelEntryId } = append.value;
+      const { status, labelEntryId } = append.value;
       const resolvedEntry = targetEntry ?? findEntryInTree(tree, entryId);
-      const role = autoResolved?.role ?? (resolvedEntry ? getMessageRoleLabel(resolvedEntry) : undefined) ?? resolvedEntry?.type.toUpperCase() ?? "NODE";
+      // Raw event-type fallbacks (MODEL_CHANGE, THINKING_LEVEL_CHANGE) are
+      // internal vocabulary; the receipt names them as what they are to a
+      // reader — a session event — and keeps the specific kind in brackets.
+      const role = autoResolved?.role
+        ?? (resolvedEntry ? getMessageRoleLabel(resolvedEntry) : undefined)
+        ?? (resolvedEntry ? `session event (${resolvedEntry.type})` : "NODE");
       const usage = ctx.getContextUsage();
       // One pressure authority for every perception surface: between a
       // travel's provider cutover and its native replacement the host
@@ -389,21 +394,21 @@ export function registerCheckpointTool(pi: ExtensionAPI, runtime: AcmSessionRunt
         }
         foldDetails.stepsSinceSavePoint = nearest.stepsBack;
         const distance = nearest.name !== null && nearest.stepsBack !== null
-          ? `Segment: ${nearest.stepsBack} step(s) since save point '${nearest.name}'.`
-          : `Segment: no prior save point on this spine.`;
+          ? `Segment: ${nearest.stepsBack} node(s) since the previous save point '${nearest.name}'.`
+          : `Segment: this is the first save point on this path.`;
         foldText = ` ${distance}${segments.length > 0 ? ` ${segments.join("; ")}.` : ""}`;
       } catch {
         foldText = "";
       }
       const skippedCount = autoResolved?.skipped.length;
       const placement = autoResolved
-        ? `${role}; latest ${autoResolved.protocolStatus === "repaired" ? "protocol-repaired" : "protocol-complete"} pre-call leaf${skippedCount ? ` after skipping ${skippedCount} newer unsafe/unavailable entr${skippedCount === 1 ? "y" : "ies"}` : ""}`
-        : `${role}; explicit target '${params.target}'`;
+        ? `a ${role} node — the newest complete message before this call, since the current assistant turn is still being written${autoResolved.protocolStatus === "repaired" ? " (tool protocol repaired)" : ""}${skippedCount ? `; skipped ${skippedCount} newer unsafe/unavailable entr${skippedCount === 1 ? "y" : "ies"}` : ""}`
+        : `a ${role} node; explicit target '${params.target}'`;
       const action = status === "already_present" ? "Reused" : "Created";
       return {
         content: [{
           type: "text" as const,
-          text: `${action} checkpoint '${params.name}' at ${entryId} via label entry ${labelEntryId} (${placement}). Label: ${label}. Context usage: ${usageText}.${foldText} ${cue}`,
+          text: `${action} checkpoint '${params.name}' at node ${entryId} (${placement}). Context usage: ${usageText}.${foldText} ${cue}`,
         }],
         details: {
           foldReferences: foldDetails,
