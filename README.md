@@ -83,14 +83,14 @@ omp install .
 
 ## OMP 兼容契约
 
-当前精确支持并测试 OMP **17.2.1**：
+当前精确支持并测试 OMP **17.2.10**：
 
 - `@oh-my-pi/pi-agent-core`
 - `@oh-my-pi/pi-ai`
 - `@oh-my-pi/pi-coding-agent`
 - `@oh-my-pi/pi-tui`
 
-工具参数使用 OMP 注入的 `pi.zod` 严格 schema；Pi-only prompt metadata（promptSnippet/promptGuidelines）等价注入 `before_agent_start.systemPrompt`；Pi 的 `agent_settled` 语义映射到 OMP 原生 `session_stop`。
+工具参数使用 OMP 注入的 omptype-backed `pi.zod` 严格 schema；Pi-only prompt metadata（promptSnippet/promptGuidelines）等价注入 `before_agent_start.systemPrompt`；Pi 的 `agent_settled` 语义映射到 OMP 原生 `session_stop`。
 
 ## 开发与验证
 
@@ -99,7 +99,7 @@ bun install --frozen-lockfile
 bun run verify:acm
 ```
 
-完整 gate 包含 guidance 一致性、根测试、TypeScript 类型检查，以及真实 OMP 17.2.1 host fixture。架构、host 兼容性契约、文案宪法与维护规则见 [`AGENTS.md`](AGENTS.md)。
+完整 gate 包含 guidance 一致性、根测试、TypeScript 类型检查，以及真实 OMP 17.2.10 host fixture。架构、host 兼容性契约、文案宪法与维护规则见 [`AGENTS.md`](AGENTS.md)。
 
 ## 来源
 

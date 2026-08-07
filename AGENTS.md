@@ -30,7 +30,7 @@ pi-context 的 boundary ledger 记录了 202 个真实 user-request boundary、0
 ## 技术栈与版本契约
 
 - TypeScript ESM，source-first：OMP 直接加载 `src/*.ts`，生产不依赖 `dist/`
-- 四个 `@oh-my-pi/*` peer/dev dependency 精确固定 **`17.2.1`**（含 `test/host-fixture/`），不要改成 range；版本升级必须通过 `scripts/precommit-host-contract.mjs` 的隔离 promotion
+- 四个 `@oh-my-pi/*` peer/dev dependency 精确固定 **`17.2.10`**（含 `test/host-fixture/`），不要改成 range；版本升级必须通过 `scripts/precommit-host-contract.mjs` 的隔离 promotion
 - **不引入** `@earendil-works/*` 或 Pi-only API
 - **不使用** constrainedSampling 类机制：handoff wire schema 的四个可选字段与 OpenAI strict 模式（全 properties 进 required）不兼容
 
@@ -39,7 +39,7 @@ pi-context 的 boundary ledger 记录了 202 个真实 user-request boundary、0
 - Extension 类型：`@oh-my-pi/pi-coding-agent/extensibility/extensions/types`。
 - Session entries/tree：`@oh-my-pi/pi-coding-agent/session/session-entries`；session manager：`.../session/session-manager`。
 - Agent messages：`@oh-my-pi/pi-agent-core/types`。TUI：`@oh-my-pi/pi-tui`。
-- Tool schema：只使用宿主注入的 `pi.zod`，顶层 object 必须 `.strict()`。handoff 三必填四可选：必填 `.min(1)`，可选 `.optional()`；共享描述字符串住在 `handoff.ts` 的 `HANDOFF_FIELD_DESCRIPTIONS`（纯数据，无 runtime zod import）。
+- Tool schema：只使用宿主注入的 `pi.zod`（OMP 17.2.10 起是 omptype-backed Zod-like facade），顶层 object 必须 `.strict()`；不要依赖 `zod/v4` internals 或把参数 schema 当作 `z.ZodType`。参数类型统一从 `@oh-my-pi/pi-ai` 导入 `Static`，以同时覆盖旧 Zod 与当前 omptype schema。handoff 三必填四可选：必填 `.min(1)`，可选 `.optional()`；共享描述字符串住在 `handoff.ts` 的 `HANDOFF_FIELD_DESCRIPTIONS`（纯数据，无 runtime zod import）。
 - OMP tool renderer 签名是 `renderCall(args, options, theme)` 与 `renderResult(result, options, theme, args?)`；返回普通 `Text`。
 - OMP 没有 Pi 的 `promptSnippet`、`promptGuidelines`、`renderShell`。短 tool cues 经 `before_agent_start.systemPrompt: string[]` 幂等注入。
 - OMP 没有 `model_select` 事件。每次 gauge 观测调用 `runtime.syncUsageModel(session, currentModelIdentity(ctx))`，换模型时丢弃跨模型的 cached provider usage。
@@ -156,7 +156,7 @@ bun run generate:guidance # 从 canonical 源重新生成
 bun run verify:acm        # 完整 gate：guidance check + 测试 + typecheck + host fixture
 ```
 
-host fixture（`test/host-fixture/`）在真实 OMP 17.2.1 上验证宿主契约：exact version、CORE 注入、strict schema 三必填、自动回程票锚定（含 OMP 宿主规范化语义）、travel/settled sync 全链路、multi-session 隔离。独立 lockfile 和构建（`bun ./build-source.mjs`），根目录 `bun test` 不含它。
+host fixture（`test/host-fixture/`）在真实 OMP 17.2.10 上验证宿主契约：exact version、CORE 注入、strict schema 三必填、自动回程票锚定（含 OMP 宿主规范化语义）、travel/settled sync 全链路、multi-session 隔离。独立 lockfile 和构建（`bun ./build-source.mjs`），根目录 `bun test` 不含它。
 
 ## 文档与实现决策
 

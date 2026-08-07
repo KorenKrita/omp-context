@@ -1,4 +1,4 @@
-import type { infer as Static } from "zod/v4";
+import type { Static } from "@oh-my-pi/pi-ai";
 import type {
   ExtensionAPI,
   ExtensionContext,

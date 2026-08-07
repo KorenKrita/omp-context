@@ -10,7 +10,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent";
 import registerAcmExtension from "./.acm-build/index.js";
 import { ACM_CONTINUATION_MARKER, rebuildAcmContextPacket } from "./.acm-build/context-packet.js";
-import { z } from "zod/v4";
+import { zod as hostZod } from "@oh-my-pi/pi-coding-agent";
 const installationSymbol = Symbol.for("pi-context.live-agent-session-adapter.v1");
 const originalGetContextUsage = AgentSession.prototype.getContextUsage;
 const TOOL_CALL_ID = "travel-live-sync";
@@ -80,7 +80,7 @@ function createExtensionFixture(sessionManager: SessionManager) {
   let travelTool: ToolDefinition | undefined;
   let timelineTool: ToolDefinition | undefined;
   const api = {
-    zod: z,
+    zod: hostZod,
     registerTool(tool: ToolDefinition) {
       if (tool.name === "acm_checkpoint") checkpointTool = tool;
       if (tool.name === "acm_travel") travelTool = tool;

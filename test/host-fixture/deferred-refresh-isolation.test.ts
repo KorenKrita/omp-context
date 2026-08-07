@@ -9,7 +9,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent";
 import registerAcmExtension from "./.acm-build/index.js";
 import { rebuildAcmContextPacket } from "./.acm-build/context-packet.js";
-import { z } from "zod/v4";
+import { zod as hostZod } from "@oh-my-pi/pi-coding-agent";
 const installationSymbol = Symbol.for("pi-context.live-agent-session-adapter.v1");
 const originalGetContextUsage = AgentSession.prototype.getContextUsage;
 
@@ -38,7 +38,7 @@ function createFixture(sessionManager: SessionManager, registrations = 1) {
   const handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => unknown>>();
   let travelTool: ToolDefinition | undefined;
   const api = {
-    zod: z,
+    zod: hostZod,
     registerTool(tool: ToolDefinition) {
       if (tool.name === "acm_travel") travelTool = tool;
     },

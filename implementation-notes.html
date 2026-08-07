@@ -717,6 +717,11 @@
         <td>README 重写为人话版，v0 文档退役</td>
         <td>2026-07-27 用户要求「不要那么多术语，让人简单清楚看明白；文档注重质量而不是数量」。README 从 200 行术语密文重写为 ~100 行人话版（一句话定位「让 Pi agent 自己整理自己的记忆」、compaction=有损压缩 vs pi-context=可逆收纳的对比、交接单人话解释、七字段例子保留）；travel 事务的维护者细节已在 AGENTS.md「Post-mutation persistent observation」段有完整归宿，README 不再重复。docs/ 收敛为两份：acm-judgment-contract.md（判断语义正典 v1）+ acm-failure-mechanisms.md（活的失败机制注册表）。</td>
       </tr>
+      <tr>
+        <td><span class="label agent-resolved">agent-resolved</span></td>
+        <td>OMP 17.2.10 omptype schema migration</td>
+        <td>OMP 17.2.10 keeps the injected <code>pi.zod</code> builder surface but replaces real Zod schemas with an <code>@oh-my-pi/omptype/zod</code> compatibility facade. The extension continues building strict schemas from <code>pi.zod</code>, while parameter inference now uses <code>Static</code> from <code>@oh-my-pi/pi-ai</code> instead of <code>zod/v4</code>. Exact-host schema assertions call the schema's <code>toJsonSchema()</code> method rather than passing it to Zod internals. The isolated promotion gate verified typecheck and all exact-host lifecycle, tool, packet, and settlement tests on 17.2.10.</td>
+      </tr>
     </tbody>
   </table>
   <h2>Future evidence and conditional decisions</h2>

@@ -17,7 +17,7 @@ import {
   type AgentSessionSyncOutcome,
   type LiveAgentSessionAdapter,
 } from "./.acm-build/live-agent-session-adapter.js";
-import { z } from "zod/v4";
+import { zod as hostZod } from "@oh-my-pi/pi-coding-agent";
 const HANDOFF = {
   goal: "verify deferred synchronization fallback",
   state: "travel completed or failed as asserted",
@@ -50,7 +50,7 @@ function registerFixture(sessionManager: SessionManager, runtime: AcmSessionRunt
   let travelTool: ToolDefinition | undefined;
   let timelineTool: ToolDefinition | undefined;
   const api = {
-    zod: z,
+    zod: hostZod,
     registerTool(tool: ToolDefinition) {
       if (tool.name === "acm_travel") travelTool = tool;
       if (tool.name === "acm_timeline") timelineTool = tool;

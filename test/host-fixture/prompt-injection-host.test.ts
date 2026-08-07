@@ -9,7 +9,6 @@ import { wrapRegisteredTools } from "@oh-my-pi/pi-coding-agent/extensibility/ext
 import { isMountableUnderXdev } from "@oh-my-pi/pi-coding-agent/tools/xdev";
 import { cleanupHostTempDirs, createHostTempDir, createModelRegistry } from "./host-temp.ts";
 import * as generated from "../../src/generated-guidance.ts";
-import { z } from "zod/v4";
 
 afterEach(cleanupHostTempDirs);
 
@@ -99,11 +98,32 @@ test("ACM tools register generated prompt metadata on the exact Pi host", async 
   expect(tools.get("acm_travel")?.promptSnippet).toBeUndefined();
   expect(tools.get("acm_travel")?.promptGuidelines).toBeUndefined();
   expect(tools.get("acm_travel")?.description).toContain("alone in its tool batch");
-  const travelParameters = z.toJSONSchema(tools.get("acm_travel")?.parameters as z.ZodType) as {
+  type HostSchema = {
+    safeParse(value: unknown): { success: boolean };
+    toJsonSchema(): Record<string, unknown>;
+  };
+  const checkpointSchema = tools.get("acm_checkpoint")?.parameters as HostSchema;
+  const timelineSchema = tools.get("acm_timeline")?.parameters as HostSchema;
+  const travelSchema = tools.get("acm_travel")?.parameters as HostSchema;
+  expect(checkpointSchema.safeParse({ name: "schema-probe" }).success).toBe(true);
+  expect(checkpointSchema.safeParse({ name: "schema-probe", unexpected: true }).success).toBe(false);
+  expect(timelineSchema.safeParse({}).success).toBe(true);
+  expect(timelineSchema.safeParse({ unexpected: true }).success).toBe(false);
+  const minimalTravel = {
+    target: "root",
+    handoff: { goal: "goal", state: "state", next: "next" },
+  };
+  expect(travelSchema.safeParse(minimalTravel).success).toBe(true);
+  expect(travelSchema.safeParse({ ...minimalTravel, unexpected: true }).success).toBe(false);
+  const travelParameters = travelSchema.toJsonSchema() as {
     required?: string[];
-    properties?: Record<string, { anyOf?: Array<{ type?: string; required?: string[] }> }>;
+    additionalProperties?: boolean;
+    properties?: Record<string, {
+      anyOf?: Array<{ type?: string; required?: string[]; additionalProperties?: boolean }>;
+    }>;
   };
   expect(travelParameters.required).toContain("handoff");
+  expect(travelParameters.additionalProperties).toBe(false);
   expect(travelParameters.properties?.summary).toBeUndefined();
   const handoffVariants = travelParameters.properties?.handoff?.anyOf ?? [];
   const structuredHandoff = handoffVariants.find((variant) => variant.type === "object");
@@ -111,5 +131,6 @@ test("ACM tools register generated prompt metadata on the exact Pi host", async 
   // Three-required/four-optional wire shape: the schema the host actually
   // serves must not regress to seven-required.
   expect(structuredHandoff?.required?.sort()).toEqual(["goal", "next", "state"]);
+  expect(structuredHandoff?.additionalProperties).toBe(false);
   expect(serializedHandoff).toBeDefined();
 });
